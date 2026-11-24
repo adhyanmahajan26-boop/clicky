@@ -16,6 +16,12 @@
 //    Hand out of the picture ends a word, thumbs down deletes, the spread open hand sends it to Vello's
 //    chat (which can pass it to Pointer Assistant or Cursor), straight to Pointer Assistant, or types it
 //    into the app in front.
+//  - Sign to text: signed words and finger-spelling on the move, read from the hands, body and face about 30
+//    times a second (ClickyCore SignVisionReader) by ClickyCore's SignLiveReader (where a sign starts and ends,
+//    features, the word and spelling models through SignScoringWorker, off the main thread). The words build a
+//    line on the panel; Send (or the hands resting for a moment) passes it to Vello's chat, Pointer Assistant or
+//    the app in front, like Spell to text. Models are found in the data folder's SignModels, then in the bundle
+//    (SignToTextModels.swift); without them the mode still turns on and the panel says what's missing.
 //
 //  The camera panel (HandSignPanel) is up whenever the camera is on, so it's never on unseen. The
 //  camera stops while the screen is locked or asleep. Nothing is recorded: frames become joints and go.
@@ -36,6 +42,28 @@ final class HandSignController: ObservableObject {
         static let spellAlphabet = "v5.handSigns.spell.alphabet"
         static let spellDestination = "v5.handSigns.spell.destination"
         static let taughtSigns = "v5.handSigns.taughtSigns"
+        static let signsLanguage = "v5.handSigns.signs.language"
+        static let signsDestination = "v5.handSigns.signs.destination"
+        static let signsAutoSendSeconds = "v5.handSigns.signs.autoSendSeconds"
+    }
+
+    /// Sign to text sends the line by itself once the hands have rested this long, unless the owner chose otherwise.
+    static let defaultSignsAutoSendSeconds = 2.5
+
+    static var savedSignLanguage: SignLanguage {
+        get { UserDefaults.standard.string(forKey: Keys.signsLanguage).flatMap(SignLanguage.init(rawValue:)) ?? .asl }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.signsLanguage) }
+    }
+
+    static var savedSignsDestination: SpelledTextDestination {
+        get { UserDefaults.standard.string(forKey: Keys.signsDestination).flatMap(SpelledTextDestination.init(rawValue:)) ?? .vello }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.signsDestination) }
+    }
+
+    /// 0 is off: the line waits for Send.
+    static var savedSignsAutoSendSeconds: Double {
+        get { (UserDefaults.standard.object(forKey: Keys.signsAutoSendSeconds) as? NSNumber)?.doubleValue ?? defaultSignsAutoSendSeconds }
+        set { UserDefaults.standard.set(max(0, newValue), forKey: Keys.signsAutoSendSeconds) }
     }
 
     static var savedAlphabet: FingerspellingAlphabet {
@@ -93,6 +121,12 @@ final class HandSignController: ObservableObject {
             seenSign = nil
             seenSpellingLabel = nil
             holdProgress = 0
+            camera.setReadsSignLanguage(mode == .signs)
+            if mode == .signs {
+                prepareSignReading()
+            } else {
+                resetSignReading()
+            }
         }
     }
     @Published var showsCameraPicture: Bool = HandSignController.showsCameraPicture {
@@ -116,6 +150,38 @@ final class HandSignController: ObservableObject {
     @Published private(set) var teachingExamplesTaken = 0
     @Published private(set) var teachingLine = ""
 
+    // Sign to text.
+    @Published var signLanguage: SignLanguage = HandSignController.savedSignLanguage {
+        didSet {
+            guard signLanguage != oldValue else { return }
+            Self.savedSignLanguage = signLanguage
+            // Another language is other models: a new reader, so a sign still being read in the old one is dropped.
+            signModelsLoad = nil
+            resetSignReading()
+            if mode == .signs { prepareSignReading() }
+        }
+    }
+    @Published var signsDestination: SpelledTextDestination = HandSignController.savedSignsDestination {
+        didSet { Self.savedSignsDestination = signsDestination }
+    }
+    @Published var signsAutoSendSeconds: Double = HandSignController.savedSignsAutoSendSeconds {
+        didSet {
+            Self.savedSignsAutoSendSeconds = signsAutoSendSeconds
+            signReader.setAutoSendSeconds(signsAutoSendSeconds)
+        }
+    }
+    /// The line as it builds: words, spelled words and "?" for a sign that wasn't clear.
+    @Published private(set) var signedEntries: [SignLiveLineEntry] = []
+    /// A hand is up and a sign is being made right now.
+    @Published private(set) var isMakingASign = false
+    /// Signs that ended and are being read by the models.
+    @Published private(set) var signReadingsInProgress = 0
+    /// 0 to 1: how far through the wait before the line sends by itself.
+    @Published private(set) var signsAutoSendProgress: Double = 0
+    /// What the models are (or aren't), once loaded for the chosen language; nil while loading.
+    @Published private(set) var signModelsLoad: SignModelLoadResult?
+    @Published private(set) var isLoadingSignModels = false
+
     let camera = HandSignCamera()
     private weak var companionManager: CompanionManager?
     private var holdTracker = HandSignHoldTracker()
@@ -129,12 +195,25 @@ final class HandSignController: ObservableObject {
     private var systemObservers: [(NotificationCenter, NSObjectProtocol)] = []
     /// The last few signs that counted, for `handSigns {action: state}`.
     private var recentSigns: [(sign: HandSign, line: String, date: Date)] = []
+    /// Sign to text's reading loop (no camera or Core ML in it) and the queue its models run on.
+    private var signReader = HandSignController.makeSignReader(language: HandSignController.savedSignLanguage)
+    private let signScoringWorker = SignScoringWorker()
+    private var recentSignedLines: [(text: String, destination: String, date: Date)] = []
+    /// The camera time stamps of the last frames, to tell how many frames a second Sign to text is getting.
+    private var recentSignFrameTimes: [Double] = []
+    private static let signFrameTimesKeptForTheRate = 60
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
         camera.onHandPoses = { [weak self] handPoses in
             MainActor.assumeIsolated { self?.handle(handPoses) }
         }
+        camera.onSignFrame = { [weak self] frame, frameTime, pictureWidth, pictureHeight in
+            MainActor.assumeIsolated {
+                self?.handleSignFrame(frame, at: frameTime, pictureWidth: pictureWidth, pictureHeight: pictureHeight)
+            }
+        }
+        camera.setReadsSignLanguage(mode == .signs)
     }
 
     /// At launch: watch for lock and sleep, and turn the camera on if it was left on.
@@ -178,6 +257,7 @@ final class HandSignController: ObservableObject {
         holdTracker.reset()
         spellingSession.reset()
         lastLine = Self.startingLine(for: mode)
+        if mode == .signs { prepareSignReading() }
         panelController.show()
     }
 
@@ -186,6 +266,7 @@ final class HandSignController: ObservableObject {
         case .control: return "Show an open palm to talk to me."
         case .speakForMe: return "Sign, and I'll say it."
         case .spell: return "Spell a word. Spread your open hand to send it."
+        case .signs: return "Sign, then rest your hands. I'll write it down."
         }
     }
 
@@ -199,6 +280,7 @@ final class HandSignController: ObservableObject {
         handIsVisible = false
         seenSign = nil
         holdProgress = 0
+        resetSignReading()
         panelController.hide()
     }
 
@@ -283,6 +365,289 @@ final class HandSignController: ObservableObject {
         if recentSpelledTexts.count > 20 { recentSpelledTexts.removeFirst(recentSpelledTexts.count - 20) }
     }
 
+    // MARK: - Sign to text
+
+    private static func makeSignReader(language: SignLanguage) -> SignLiveReader {
+        // The Mac camera's picture until the first frame says otherwise.
+        SignLiveReader(language: language, pictureWidth: 640, pictureHeight: 480, autoSendSeconds: savedSignsAutoSendSeconds)
+    }
+
+    /// Loads the chosen language's models once (off the main thread). With none found the mode still runs: signs
+    /// are seen, and the panel says what's missing.
+    func prepareSignReading() {
+        guard signModelsLoad?.language != signLanguage, !isLoadingSignModels else { return }
+        isLoadingSignModels = true
+        let languageBeingLoaded = signLanguage
+        signScoringWorker.loadModels(
+            language: languageBeingLoaded,
+            searchFolders: SignModelFolders.searchFolders,
+            compiledModelCacheFolder: SignModelFolders.compiledModelCacheFolder
+        ) { [weak self] loadResult in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isLoadingSignModels = false
+                guard loadResult.language == self.signLanguage else {
+                    // The language changed while loading: load the one chosen now.
+                    if self.mode == .signs { self.prepareSignReading() }
+                    return
+                }
+                self.signModelsLoad = loadResult
+                // Said where it can be read in full; the camera chip only has room for a few words.
+                if !loadResult.hasAnyModel, self.mode == .signs, let modelsProblem = self.signModelsProblem {
+                    self.lastLine = modelsProblem
+                }
+            }
+        }
+    }
+
+    /// The panel's words about the models: nil when both are ready.
+    var signModelsProblem: String? {
+        guard let signModelsLoad else { return isLoadingSignModels ? "Loading the sign models…" : nil }
+        guard let problems = signModelsLoad.problems else { return nil }
+        if !signModelsLoad.hasAnyModel {
+            return "Sign to text isn't in this build yet: \(problems)."
+        }
+        return "Reads only part of \(signLanguage.rawValue.uppercased()): \(problems)."
+    }
+
+    /// A new, empty reader (another language, the camera off): anything still being read in the old one is dropped.
+    private func resetSignReading() {
+        signReader = Self.makeSignReader(language: signLanguage)
+        recentSignFrameTimes = []
+        publishSignState(at: nil)
+    }
+
+    private func handleSignFrame(_ frame: SignLandmarkFrame, at frameTime: Double, pictureWidth: Int, pictureHeight: Int) {
+        guard isRunning, !isPausedForLockOrSleep, mode == .signs else { return }
+        let handIsInThePicture = SignFeatures.handIsSeen(in: frame, side: .right) || SignFeatures.handIsSeen(in: frame, side: .left)
+        if handIsVisible != handIsInThePicture { handIsVisible = handIsInThePicture }
+        recentSignFrameTimes.append(frameTime)
+        if recentSignFrameTimes.count > Self.signFrameTimesKeptForTheRate {
+            recentSignFrameTimes.removeFirst(recentSignFrameTimes.count - Self.signFrameTimesKeptForTheRate)
+        }
+        signReader.setPictureSize(width: Double(pictureWidth), height: Double(pictureHeight))
+        observeSignFrame(frame, at: frameTime)
+    }
+
+    /// One frame into the reader, from the camera or `signsFeed`. A sign that ended goes to the models off the main
+    /// thread; its words land on the line in order when they come back.
+    private func observeSignFrame(_ frame: SignLandmarkFrame, at frameTime: Double) {
+        let events = signReader.observe(frame, at: frameTime)
+        for event in events {
+            handleSignEvent(event)
+        }
+        publishSignState(at: frameTime)
+    }
+
+    private func handleSignEvent(_ event: SignLiveEvent) {
+        switch event {
+        case .signStarted:
+            break
+        case .tooShortToCount:
+            break
+        case .readingNeeded(let job):
+            signScoringWorker.read(job, settings: signReader.readingSettings) { [weak self] outcome in
+                MainActor.assumeIsolated { self?.finishSignReading(outcome) }
+            }
+        case .read(let entry):
+            lastLine = entry.token == nil ? "I didn't catch that sign." : "Read: \(entry.displayText)"
+        case .couldNotRead(let reason):
+            lastLine = signModelsProblem ?? "Couldn't read that sign: \(reason)"
+        case .timeToSend:
+            sendSignedLine()
+        }
+    }
+
+    private func finishSignReading(_ outcome: SignStretchOutcome) {
+        for event in signReader.finishReading(outcome) {
+            handleSignEvent(event)
+        }
+        publishSignState(at: signReader.lastFrameTime)
+    }
+
+    /// Copies what the panel shows out of the reader, writing only what changed (this runs 30 times a second).
+    private func publishSignState(at frameTime: Double?) {
+        if signedEntries != signReader.entries { signedEntries = signReader.entries }
+        if isMakingASign != signReader.isSigning { isMakingASign = signReader.isSigning }
+        if signReadingsInProgress != signReader.readingsInProgress { signReadingsInProgress = signReader.readingsInProgress }
+        let progress = frameTime.map { signReader.autoSendProgress(at: $0) } ?? 0
+        if abs(progress - signsAutoSendProgress) > 0.02 || (progress == 0) != (signsAutoSendProgress == 0) {
+            signsAutoSendProgress = progress
+        }
+    }
+
+    /// Frames a second the camera is giving Sign to text right now (0 before two frames came).
+    var signFramesPerSecondSeen: Double {
+        SignFrameRate.framesPerSecond(times: recentSignFrameTimes) ?? 0
+    }
+
+    /// The panel's buttons, and `handSigns`.
+    func undoLastSign() {
+        signReader.undoLast()
+        publishSignState(at: signReader.lastFrameTime)
+    }
+
+    func clearSignedLine() {
+        signReader.clear()
+        publishSignState(at: signReader.lastFrameTime)
+    }
+
+    /// Sends the line to the chosen place and starts a new one. Vello and Pointer Assistant get the words with a note
+    /// on how they were read (signing order, alternatives for unsure signs); the app in front gets the words only.
+    func sendSignedLine() {
+        guard let signedLine = signReader.takeLineForSending() else {
+            lastLine = "Nothing signed yet."
+            publishSignState(at: signReader.lastFrameTime)
+            return
+        }
+        publishSignState(at: signReader.lastFrameTime)
+        let plainText = signedLine.plainText
+        let messageForBrain = signedLine.messageForBrain(language: signLanguage)
+        var target = signsDestination
+        // Vello's chat needs the Vello product; without it the words go to Pointer Assistant.
+        if target == .vello && !TheoProducts.isOn(.theo) { target = .pointerAssistant }
+        switch target {
+        case .vello:
+            BotsStore.shared.send(messageForBrain, command: plainText, to: "theo")
+            lastLine = "To Vello: \(plainText)"
+        case .pointerAssistant:
+            companionManager?.sendTranscriptToClaudeWithScreenshot(transcript: messageForBrain)
+            lastLine = "To Pointer Assistant: \(plainText)"
+        case .frontApp:
+            lastLine = "Typing: \(plainText)"
+            Task { [weak self] in
+                let outcome = await DictationInserter.insert(plainText, into: .frontmost)
+                self?.lastLine = outcome.didInsert ? "Typed: \(plainText)" : (outcome.message ?? "Couldn't type it.")
+            }
+        }
+        recentSignedLines.append((plainText, target.rawValue, Date()))
+        if recentSignedLines.count > 20 { recentSignedLines.removeFirst(recentSignedLines.count - 20) }
+    }
+
+    /// `handSigns {action: signsFeed, path}` (test profile only): a landmark `.npy` clip (at `framesPerSecond`,
+    /// default 30, of a `pictureWidth × pictureHeight` picture, default unknown) or a video file, fed through the live
+    /// reader as if from the camera, then a second of empty frames so its last sign ends. Answers once every sign
+    /// in it has been read, with what was read.
+    func feedSignClip(path: String, framesPerSecond: Double, pictureWidth: Double, pictureHeight: Double, completion: @escaping ([String: Any]?, String?) -> Void) {
+        prepareSignReading()
+        let fileURL = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let entriesBefore = signReader.entries.count
+        if fileURL.pathExtension.lowercased() == "npy" {
+            let frames: [SignLandmarkFrame]
+            do {
+                frames = try SignLandmarkClipFile.read(from: fileURL)
+            } catch {
+                completion(nil, "couldn't read \(fileURL.lastPathComponent): \(error)")
+                return
+            }
+            let safeFramesPerSecond = framesPerSecond > 0 ? framesPerSecond : SignFrameRate.modelFramesPerSecond
+            let timedFrames = frames.indices.map { frameIndex in (frames[frameIndex], Double(frameIndex) / safeFramesPerSecond) }
+            feedTimedSignFrames(timedFrames, pictureWidth: pictureWidth, pictureHeight: pictureHeight, entriesBefore: entriesBefore, completion: completion)
+            return
+        }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let trackInfo = try await SignVideoLandmarks.loadTrackInfo(videoURL: fileURL)
+                var timedFrames: [(SignLandmarkFrame, Double)] = []
+                let visionReader = SignVisionReader(readsFace: true)
+                try SignVideoLandmarks.readFrames(trackInfo: trackInfo, visionReader: visionReader) { frame, frameTime in
+                    timedFrames.append((frame, frameTime))
+                }
+                let framesToFeed = timedFrames
+                let videoWidth = Double(trackInfo.uprightWidth)
+                let videoHeight = Double(trackInfo.uprightHeight)
+                await MainActor.run {
+                    self?.feedTimedSignFrames(framesToFeed, pictureWidth: videoWidth, pictureHeight: videoHeight, entriesBefore: entriesBefore, completion: completion)
+                }
+            } catch {
+                await MainActor.run { completion(nil, "couldn't read the video: \(error)") }
+            }
+        }
+    }
+
+    private func feedTimedSignFrames(
+        _ timedFrames: [(SignLandmarkFrame, Double)],
+        pictureWidth: Double,
+        pictureHeight: Double,
+        entriesBefore: Int,
+        completion: @escaping ([String: Any]?, String?) -> Void
+    ) {
+        // Times carry on after the reader's last frame, so they keep rising as a camera's would.
+        let firstFeedTime = (signReader.lastFrameTime ?? 0) + 1
+        signReader.setPictureSize(width: pictureWidth, height: pictureHeight)
+        var lastFeedTime = firstFeedTime
+        for (frame, frameTime) in timedFrames {
+            lastFeedTime = firstFeedTime + frameTime
+            observeSignFrame(frame, at: lastFeedTime)
+        }
+        for restFrameNumber in 1...30 {
+            observeSignFrame(SignLandmarkFrame(), at: lastFeedTime + Double(restFrameNumber) / 30)
+        }
+        // Wait for the models (they run on their own queue), at most a minute.
+        Task { [weak self] in
+            let waitStart = Date()
+            while (self?.signReader.readingsInProgress ?? 0) > 0 && Date().timeIntervalSince(waitStart) < 60 {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard let self else { return }
+            let newEntries = Array(self.signReader.entries.dropFirst(entriesBefore))
+            completion([
+                "framesFed": timedFrames.count,
+                "read": newEntries.map { HandSignController.describe($0) },
+                "line": self.signReader.line.plainText,
+                "stillReading": self.signReader.readingsInProgress
+            ], nil)
+        }
+    }
+
+    /// One entry of the line for the debug inbox: what it shows, its kind and times, and what the models said.
+    private static func describe(_ entry: SignLiveLineEntry) -> [String: Any] {
+        var description: [String: Any] = [
+            "text": entry.displayText,
+            "kind": entry.kind.rawValue,
+            "start": entry.startTime,
+            "end": entry.endTime,
+            "alternatives": entry.token?.alternativeTexts ?? [],
+            "wordGuesses": entry.wordGuesses.map { ["label": $0.label, "probability": Double($0.probability)] as [String: Any] }
+        ]
+        if let spelling = entry.spelling {
+            description["spelling"] = ["text": spelling.text, "confidence": Double(spelling.confidence)] as [String: Any]
+        }
+        return description
+    }
+
+    /// `handSigns {action: signsState}` and the `signs` part of the state.
+    func signsStatusSnapshot() -> [String: Any] {
+        let dateFormatter = ISO8601DateFormatter()
+        let signedLine = signReader.line
+        var models: [String: Any] = [
+            "loaded": signModelsLoad != nil,
+            "folders": SignModelFolders.searchFolders.map { $0.path }
+        ]
+        if let signModelsLoad {
+            models["wordModel"] = signModelsLoad.wordModelSummary.map { $0 as Any } ?? NSNull()
+            models["spellingModel"] = signModelsLoad.spellingModelSummary.map { $0 as Any } ?? NSNull()
+            models["wordModelPath"] = signModelsLoad.found.wordModelURL.map { $0.path as Any } ?? NSNull()
+            models["spellingModelPath"] = signModelsLoad.found.spellingModelURL.map { $0.path as Any } ?? NSNull()
+            models["missing"] = signModelsLoad.problems.map { $0 as Any } ?? NSNull()
+        }
+        return [
+            "language": signLanguage.rawValue,
+            "destination": signsDestination.rawValue,
+            "autoSendSeconds": signsAutoSendSeconds,
+            "line": signedLine.plainText,
+            "message": signedLine.isEmpty ? "" : signedLine.messageForBrain(language: signLanguage),
+            "entries": signReader.entries.map { HandSignController.describe($0) },
+            "signing": signReader.isSigning,
+            "readingsInProgress": signReader.readingsInProgress,
+            "autoSendProgress": signsAutoSendProgress,
+            "framesPerSecondSeen": (signFramesPerSecondSeen * 10).rounded() / 10,
+            "models": models,
+            "modelsProblem": signModelsProblem.map { $0 as Any } ?? NSNull(),
+            "sent": recentSignedLines.map { ["text": $0.text, "to": $0.destination, "at": dateFormatter.string(from: $0.date)] }
+        ]
+    }
+
     // MARK: - Teaching a sign
 
     /// Starts taking examples of a sign from the camera: hold it still and it's taken a few times over two seconds.
@@ -294,6 +659,11 @@ final class HandSignController: ObservableObject {
         }
         guard isRunning else {
             teachingLine = "Turn on Read hand signs first, so the camera can see the sign."
+            return
+        }
+        // Sign to text reads with its models, not taught shapes, and its camera frames don't carry hand shapes.
+        guard mode != .signs else {
+            teachingLine = "Teaching is for Spell to text. Switch to it first."
             return
         }
         teachingLabel = cleanedLabel
@@ -402,6 +772,9 @@ final class HandSignController: ObservableObject {
         isPausedForLockOrSleep = true
         camera.stop()
         holdTracker.reset()
+        // A sign half made before the lock is not finished after it; the line itself is kept.
+        signReader.forgetSignInProgress()
+        publishSignState(at: nil)
     }
 
     private func resumeAfterLockOrSleep() {
@@ -434,6 +807,7 @@ final class HandSignController: ObservableObject {
             "lastLine": lastLine,
             "problem": problem.map { $0 as Any } ?? NSNull(),
             "showsCameraPicture": showsCameraPicture,
+            "signs": signsStatusSnapshot(),
             "spell": [
                 "alphabet": alphabet.rawValue,
                 "destination": destination.rawValue,

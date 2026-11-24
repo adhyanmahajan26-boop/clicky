@@ -4,10 +4,12 @@
 //
 //  The small camera panel shown whenever hand signs are on (so the camera is never on unseen): the
 //  mirrored camera picture (or just a status line, if the owner hid the picture), the sign it sees with
-//  a ring filling while it's held, the three modes, and what was last said or done, in big letters so the
+//  a ring filling while it's held, the four modes, and what was last said or done, in big letters so the
 //  person being talked to can read it too. In Spell to text it shows the letters spelled so far, with
-//  Space, Delete, Clear and Send buttons. Bottom right of the main screen; drag it anywhere. It never
-//  takes focus. The close button turns hand signs off.
+//  Space, Delete, Clear and Send buttons. In Sign to text it shows the line as it builds (each word, a
+//  finger-spelled word spelled out, a soft "?" for a sign it wasn't sure of), whether a sign is being made,
+//  the countdown before the line sends by itself, Undo, Clear and Send, and the ASL / ISL choice. Bottom
+//  right of the main screen; drag it anywhere. It never takes focus. The close button turns hand signs off.
 //
 
 import AppKit
@@ -26,6 +28,8 @@ final class HandSignPanelController {
     static let heightWithoutPicture: CGFloat = 176
     /// Spell to text adds the spelled line and its buttons.
     static let extraHeightForSpelling: CGFloat = 76
+    /// Sign to text adds the language choice, the signed line and its buttons.
+    static let extraHeightForSigns: CGFloat = 112
     private static let screenEdgeGap: CGFloat = 20
 
     init(controller: HandSignController) {
@@ -60,7 +64,13 @@ final class HandSignPanelController {
     private func fitHeight(animated: Bool) {
         guard let panel else { return }
         let pictureHeight = controller.showsCameraPicture ? Self.heightWithPicture : Self.heightWithoutPicture
-        let height = pictureHeight + (controller.mode == .spell ? Self.extraHeightForSpelling : 0)
+        let extraHeight: CGFloat
+        switch controller.mode {
+        case .spell: extraHeight = Self.extraHeightForSpelling
+        case .signs: extraHeight = Self.extraHeightForSigns
+        case .control, .speakForMe: extraHeight = 0
+        }
+        let height = pictureHeight + extraHeight
         var frame = panel.frame
         frame.origin.y += frame.height - height
         frame.size = NSSize(width: Self.width, height: height)
@@ -102,18 +112,26 @@ struct HandSignPanelView: View {
             if controller.mode == .spell {
                 spellingArea
             }
+            if controller.mode == .signs {
+                signsArea
+            }
             Text(controller.lastLine.isEmpty ? " " : controller.lastLine)
-                .font(.system(size: controller.mode == .spell ? 12 : 18, weight: .semibold))
-                .foregroundColor(controller.mode == .spell ? .white.opacity(0.7) : .white)
-                .lineLimit(controller.mode == .spell ? 2 : 3)
+                .font(.system(size: modeHasATextArea ? 12 : 18, weight: .semibold))
+                .foregroundColor(modeHasATextArea ? .white.opacity(0.7) : .white)
+                .lineLimit(modeHasATextArea ? 2 : 3)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, minHeight: controller.mode == .spell ? 18 : 44, alignment: .topLeading)
+                .frame(maxWidth: .infinity, minHeight: modeHasATextArea ? 18 : 44, alignment: .topLeading)
         }
         .padding(12)
         .frame(width: HandSignPanelController.width, alignment: .top)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Self.panelInk.opacity(0.94)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+    }
+
+    /// Spell to text and Sign to text show their own text, so the last line under it is small.
+    private var modeHasATextArea: Bool {
+        controller.mode == .spell || controller.mode == .signs
     }
 
     private var header: some View {
@@ -160,7 +178,7 @@ struct HandSignPanelView: View {
         HStack(spacing: 8) {
             ZStack {
                 Circle().stroke(Color.white.opacity(0.2), lineWidth: 3)
-                Circle().trim(from: 0, to: controller.holdProgress)
+                Circle().trim(from: 0, to: controller.mode == .signs ? controller.signsAutoSendProgress : controller.holdProgress)
                     .stroke(Self.ringColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Text(chipSymbol).font(.system(size: 14, weight: .bold)).foregroundColor(.white)
@@ -173,6 +191,11 @@ struct HandSignPanelView: View {
     }
 
     private var chipSymbol: String {
+        if controller.mode == .signs {
+            if controller.isMakingASign { return "✋" }
+            if controller.signReadingsInProgress > 0 { return "…" }
+            return controller.handIsVisible ? "✋" : "·"
+        }
         if controller.mode == .spell || controller.teachingLabel != nil {
             if let label = controller.seenSpellingLabel, controller.teachingLabel == nil {
                 switch label {
@@ -189,6 +212,15 @@ struct HandSignPanelView: View {
     private var chipWords: String {
         if let problem = controller.problem { return problem }
         if controller.teachingLabel != nil { return controller.teachingLine }
+        if controller.mode == .signs {
+            if controller.isLoadingSignModels { return "Loading the sign models…" }
+            if let signModelsLoad = controller.signModelsLoad, !signModelsLoad.hasAnyModel {
+                return "Sign to text isn't in this build yet"
+            }
+            if controller.isMakingASign { return "Signing…" }
+            if controller.signReadingsInProgress > 0 { return "Reading the sign…" }
+            return controller.handIsVisible ? "Sign, then rest your hands" : "Show me your hands"
+        }
         if controller.mode == .spell {
             switch controller.seenSpellingLabel {
             case FingerspellingReading.sendLabel?: return "Hold to send"
@@ -230,6 +262,137 @@ struct HandSignPanelView: View {
         }
     }
 
+    // MARK: Sign to text
+
+    /// The language, the line as it builds, and what to do with it.
+    private var signsArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(SignLanguage.allCases, id: \.self) { language in
+                    signLanguageButton(language)
+                }
+                Spacer(minLength: 4)
+                signingIndicator
+            }
+            signedLineView
+            HStack(spacing: 6) {
+                spellingButton("Undo", systemImage: "arrow.uturn.backward", help: "Take off the last sign") { controller.undoLastSign() }
+                spellingButton("Clear", systemImage: "xmark.circle", help: "Start the line again") { controller.clearSignedLine() }
+                Text(autoSendWords)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button {
+                    controller.sendSignedLine()
+                } label: {
+                    Text("Send").font(.system(size: 11.5, weight: .semibold)).foregroundColor(.black)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain).pointerCursor()
+                .help("Send to \(controller.signsDestination.displayName)")
+            }
+        }
+    }
+
+    private func signLanguageButton(_ language: SignLanguage) -> some View {
+        let isChosen = controller.signLanguage == language
+        return Button {
+            controller.signLanguage = language
+        } label: {
+            Text(language.rawValue.uppercased())
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(isChosen ? .black : .white.opacity(0.85))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(isChosen ? Color.white : Color.white.opacity(0.1)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain).pointerCursor()
+        .help("Read \(language.fullName)")
+    }
+
+    /// A dot that lights while a sign is being made, and the words for it.
+    private var signingIndicator: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(controller.isMakingASign ? Self.ringColor : Color.white.opacity(0.25))
+                .frame(width: 7, height: 7)
+            Text(controller.isMakingASign ? "Signing" : (controller.signReadingsInProgress > 0 ? "Reading" : "Resting"))
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+        }
+    }
+
+    /// Each word as a chip, newest on the right, scrolled so the newest shows.
+    private var signedLineView: some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    if controller.signedEntries.isEmpty {
+                        Text("…")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    ForEach(Array(controller.signedEntries.enumerated()), id: \.offset) { entryIndex, entry in
+                        signedEntryChip(entry).id(entryIndex)
+                    }
+                }
+                .frame(minHeight: 30)
+            }
+            .onChange(of: controller.signedEntries.count) { _, entryCount in
+                guard entryCount > 0 else { return }
+                scrollProxy.scrollTo(entryCount - 1, anchor: .trailing)
+            }
+        }
+    }
+
+    /// A word reads as a word; a finger-spelled word is spelled out letter by letter; a sign it wasn't sure of is
+    /// a soft "?", so the signer knows it was seen but not read.
+    @ViewBuilder
+    private func signedEntryChip(_ entry: SignLiveLineEntry) -> some View {
+        switch entry.kind {
+        case .word:
+            Text(entry.displayText)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.14)))
+                .help(alternativesHelp(for: entry))
+        case .spelled:
+            Text(entry.displayText.uppercased().map(String.init).joined(separator: "·"))
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().strokeBorder(Color.white.opacity(0.45), lineWidth: 1))
+                .help("Finger-spelled")
+        case .unclear:
+            Text(entry.displayText)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundColor(.white.opacity(0.45))
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(Capsule().strokeBorder(Color.white.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+                .help("A sign I wasn't sure of. It won't be sent.")
+        }
+    }
+
+    /// A signed word's tooltip: the other words it may have been, when the models gave any.
+    private func alternativesHelp(for entry: SignLiveLineEntry) -> String {
+        let alternativeTexts = entry.token?.alternativeTexts ?? []
+        return alternativeTexts.isEmpty ? "Signed word" : "May also be: \(alternativeTexts.joined(separator: ", "))"
+    }
+
+    /// The countdown before the line sends by itself, or what's happening instead.
+    private var autoSendWords: String {
+        if controller.signsAutoSendSeconds <= 0 { return controller.signedEntries.isEmpty ? "" : "Send when ready" }
+        if controller.signsAutoSendProgress > 0 {
+            let secondsLeft = max(0, (1 - controller.signsAutoSendProgress) * controller.signsAutoSendSeconds)
+            return String(format: "Sending in %.1f s", secondsLeft)
+        }
+        return ""
+    }
+
     private func spellingButton(_ title: String, systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
@@ -244,7 +407,8 @@ struct HandSignPanelView: View {
     }
 
     private var modePicker: some View {
-        HStack(spacing: 6) {
+        // Four modes fit the panel's width with a little less room around each name.
+        HStack(spacing: 4) {
             ForEach(HandSignMode.allCases, id: \.self) { mode in
                 let isChosen = controller.mode == mode
                 Button {
@@ -253,7 +417,7 @@ struct HandSignPanelView: View {
                     Text(mode.shortName)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundColor(isChosen ? .black : .white.opacity(0.85))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(Capsule().fill(isChosen ? Color.white : Color.white.opacity(0.1)))
                         .contentShape(Capsule())
                 }

@@ -3,7 +3,8 @@
 //  leanring-buddy
 //
 //  Settings › Pointer Assistant › Hand signs: the switch, what signs do, the camera picture, Spell to text
-//  (which alphabet, where the text goes, and teaching it new signs), and each sign's phrase (what
+//  (which alphabet, where the text goes, and teaching it new signs), Sign to text (which sign language,
+//  where the line goes, when it sends by itself, and what it can read), and each sign's phrase (what
 //  "Speak for me" says), which the owner can rewrite.
 //
 
@@ -26,10 +27,12 @@ struct HandSignSettingsSection: View {
             }
             RowDivider()
             SettingRow(title: "What signs do", detail: controller.mode.detail) {
+                // Four modes with long names: a menu rather than segments.
                 Picker("What signs do", selection: $controller.mode) {
                     ForEach(HandSignMode.allCases, id: \.self) { mode in Text(mode.displayName).tag(mode) }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 300)
+                .labelsHidden().frame(width: 220)
+                .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "Show the camera picture", detail: "Off: the panel only shows the sign it sees.") {
@@ -50,6 +53,36 @@ struct HandSignSettingsSection: View {
                 .labelsHidden().frame(width: 220)
             }
             RowDivider()
+            SettingRow(title: "Sign to text: what it reads", detail: Self.signsHonestLine) {
+                EmptyView()
+            }
+            RowDivider()
+            SettingRow(title: "Sign to text: sign language", detail: signModelsWords) {
+                Picker("Sign language", selection: $controller.signLanguage) {
+                    ForEach(SignLanguage.allCases, id: \.self) { language in Text(language.displayName).tag(language) }
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 240)
+            }
+            RowDivider()
+            SettingRow(title: "Sign to text: send to", detail: controller.signsDestination.detail) {
+                Picker("Send to", selection: $controller.signsDestination) {
+                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(destination.displayName).tag(destination) }
+                }
+                .labelsHidden().frame(width: 220)
+                .pointerCursor()
+            }
+            RowDivider()
+            SettingRow(title: "Sign to text: send by itself",
+                       detail: "Once your hands have rested this long with words waiting. Off: only Send sends.") {
+                Stepper(value: $controller.signsAutoSendSeconds, in: 0...10, step: 0.5) {
+                    Text(controller.signsAutoSendSeconds <= 0 ? "Off" : String(format: "After %.1f s", controller.signsAutoSendSeconds))
+                        .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
+                        .frame(minWidth: 80, alignment: .trailing)
+                }
+                .pointerCursor()
+                .help("How long your hands rest before the line sends by itself")
+            }
+            RowDivider()
             teachRow
             ForEach(controller.taughtSigns.signs, id: \.label) { taughtSign in
                 RowDivider()
@@ -60,6 +93,19 @@ struct HandSignSettingsSection: View {
                 signRow(sign)
             }
         }
+    }
+
+    /// What Sign to text can and can't do, said plainly.
+    private static let signsHonestLine = "Single signs and finger-spelled words from the lists it was trained on; it will show ? when it isn't sure. Rest your hands between signs."
+
+    /// Which models Sign to text found for the chosen language, or what's missing.
+    private var signModelsWords: String {
+        if let modelsProblem = controller.signModelsProblem { return modelsProblem }
+        guard let signModelsLoad = controller.signModelsLoad, signModelsLoad.language == controller.signLanguage else {
+            return "Its models load when Sign to text is turned on."
+        }
+        let modelWords = [signModelsLoad.wordModelSummary, signModelsLoad.spellingModelSummary].compactMap { $0 }
+        return "Ready: \(modelWords.joined(separator: "; "))."
     }
 
     /// Teach a letter or word: write it, press Teach, and hold the sign to the camera for two seconds.
