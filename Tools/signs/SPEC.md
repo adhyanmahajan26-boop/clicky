@@ -44,10 +44,20 @@ dataset's own `train` / `val` / `test` when it has one by signer, else empty; `s
 
 ## 2. Which hand is which (`SignHandSides`, Swift only)
 
-Vision returns up to two hands with a guess at left or right. With a body in the picture, each hand goes to the
-side whose body wrist is nearer its own wrist (both hands can't take the same side: the nearer pair wins, the
-other hand takes the side left over). With no body, Vision's own guess is used; when it says "unknown" or
-gives both hands the same side, the hand further to the picture's left is the signer's right.
+Vision returns up to two hands with a guess at left or right (its guess is named for the signer, and matched the
+body on 98% of hands in a check on real video). With a body in the picture, each hand goes to the side whose
+body wrist is nearer its own wrist (both hands can't take the same side: the nearer pair wins, the other hand
+takes the side left over). A hand's place is its wrist, or the middle of its seen joints when the wrist is
+hidden; distances count x multiplied by `width / height`. With only one body wrist seen and two hands, the
+nearer hand takes that side; with one body wrist and one hand, Vision's guess decides. With no body, Vision's
+own guess is used; when it says "unknown" or gives both hands the same side, the hand further to the picture's
+left is the signer's right (a single hand in the picture's left half is the signer's right).
+
+Apple's body joints are named for the person (`leftShoulder` is on the picture's right). Its face landmarks are
+named for the picture (`leftEyebrow` is the signer's right brow), so the extractor swaps them. Body and face
+points also need confidence 0.3. The mouth corners are the two `outerLips` points furthest apart; the lip
+middles are the points nearest halfway along the mouth on the eyes' side and the chin's side; a brow's middle is
+the average of its points.
 
 ## 3. Features: one frame is 117 numbers
 
@@ -72,6 +82,15 @@ Made by `signs/features.py` and by ClickyCore `SignFeatures`, the same way:
 
 Mouth and brows are kept in the landmark files but are not features yet.
 
+The exact rules for the cases this leaves open (which joint is the middle knuckle, the percentile, a hand or
+body too small to measure, nothing seen at all) are in the notes at the top of `signs/features.py`, which Swift
+follows line by line.
+
+**Order.** A stretch of frames is first cut to run from the first frame with a hand to the last (on the
+landmarks as seen, before gaps are filled), then its features are made over all its frames, and only then is it
+thinned or padded to the model's frame count: frame `k` of `N` kept from `T` is frame
+`floor(k × (T − 1) / (N − 1) + 0.5)`. The app does the same in the same order.
+
 A model takes `[1, N, 117]` float32 and `[1, N]` of 1 for real frames and 0 for padding, at about 30 frames a
 second. Frame-to-frame change is worked out inside the model, not here.
 
@@ -81,7 +100,7 @@ second. Frame-to-frame change is worked out inside the model, not here.
 | --- | --- | --- | --- |
 | `SignWordsASL.mlpackage` | one ASL sign | 96 frames | a score per word in `SignWordsASL.labels.json`, and a description of the sign (as many numbers as the model is wide), which is what a sign the owner teaches is compared by |
 | `SignWordsISL.mlpackage` | one ISL sign | 96 frames | the same for `SignWordsISL.labels.json` |
-| `SignSpellASL.mlpackage` | ASL finger-spelling on the move | 256 frames | a score per character per 2 frames (CTC, blank first), characters in `SignSpellASL.labels.json` |
+| `SignSpellASL.mlpackage` | ASL finger-spelling on the move | 256 frames | 128 rows of scores, one per 2 frames (CTC): score 0 is the blank, score `i + 1` is character `i` of `SignSpellASL.labels.json` |
 | `SignSpellISL.mlpackage` | one still ISL letter (two hands) | 1 frame | a score per letter |
 
 A sign longer than the model's frames is thinned evenly to fit; a shorter one is padded at the end.
