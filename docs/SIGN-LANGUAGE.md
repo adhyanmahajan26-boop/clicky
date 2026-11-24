@@ -80,8 +80,8 @@ What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels i
 | What | Measured on | Result |
 | --- | --- | --- |
 | Word model, whole clip | INCLUDE's official test list (813 clips). INCLUDE names no signers, and its lists share them: the test clips are other takes by people in training | 96.9% right first guess, 99.5% in the top 5 |
-| Word model, signers it never saw | INCLUDE leave-one-signer-out: 4 signers held out in turn (2 men, 2 women, 1,115 clips), each model trained without them (120 epochs, Tools/signs/studio/include_signers) | 69.6% right first guess, 89.3% in the top 5 (63.8% to 76.5% by signer) |
-| The same, trained with the hand turn and camera height changes | The same 4 held-out signers | 72.6% right first guess, 90.9% in the top 5 (66.1% to 78.4% by signer); not yet the model that ships |
+| Word model, signers it never saw | INCLUDE leave-one-signer-out: 4 signers held out in turn (2 men, 2 women, 1,115 clips), each model trained without them (120 epochs, one seed until a 3-seed run replaces it). INCLUDE names no signers: we identified them ourselves from its recording sessions (Tools/signs/studio/include_signers) | 69.6% right first guess, 89.3% in the top 5 (63.8% to 76.5% by signer) |
+| The same, trained with the hand turn and camera height changes | The same 4 held-out signers, 1,115 clips, one seed | 72.6% right first guess, 90.9% in the top 5 (66.1% to 78.4% by signer); not yet the model that ships |
 | Through the app's own pipeline, threshold off | The same test list, 815 clips, read as the camera would (`sign-eval clips`) | 95.3% right |
 | With the 0.95 threshold | The same 815 clips | 78.9% answered, 98.4% right when it answers, 21.1% shown as "?" |
 | With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (2,190 taught and 251 never-taught test clips) | Taught signs: 80% answered, 99% right when answered; never-taught signs wrongly given a word 8.8% of the time |
