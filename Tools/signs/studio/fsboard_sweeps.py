@@ -35,7 +35,7 @@ ALREADY_READ = DATA / "downloads/fsboard-apple/chosen.json"
 SEED = 20261124
 SECONDS_KEPT_EITHER_SIDE = 0.25
 BATCH_SIZE = 500
-CONNECTIONS = 12  # about half the line next to the PopSign sweeps' 12
+CONNECTIONS = 6  # FSboard's big files take far more than their share per connection: 6 here leave PopSign's 12 about half the line
 # (pool name, study, FSboard split, metadata file, SPEC split, clips a sweep)
 POOLS = [
     ("daun-train", "daun_v3", "train", "daun_v3-train.json", "train", 4000),
