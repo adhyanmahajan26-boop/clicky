@@ -709,6 +709,9 @@ extension TheoUIDriver {
         case "uiCallListenMode":
             TheoCallController.session?.setListenMode(command["on"] as? Bool ?? true)
             respond(true, TheoCallController.session?.report() ?? [:], nil)
+        case "uiCallGroupMode":
+            TheoCallController.session?.setGroupMode(command["on"] as? Bool ?? true)
+            respond(true, TheoCallController.session?.report() ?? [:], nil)
         case "uiCallEnd":
             TheoCallController.end()
             respond(true, [:], nil)

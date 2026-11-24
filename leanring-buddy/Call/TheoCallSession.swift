@@ -240,6 +240,8 @@ final class TheoCallSession: ObservableObject {
         var wasCut = false
         /// Heard in Listen mode and kept, not answered. It may not be the owner speaking.
         var wasOnlyHeard = false
+        /// Heard in group mode: the owner and other people, marked by who it sounded like ("Addy: …", "Someone: …").
+        var isGroupTalk = false
     }
 
     /// One turn's timings, from the moment the owner's voice stopped.
@@ -264,6 +266,10 @@ final class TheoCallSession: ObservableObject {
     @Published private(set) var isListenMode = false
     /// The owner stopped talking and Vello is giving them a moment to go on before it answers.
     @Published private(set) var isHoldingTurn = false
+    /// Group mode: an X Space, a group call or a room with other people (ClickyCore `CallGroupMode`). Every voice counts,
+    /// lines are marked by who they sounded like, other people's words never throw an answer away, and Vello answers only
+    /// when spoken to or when it has something to add.
+    @Published private(set) var isGroupMode = false
     let startedAt = Date()
 
     private let audio: CallAudio
@@ -367,6 +373,17 @@ final class TheoCallSession: ObservableObject {
     private static let nearWordsWindowSeconds = 3.5
     /// The owner is talking: the gate is open on a voice near the Mac.
     private var isOwnerSpeaking: Bool { gate.isSpeaking && stretchIsNear }
+    /// The stretch going on now is about as loud as the owner's own voice. Outside group mode it's the same as
+    /// `stretchIsNear` whenever only the near voice counts; in group mode every voice counts and this tells them apart.
+    private var stretchSoundsLikeOwner = false
+    /// What's held for this turn in group mode, by who it sounded like.
+    private var heldGroupLines: [CallGroupMode.HeardLine] = []
+    /// When the first words of the turn being held came, for letting long group talk go at its first gap.
+    private var heldTurnStartedAt: Date?
+    /// Words a group-mode answer had, raw, for telling a [PASS] from a turn that gave nothing.
+    private var rawAnswerOfThisTurn = ""
+    /// This turn's answer was [PASS]: Vello chose to stay quiet.
+    private var turnPassed = false
 
     /// `botID` nil, or Vello's own bot's id: the call with Vello. Any other bot: a call with that bot.
     init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil) {
@@ -394,7 +411,7 @@ final class TheoCallSession: ObservableObject {
             try audio.open()
         } catch {
             problem = "The microphone didn't start."
-            print("📞 Call audio: \(error)")
+            callLog("📞 Call audio: \(error)")
         }
         // Theo's voice reaches the mic with no echo cancelling: it takes a much louder voice to count as a cut-in.
         if isLive && !audio.isEchoCancelled { gate.bargeInMarginDecibels = 34 }
@@ -463,7 +480,10 @@ final class TheoCallSession: ObservableObject {
         voice?.shutDown()
         brain?.stop()
         audio.close()
-        store.recordCall(lines.filter { !$0.text.isEmpty }.map { ($0.who == .addy, $0.wasOnlyHeard ? "(heard in listen mode) " + $0.text : $0.text) },
+        store.recordCall(lines.filter { !$0.text.isEmpty }.map { line in
+                             let prefix = line.wasOnlyHeard ? "(heard in listen mode) " : (line.isGroupTalk ? "(in the group) " : "")
+                             return (line.who == .addy, prefix + line.text)
+                         },
                          startedAt: startedAt, botID: isVellosOwnBot ? nil : bot?.id)
     }
 
@@ -525,16 +545,43 @@ final class TheoCallSession: ObservableObject {
         newEars.onFinal = { [weak self] text in self?.heardFinal(text) }
         newEars.onFailed = { [weak self] message in self?.earsFailed(message) }
         newEars.start()
+        earsName = newEars.name
+        callLog("📞 Call: listening with \(newEars.name)")
     }
 
     private func earsFailed(_ message: String) {
+        guard state != .ended else { return }
         guard !(ears is AppleCallEars) else {
+            callLog("📞 Call: Apple's listening stopped: \(message)")
             problem = message
             return
         }
-        problem = "Sarvam's listening stopped (\(message)), using Apple on this Mac."
+        // Sarvam's socket closed mid-call: reconnect it rather than hand the call to Apple, which hears a busy Space poorly.
+        let now = Date()
+        if let key = ProviderKeychain.get("sarvam"), CallEarsReconnect.reconnects(earlierReconnects: sarvamReconnects, now: now) {
+            sarvamReconnects.append(now)
+            callLog("📞 Call: Sarvam's listening stopped (\(message)), reconnecting")
+            use(ears: SarvamCallEars(apiKey: key, languageCode: language.sarvamListening))
+            return
+        }
+        callLog("📞 Call: Sarvam's listening keeps stopping (\(message)), using Apple for now")
+        problem = "Sarvam's listening keeps stopping (\(message)), using Apple on this Mac for now."
         use(ears: appleEars())
+        // Sarvam is tried again in a while, so one bad minute doesn't leave the rest of the call on Apple.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(CallEarsReconnect.backToSarvamAfterSeconds * 1_000_000_000))
+            guard let self, self.state != .ended, self.ears is AppleCallEars, let key = ProviderKeychain.get("sarvam") else { return }
+            callLog("📞 Call: trying Sarvam's listening again")
+            self.sarvamReconnects = []
+            self.problem = nil
+            self.use(ears: SarvamCallEars(apiKey: key, languageCode: self.language.sarvamListening))
+        }
     }
+
+    /// When Sarvam's listening was reconnected on this call (`CallEarsReconnect`).
+    private var sarvamReconnects: [Date] = []
+    /// Group turns Vello let pass since it last spoke, so it's nudged to join in (`CallGroupMode.passesBeforeNudge`).
+    private var groupPassesInARow = 0
 
     func changeLanguage(_ new: CallSettings.Language) {
         guard new != language else { return }
@@ -571,31 +618,40 @@ final class TheoCallSession: ObservableObject {
         switch event {
         case .speechStarted:
             stretchBlockLevels = recentBlockLevels
-            stretchIsNear = !nearVoiceOnly || nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
+            stretchSoundsLikeOwner = nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
+            // In group mode every voice counts: the other people in the Space come out of a phone's speaker well below the
+            // owner's level, and turning them away left Vello deaf to everyone but the owner (Air, 24 Nov).
+            stretchIsNear = !nearVoiceOnly || isGroupMode || stretchSoundsLikeOwner
             if stretchIsNear {
                 ownerStartedTalking = true
             } else {
                 farVoicesIgnored += 1
-                print("📞 Call: a voice too far from the Mac, ignored (\(Int(recentBlockLevels.max() ?? 0)) dB, the owner's is \(Int(nearVoice.ownerLevelDecibels ?? 0)) dB)")
+                callLog("📞 Call: a voice too far from the Mac, ignored (\(Int(recentBlockLevels.max() ?? 0)) dB, the owner's is \(Int(nearVoice.ownerLevelDecibels ?? 0)) dB)")
             }
         case .speechEnded, nil:
             if gate.isSpeaking { stretchBlockLevels.append(block.levelDecibels) }
             // Someone far away was talking and the owner joined in, louder: from here it's the owner's.
-            if gate.isSpeaking, !stretchIsNear, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
-                stretchIsNear = true
-                ownerStartedTalking = true
+            if gate.isSpeaking, !stretchSoundsLikeOwner, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
+                stretchSoundsLikeOwner = true
+                if !stretchIsNear {
+                    stretchIsNear = true
+                    ownerStartedTalking = true
+                }
             }
         }
-        if isOwnerSpeaking { nearVoice.heardNearSpeech(at: now) }
+        // In group mode other people's voices count too, but only the owner's teaches the owner's level and marks near speech.
+        let isTheOwnersOwnVoice = isGroupMode ? stretchSoundsLikeOwner : true
+        if isOwnerSpeaking && isTheOwnersOwnVoice { nearVoice.heardNearSpeech(at: now) }
         // The ears get the audio before the event is acted on, so the first words aren't missing.
         ears?.feed(block, isSpeech: isOwnerSpeaking)
         if ownerStartedTalking { speechStarted() }
         if event == .speechEnded {
             let wasTheOwner = stretchIsNear
-            if wasTheOwner, let loudLevel = CallNearVoice.loudLevel(of: stretchBlockLevels) {
+            if wasTheOwner, isTheOwnersOwnVoice, let loudLevel = CallNearVoice.loudLevel(of: stretchBlockLevels) {
                 nearVoice.learn(nearStretchLevelDecibels: loudLevel, at: now)
             }
             stretchIsNear = false
+            stretchSoundsLikeOwner = false
             stretchBlockLevels = []
             if wasTheOwner { speechEnded() }
         }
@@ -603,15 +659,17 @@ final class TheoCallSession: ObservableObject {
 
     /// Words from the ears that came from someone else in the room: none of the owner's own voice near the Mac lately.
     private func isSomeoneElseTalking() -> Bool {
-        guard nearVoiceOnly, !isOwnerSpeaking, let lastNearSpeechAt = nearVoice.lastNearSpeechAt else { return false }
+        guard nearVoiceOnly, !isGroupMode, !isOwnerSpeaking, let lastNearSpeechAt = nearVoice.lastNearSpeechAt else { return false }
         return Date().timeIntervalSince(lastNearSpeechAt) > Self.nearWordsWindowSeconds
     }
 
     private func speechStarted() {
         speechStartedAt = Date()
         speechEndedAt = nil
-        if audio.isVoicePlaying || state == .speaking {
+        if (audio.isVoicePlaying || state == .speaking) && !isGroupMode {
             // Talking over Vello's voice: it stops at once (the gate already wants a voice well above the speakers).
+            // In a group a laugh or a "haan" over it is just people reacting: words decide there (`heardPartial`), so
+            // Vello isn't cut off mid-sentence by every sound in the Space.
             bargeIn()
         }
         // While Vello is still writing, a sound on its own no longer throws the answer away. A cough, a chair, or someone
@@ -625,6 +683,9 @@ final class TheoCallSession: ObservableObject {
     /// The owner's words came in while Vello was still answering: if none of the answer was heard yet, the owner was just
     /// carrying on and the turn goes on as one; otherwise Vello stops.
     private func ownerWordsCameDuringTheAnswer() {
+        // In a group the talk goes on while Vello writes: those words wait and go with the next turn. Starting the answer
+        // over for each of them meant it came late or never (Air, 24 Nov, in an X Space).
+        if isGroupMode, replyInProgress, !turnHasSounded, !audio.isVoicePlaying { return }
         if replyInProgress, !turnHasSounded, lastReleasedTurn != nil {
             // Started over twice already: the answer is kept, and the new words wait for it and are answered next.
             guard CallCutIn.restartsTheAnswer(restartsSoFar: restartsOfThisAnswer) else { return }
@@ -695,8 +756,14 @@ final class TheoCallSession: ObservableObject {
     private func heardPartial(_ text: String) {
         // Vello's own voice coming back through the mic: not the owner, so no line and no turn.
         if isVellosOwnVoiceComingBack(text) || isSomeoneElseTalking() { return }
-        if replyInProgress || audio.isVoicePlaying,
-           CallCutIn.bringsNewWords(text, alreadyHeard: wordsOfThisTurn, atLeast: Self.partialWordsToCutIn) {
+        // A partial only stops Vello's voice. An answer not heard yet is started over only by a final with new words: a
+        // partial often re-hears words already taken in other spellings, and starting over on it, then getting a final
+        // that was only a repeat, asked the same turn again after another full pause (Air, 24 Nov: "137 words" let go
+        // three times, each 4 s apart).
+        let answerNotHeardYet = replyInProgress && !turnHasSounded && !audio.isVoicePlaying
+        if replyInProgress || audio.isVoicePlaying, !answerNotHeardYet,
+           CallCutIn.bringsNewWords(text, alreadyHeard: wordsOfThisTurn,
+                                    atLeast: isGroupMode ? CallGroupMode.partialWordsToCutIn : Self.partialWordsToCutIn) {
             ownerWordsCameDuringTheAnswer()
         }
         startAddyLine()
@@ -709,12 +776,12 @@ final class TheoCallSession: ObservableObject {
     /// The ears give their words after about half a second of quiet, far less than people pause mid-thought. The words are
     /// held, and Vello answers only once the pause is a real one (`waitForTheEndOfTheTurn`).
     private func heardFinal(_ text: String) {
-        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = CallHeardWords.withoutRunawayRepeats(text)
         if !words.isEmpty, isVellosOwnVoiceComingBack(words) {
             // The ears wrote down Vello's own voice. Taking it as the owner cut Vello off mid-answer (the voice stopped and
             // the answer was dropped) and then answered its own words, so it's dropped here.
             echoesDropped.append(words)
-            print("📞 Call: dropped Vello's own voice coming back (\(words.split(separator: " ").count) words)")
+            callLog("📞 Call: dropped Vello's own voice coming back (\(words.split(separator: " ").count) words)")
             if echoesDropped.count > 20 { echoesDropped.removeFirst(echoesDropped.count - 20) }
             if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), lines[liveIndex].id != heldTurnLineID {
                 lines.remove(at: liveIndex)
@@ -724,7 +791,7 @@ final class TheoCallSession: ObservableObject {
         if !words.isEmpty, isSomeoneElseTalking() {
             // Someone across the room: their words are neither a turn nor a cut-in.
             farWordsDropped += 1
-            print("📞 Call: dropped words from a voice too far from the Mac (\(words.split(separator: " ").count) words)")
+            callLog("📞 Call: dropped words from a voice too far from the Mac (\(words.split(separator: " ").count) words)")
             if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }), lines[liveIndex].id != heldTurnLineID {
                 lines.remove(at: liveIndex)
             }
@@ -737,7 +804,7 @@ final class TheoCallSession: ObservableObject {
         let isRepeat = !words.isEmpty && (
             (lastReleasedTurn != nil && heldTurnWords.isEmpty && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn))
             || (!heldTurnWords.isEmpty && CallHeldWords.adding(words, to: heldTurnWords) == heldTurnWords.trimmingCharacters(in: .whitespacesAndNewlines)))
-        if isRepeat { print("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
+        if isRepeat { callLog("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
         if !words.isEmpty, !isRepeat, replyInProgress || audio.isVoicePlaying { ownerWordsCameDuringTheAnswer() }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
         if words.isEmpty || isRepeat {
@@ -754,7 +821,14 @@ final class TheoCallSession: ObservableObject {
             return
         }
         lastWordsAt = Date()
+        if heldTurnWords.isEmpty { heldTurnStartedAt = lastWordsAt }
+        let wordsHeldBefore = heldTurnWords
         heldTurnWords = CallHeldWords.adding(words, to: heldTurnWords)
+        if isGroupMode {
+            // Only the part that's new goes on the speaker's line (`CallHeldWords` leaves a repeat out).
+            let added = heldTurnWords.hasPrefix(wordsHeldBefore) ? String(heldTurnWords.dropFirst(wordsHeldBefore.count)) : words
+            heldGroupLines = CallGroupMode.adding(added, isOwner: wordsSoundLikeTheOwner(), to: heldGroupLines)
+        }
         if let liveIndex {
             lines[liveIndex].text = heldTurnWords
             lines[liveIndex].isLive = false
@@ -768,6 +842,14 @@ final class TheoCallSession: ObservableObject {
         }
         if !isOwnerSpeaking, !replyInProgress, state == .userSpeaking || state == .thinking { state = .listening }
         waitForTheEndOfTheTurn()
+    }
+
+    /// In group mode, whether words the ears just gave were the owner's: their voice right at the Mac was going a moment ago.
+    /// A guess from loudness, said as one to the brain.
+    private func wordsSoundLikeTheOwner() -> Bool {
+        if gate.isSpeaking && stretchSoundsLikeOwner { return true }
+        guard let lastNearSpeechAt = nearVoice.lastNearSpeechAt else { return true }
+        return Date().timeIntervalSince(lastNearSpeechAt) <= 1.5
     }
 
     /// Whether words from the ears are Vello's own voice coming back through the mic rather than the owner talking.
@@ -790,7 +872,7 @@ final class TheoCallSession: ObservableObject {
         let answerLineID = theoLineID
         let answerWasHeard = turnHasSounded
         let wasAnsweringATurn = replyInProgress
-        print("📞 Call: the owner spoke during the answer (answer heard yet: \(answerWasHeard), still writing: \(wasAnsweringATurn))")
+        callLog("📞 Call: the owner spoke during the answer (answer heard yet: \(answerWasHeard), still writing: \(wasAnsweringATurn))")
         // The turn is asked again below with all the owner's words, so its first try leaves the conversation's memory.
         // Kept, the model saw the same question twice with an answer the owner never heard, and lost the thread.
         if wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, lastReleasedTurn != nil {
@@ -844,9 +926,19 @@ final class TheoCallSession: ObservableObject {
                 let voiceStopped = self.isOwnerSpeaking ? soundOrWordsSince : (self.speechEndedAt ?? lastWords)
                 let secondsSinceVoiceStopped = now.timeIntervalSince(voiceStopped)
                 let secondsSincePartialWords = self.lastPartialWordsAt.map { now.timeIntervalSince($0) }
-                let wait = CallTurnEnd.waitSeconds(after: self.heldTurnWords, patienceSeconds: CallSettings.patienceSeconds)
-                if CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: secondsSinceVoiceStopped,
-                                               secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait) {
+                var wait = CallTurnEnd.waitSeconds(after: self.heldTurnWords, patienceSeconds: CallSettings.patienceSeconds)
+                let releases: Bool
+                if self.isGroupMode {
+                    // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
+                    wait = CallGroupMode.waitSeconds(ownWait: wait, isAddressed: CallGroupMode.isAddressed(self.heldTurnWords, assistantNames: self.assistantNames))
+                    releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
+                                                          secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
+                                                          secondsHeld: now.timeIntervalSince(self.heldTurnStartedAt ?? now))
+                } else {
+                    releases = CallQuietLimit.releasesTurn(secondsSinceVoiceStopped: secondsSinceVoiceStopped,
+                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait)
+                }
+                if releases {
                     self.releaseHeldTurn(quietSeconds: secondsSinceVoiceStopped)
                     return
                 }
@@ -859,16 +951,26 @@ final class TheoCallSession: ObservableObject {
     private func releaseHeldTurn(quietSeconds: TimeInterval) {
         let words = heldTurnWords
         let lineID = heldTurnLineID
+        let groupLines = isGroupMode ? (heldGroupLines.isEmpty ? [CallGroupMode.HeardLine(isOwner: true, text: words)] : heldGroupLines) : nil
         heldTurnWords = ""
+        heldGroupLines = []
+        heldTurnStartedAt = nil
         heldTurnLineID = nil
         heldTurnTask = nil
         isHoldingTurn = false
         turnWaits.append(quietSeconds)
-        print("📞 Call: turn ends after \(String(format: "%.1f", quietSeconds)) s of quiet (\(words.split(separator: " ").count) words)")
+        callLog("📞 Call: turn ends after \(String(format: "%.1f", quietSeconds)) s of quiet (\(words.split(separator: " ").count) words)")
         lastReleasedTurn = (words, lineID)
         // The line may have been reopened by a sound that brought no words.
-        if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) { lines[index].isLive = false }
-        takeTurn(words, lineID: lineID)
+        if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) {
+            lines[index].isLive = false
+            // Shown and saved by who it sounded like, so the next call knows it wasn't all the owner.
+            if let groupLines {
+                lines[index].text = CallGroupMode.labelled(groupLines, owner: BotPrompts.ownerName)
+                lines[index].isGroupTalk = true
+            }
+        }
+        takeTurn(words, lineID: lineID, groupLines: groupLines)
     }
 
     /// Words the owner said before the call could hear them (after "hey vello"): a line of theirs and a turn, like words
@@ -899,7 +1001,20 @@ final class TheoCallSession: ObservableObject {
     }
 
     /// The owner's whole turn: a Listen mode switch, something heard in Listen mode, or a question for Vello.
-    private func takeTurn(_ words: String, lineID: UUID?) {
+    private func takeTurn(_ words: String, lineID: UUID?, groupLines: [CallGroupMode.HeardLine]? = nil) {
+        // Only the owner switches group mode by voice: someone else in the Space saying "group mode off" doesn't.
+        let saidByTheOwner = groupLines.map { lines in lines.contains(where: \.isOwner) } ?? true
+        if saidByTheOwner, let groupCommand = CallGroupMode.command(in: words) {
+            let turnOn = groupCommand == .start
+            if turnOn != isGroupMode {
+                setGroupMode(turnOn)
+                let speaksHindi = language == .hindi || language.meansHinglish
+                sayWithoutThinking(CallGroupMode.acknowledgement(turnOn: turnOn, speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice))
+                // "Talk normally" also ends Listen mode.
+                if !turnOn, CallListenMode.command(in: words) == .stop { isListenMode = false }
+                return
+            }
+        }
         switch CallListenMode.command(in: words) {
         case .start?:
             startListenMode(announce: true)
@@ -927,8 +1042,16 @@ final class TheoCallSession: ObservableObject {
             return
         }
         // Vello is working on screen: a yes or no to a step is answered at once, and anything else pauses the steps and
-        // reaches the brain with what was done and the screen as it is now.
-        if isVellosOwnBot, ownerWordsReachTheScreenWork(words) { return }
+        // reaches the brain with what was done and the screen as it is now. In a group only the owner's words do that.
+        if isVellosOwnBot, saidByTheOwner, ownerWordsReachTheScreenWork(words) { return }
+        // A group: what was heard, by who it sounded like, and Vello answers only when it fits ([PASS] otherwise).
+        if isGroupMode {
+            let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: true, text: words)]
+            let isAddressed = CallGroupMode.isAddressed(words, assistantNames: assistantNames)
+            ask(CallGroupMode.message(lines: heard, owner: owner, botName: botName, isAddressed: isAddressed, passesInARow: groupPassesInARow),
+                acknowledgesIfSlow: isAddressed)
+            return
+        }
         // Back from Listen mode with things Vello hasn't been given yet: they come with this turn.
         if listenTranscript.hasUnsent {
             ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false), acknowledgesIfSlow: true)
@@ -945,6 +1068,15 @@ final class TheoCallSession: ObservableObject {
 
     func setListenMode(_ on: Bool) {
         if on { startListenMode(announce: false) } else { stopListenMode(announce: false) }
+    }
+
+    /// Group mode on or off: from the call window, the owner's words, or Vello's own [GROUP: on].
+    func setGroupMode(_ on: Bool) {
+        guard on != isGroupMode else { return }
+        isGroupMode = on
+        callLog("📞 Call: group mode \(on ? "on" : "off")")
+        // What's held so far was all taken as one voice: from here it's marked by speaker.
+        heldGroupLines = on && !heldTurnWords.isEmpty ? [CallGroupMode.HeardLine(isOwner: true, text: heldTurnWords)] : []
     }
 
     private func startListenMode(announce: Bool) {
@@ -992,6 +1124,8 @@ final class TheoCallSession: ObservableObject {
         replyInProgress = true
         turnHasSounded = false
         turnActedOnTheCall = false
+        turnPassed = false
+        rawAnswerOfThisTurn = ""
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
         controls = CallControlStream()
@@ -1019,12 +1153,13 @@ final class TheoCallSession: ObservableObject {
                   !self.turnHasSounded, !self.audio.isVoicePlaying, !self.isOwnerSpeaking else { return }
             let speaksHindi = self.language == .hindi || self.language.meansHinglish
             let words = CallQuietLimit.acknowledgement(speaksHindi: speaksHindi, readsDevanagari: self.voice is SarvamCallVoice, turnNumber: turn)
-            print("📞 Call: the answer is slow, saying a few words first")
+            callLog("📞 Call: the answer is slow, saying a few words first")
             self.speak(words)
         }
     }
 
     private func replyDelta(_ rawDelta: String) {
+        rawAnswerOfThisTurn += rawDelta
         if firstTextAt == nil {
             firstTextAt = Date()
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
@@ -1103,6 +1238,21 @@ final class TheoCallSession: ObservableObject {
         }
         let emptyLineID = theoLineID
         theoLineID = nil
+        // [PASS]: Vello chose to say nothing this turn. Another bot's bracket lines are all taken out, so its [PASS] is
+        // found in what it wrote.
+        if case .success(let whole) = result, turnPassed || CallGroupMode.saysPass(rawAnswerOfThisTurn + (neverStreamed ? whole : "")) {
+            turnPassed = true
+            turnActedOnTheCall = true
+        }
+        if turnPassed, answerText.isEmpty, unstreamed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || CallGroupMode.saysPass(unstreamed) {
+            flushTimer?.cancel()
+            if let emptyLineID { lines.removeAll { $0.id == emptyLineID } }
+            if state == .thinking { state = .listening }
+            voice?.endOfTurn()
+            groupPassesInARow += 1
+            callLog("📞 Call: \(botName) let that one pass (\(groupPassesInARow) in a row)")
+            return
+        }
         switch result {
         case .success where CallBrainFailure.isSilentAnswer(spokenText: answerText + unstreamed, actedOnTheCall: turnActedOnTheCall):
             // The turn "succeeded" with nothing to say (Air, 24 Nov: after a model switch Vello went quiet with no error).
@@ -1135,7 +1285,7 @@ final class TheoCallSession: ObservableObject {
     /// problem line sounded on the phone like the bot had gone mute.
     private func sayTheBrainFailed(_ detail: String) {
         guard state != .ended, !CallBrainFailure.isTheCallsOwnDoing(detail) else { return }
-        print("📞 Call: \(brainNameForWords) gave no answer: \(CallBrainFailure.shortReason(detail))")
+        callLog("📞 Call: \(brainNameForWords) gave no answer: \(CallBrainFailure.shortReason(detail))")
         let speaksHindi = language == .hindi || language.meansHinglish
         let words = CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
                                                  speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
@@ -1180,6 +1330,10 @@ final class TheoCallSession: ObservableObject {
                 return
             }
             store.runRoutineNow(routines[index].id)
+        case .groupMode(let turnOn):
+            setGroupMode(turnOn)
+        case .stayQuiet:
+            turnPassed = true
         }
     }
 
@@ -1202,12 +1356,16 @@ final class TheoCallSession: ObservableObject {
 
     private func voiceStartedSounding() {
         turnHasSounded = true
+        groupPassesInARow = 0
         restartsOfThisAnswer = 0
         lastReleasedTurn = nil
         if let speechEndedAt {
             let seconds = Date().timeIntervalSince(speechEndedAt)
             pendingTurnTiming?.firstAudio = seconds
             lastFirstAudio = seconds
+            callLog("📞 Call: \(botName) is speaking, \(String(format: "%.1f", seconds)) s after the voice stopped (ears: \(earsName), voice: \(voiceName))")
+        } else {
+            callLog("📞 Call: \(botName) is speaking (ears: \(earsName), voice: \(voiceName))")
         }
         if var timing = pendingTurnTiming, speechEndedAt != nil {
             timing.ears = earsName
@@ -1441,8 +1599,9 @@ final class TheoCallSession: ObservableObject {
             "farWordsDropped": farWordsDropped,
             "patienceSeconds": CallSettings.patienceSeconds,
             "listenMode": isListenMode,
+            "groupMode": isGroupMode,
             "holdingTurn": isHoldingTurn,
-            "lines": lines.map { ["who": $0.who == .addy ? "addy" : "theo", "text": $0.text, "live": $0.isLive, "cut": $0.wasCut, "heard": $0.wasOnlyHeard] as [String: Any] },
+            "lines": lines.map { ["who": $0.who == .addy ? "addy" : "theo", "text": $0.text, "live": $0.isLive, "cut": $0.wasCut, "heard": $0.wasOnlyHeard, "group": $0.isGroupTalk] as [String: Any] },
         ]
     }
 }

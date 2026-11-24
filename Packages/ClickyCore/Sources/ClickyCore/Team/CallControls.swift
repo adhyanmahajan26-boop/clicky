@@ -5,7 +5,9 @@
 //  What Vello can switch or start by itself on a voice call, beyond the [CLICKY: …] and [TELL: …] orders: turning
 //  Pointer Assistant on or off ([POINTER: on]) and running a routine now ([ROUTINE: its name]). Only a call reads
 //  these tags, since everything said on a call is the owner's own voice. Like the orders, a tag is never read aloud,
-//  and it can arrive split across any number of streamed pieces.
+//  and it can arrive split across any number of streamed pieces. Group mode adds two: [GROUP: on] when Vello hears it's
+//  in an X Space or a room with other people (off when it's just the owner again), and [PASS], its answer when it has
+//  nothing to add (ClickyCore `CallGroupMode`).
 //
 
 import Foundation
@@ -13,6 +15,10 @@ import Foundation
 public enum CallControl: Equatable, Sendable {
     case pointerAssistant(turnOn: Bool)
     case runRoutine(name: String)
+    /// Group mode on or off ([GROUP: on]).
+    case groupMode(turnOn: Bool)
+    /// [PASS]: nothing to add this turn, so nothing is said. Not a failure.
+    case stayQuiet
 
     private static let turnOnWords: Set<String> = ["on", "start", "activate", "show", "enable", "wake", "open"]
     private static let turnOffWords: Set<String> = ["off", "stop", "deactivate", "hide", "disable", "close", "sleep"]
@@ -30,6 +36,13 @@ public enum CallControl: Equatable, Sendable {
             let placeholders = ["name", "its name", "the routine's name", "routine name", "its exact name"]
             guard words.count >= 2, words.contains(where: { $0.isLetter || $0.isNumber }), !placeholders.contains(words.lowercased()) else { return nil }
             return .runRoutine(name: words)
+        case "GROUP":
+            let lowered = words.lowercased().trimmingCharacters(in: .punctuationCharacters)
+            if turnOnWords.contains(lowered) { return .groupMode(turnOn: true) }
+            if turnOffWords.contains(lowered) { return .groupMode(turnOn: false) }
+            return nil
+        case "PASS":
+            return .stayQuiet
         default:
             return nil
         }
@@ -54,7 +67,7 @@ public enum CallControl: Equatable, Sendable {
 /// [CLICKY: …] and [TELL: …] orders still reach `ClickyOrderStream` after this.
 public struct CallControlStream: Sendable {
     private var held = ""
-    private static let heads = ["POINTER", "ROUTINE"]
+    private static let heads = ["POINTER", "ROUTINE", "GROUP", "PASS"]
     private static let maximumHeld = 400
 
     public init() {}
@@ -125,6 +138,8 @@ public struct CallControlStream: Sendable {
         guard let head = heads.first(where: { $0 == upper }) else { return .notATag }
         while index < text.endIndex, text[index] == " " { index = text.index(after: index) }
         guard index < text.endIndex else { return .incomplete }
+        // [PASS] has nothing after its name.
+        if head == "PASS", text[index] == "]" { return .closed(head: head, body: "", end: index) }
         guard text[index] == ":" else { return .notATag }
         let bodyStart = text.index(after: index)
         guard let close = text[bodyStart...].firstIndex(of: "]") else { return .incomplete }

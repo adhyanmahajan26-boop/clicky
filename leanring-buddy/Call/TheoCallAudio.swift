@@ -276,7 +276,7 @@ final class CallAudio {
                 _ = try hub.startVoiceProcessingCapture(keepsDistanceInLoudness: true) { buffer, _ in converter.append(buffer) }
                 isEchoCancelled = true
             } catch {
-                print("📞 Echo cancelling didn't start (\(error.localizedDescription)); the call goes on without it")
+                callLog("📞 Echo cancelling didn't start (\(error.localizedDescription)); the call goes on without it")
                 try openPlain(withMicrophone: true)
             }
         } else {
