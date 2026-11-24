@@ -2154,7 +2154,11 @@ final class CompanionManager: ObservableObject {
     var lastHistoryEntryForDebug: String? { conversationHistory.last?.assistantResponse }
     func handleEscapeKeyPressedForDebug() { handleEscapeKeyPressed() }
     /// A fist held up to the camera (hand signs): the same stop as Escape.
-    func stopEverythingLikeEscape() { handleEscapeKeyPressed() }
+    func stopEverythingLikeEscape() {
+        // Vello's steps on a call stop too (the Escape key stops them by itself, as any key press does; a fist doesn't).
+        if actionTaskController.isRunningCallTask { actionTaskController.cancel(reason: "you held up a fist", stopsSpeech: false, speaksLine: false) }
+        handleEscapeKeyPressed()
+    }
 
     func copyLastAnswerToPasteboard() {
         guard let lastAnswerText, !lastAnswerText.isEmpty else { return }

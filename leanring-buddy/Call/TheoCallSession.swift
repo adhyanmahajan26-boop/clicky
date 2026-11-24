@@ -881,6 +881,23 @@ final class TheoCallSession: ObservableObject {
         takeTurn(words, lineID: line.id)
     }
 
+    /// The owner's words that reached a running call without its mic: a signed or finger-spelled line, a hand sign's
+    /// question. They're a turn of the owner's like spoken words (they pause Vello's steps, a yes answers a step waiting
+    /// for one), taken once Vello isn't in the middle of writing an answer so none are lost.
+    func takeOwnerWordsFromOutside(_ words: String) {
+        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state != .ended, !words.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            for _ in 0..<200 {
+                guard let self, self.state != .ended else { return }
+                if !self.replyInProgress { break }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+            guard let self, self.state != .ended else { return }
+            self.takeWordsSaidBeforeTheCall(words)
+        }
+    }
+
     /// The owner's whole turn: a Listen mode switch, something heard in Listen mode, or a question for Vello.
     private func takeTurn(_ words: String, lineID: UUID?) {
         switch CallListenMode.command(in: words) {

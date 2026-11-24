@@ -25,7 +25,7 @@ enum TheoCallController {
         if let window, isActive {
             if activates { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             window.orderFrontRegardless()
-            session?.takeWordsSaidBeforeTheCall(openingWords)
+            session?.takeOwnerWordsFromOutside(openingWords)
             return
         }
         guard let manager = CompanionManager.current else { return }
