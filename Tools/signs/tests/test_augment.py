@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from signs.augment import (
     AugmentSettings,
@@ -109,3 +110,80 @@ def test_augment_clip_is_seeded_and_safe():
     np.testing.assert_array_equal(clip, example_clip(30)), "the input is never changed"
     for seed in range(20):
         compute_features(augment_clip(clip, np.random.default_rng(seed), AugmentSettings()))
+
+
+# ---- changes of the person, not the sign (round 7) ----
+
+def _standing_person(frame_count=5):
+    from signs.landmarks import LEFT_SHOULDER, RIGHT_SHOULDER, empty_clip
+    clip = empty_clip(frame_count)
+    clip[:, LEFT_SHOULDER] = [0.6, 0.4, 1]
+    clip[:, RIGHT_SHOULDER] = [0.4, 0.4, 1]
+    clip[:, 49] = [0.65, 0.55, 1]  # left elbow
+    clip[:, 50] = [0.35, 0.55, 1]
+    clip[:, 51] = [0.62, 0.45, 1]  # left body wrist
+    clip[:, 52] = [0.38, 0.45, 1]
+    for joint in range(21):
+        clip[:, 0 + joint] = [0.38 + joint * 0.003, 0.45 - joint * 0.004, 1]   # right hand at its body wrist
+        clip[:, 21 + joint] = [0.62 - joint * 0.003, 0.45 - joint * 0.004, 1]
+    clip[2, 21:42] = 0  # the left hand not seen in one frame
+    return clip
+
+
+def test_bone_lengths_change_the_body_and_carry_the_hands_along():
+    from signs.augment import change_bone_lengths
+    clip = _standing_person()
+    wider = change_bone_lengths(clip, 1.2, 1.0, 1.0, 1.0)
+    width = lambda c: abs(c[0, 47, 0] - c[0, 48, 0])
+    assert abs(width(wider) / width(clip) - 1.2) < 1e-5
+    # the right hand moved with its shoulder
+    assert abs((wider[0, 0, 0] - clip[0, 0, 0]) - (wider[0, 48, 0] - clip[0, 48, 0])) < 1e-6
+    longer_forearm = change_bone_lengths(clip, 1.0, 1.0, 1.3, 1.0)
+    forearm = lambda c: np.linalg.norm(c[0, 52, :2] - c[0, 50, :2])
+    assert abs(forearm(longer_forearm) / forearm(clip) - 1.3) < 1e-5
+    bigger_hand = change_bone_lengths(clip, 1.0, 1.0, 1.0, 1.1)
+    hand = lambda c: np.linalg.norm(c[0, 12, :2] - c[0, 0, :2])
+    assert abs(hand(bigger_hand) / hand(clip) - 1.1) < 1e-5
+    # a point not seen stays exactly unseen
+    assert (bigger_hand[2, 21:42] == 0).all()
+
+
+def test_turning_a_hand_keeps_its_shape_about_the_wrist():
+    from signs.augment import turn_hand
+    clip = _standing_person()
+    turned = turn_hand(clip, 0, 30.0)
+    before = np.linalg.norm(clip[:, 1:21, :2] - clip[:, :1, :2], axis=2)
+    after = np.linalg.norm(turned[:, 1:21, :2] - turned[:, :1, :2], axis=2)
+    np.testing.assert_allclose(before, after, atol=1e-5)
+    assert not np.allclose(turned[:, 5:21, :2], clip[:, 5:21, :2])
+    np.testing.assert_allclose(turned[:, 21:], clip[:, 21:])  # the other hand untouched
+
+
+def test_camera_height_narrows_what_is_lower_in_the_picture():
+    from signs.augment import change_camera_height
+    clip = _standing_person()
+    changed = change_camera_height(clip, 0.5)
+    # elbows (lower than the shoulders) come in, shoulders stay
+    np.testing.assert_allclose(changed[:, 47:49], clip[:, 47:49], atol=1e-6)
+    assert abs(changed[0, 49, 0] - 0.5) < abs(clip[0, 49, 0] - 0.5)
+
+
+def test_uneven_speed_keeps_the_frame_count_and_both_ends():
+    from signs.augment import warp_time
+    clip = _standing_person(20)
+    clip[:, 0, 0] = np.linspace(0.3, 0.5, 20)  # the right wrist moves steadily
+    warped = warp_time(clip, np.random.default_rng(3), 0.5)
+    assert warped.shape == clip.shape
+    np.testing.assert_allclose(warped[[0, -1], 0, 0], clip[[0, -1], 0, 0], atol=1e-6)
+    assert not np.allclose(warped[:, 0, 0], clip[:, 0, 0])
+    assert (np.diff(warped[:, 0, 0]) >= -1e-7).all()  # still moving one way: time only reshaped
+
+
+def test_person_changes_are_off_unless_asked_for():
+    from signs.augment import AugmentSettings
+    settings = AugmentSettings()
+    assert settings.bone_length_probability == 0 and settings.time_warp_probability == 0
+    on = settings.with_person_changes(["bones", "time_warp"])
+    assert on.bone_length_probability == 0.5 and on.time_warp_probability == 0.5 and on.hand_turn_probability == 0
+    with pytest.raises(ValueError):
+        settings.with_person_changes(["height"])

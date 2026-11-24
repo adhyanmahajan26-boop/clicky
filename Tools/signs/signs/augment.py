@@ -55,6 +55,30 @@ class AugmentSettings:
     joint_drop_rate: float = 0.02
     # Trimming and dropping frames never take a clip below this many frames.
     fewest_frames_kept: int = 8
+    # Changes of the person, not the sign (round 7; off unless asked for, see `with_person_changes`):
+    # each bone a little longer or shorter (shoulder width, upper arm, forearm, hand), about its own joint...
+    bone_length_probability: float = 0.0
+    largest_bone_length_change: float = 0.15
+    # ...each hand turned a little about its own wrist...
+    hand_turn_probability: float = 0.0
+    largest_hand_turn_degrees: float = 20.0
+    # ...the camera a little higher or lower (a keystone: width changes with height in the picture)...
+    perspective_probability: float = 0.0
+    largest_perspective: float = 0.15
+    # ...and uneven speed within the sign.
+    time_warp_probability: float = 0.0
+    largest_time_warp: float = 0.5
+
+    def with_person_changes(self, names: list[str], probability: float = 0.5) -> "AugmentSettings":
+        """A copy with the named person-changes turned on: bones, hand_turn, perspective, time_warp."""
+        import dataclasses
+
+        changes = {"bones": "bone_length_probability", "hand_turn": "hand_turn_probability",
+                   "perspective": "perspective_probability", "time_warp": "time_warp_probability"}
+        unknown = [name for name in names if name not in changes]
+        if unknown:
+            raise ValueError(f"unknown person changes {unknown}; choose from {sorted(changes)}")
+        return dataclasses.replace(self, **{changes[name]: probability for name in names})
 
 
 def _seen_mask(landmarks: np.ndarray) -> np.ndarray:
@@ -228,6 +252,105 @@ def drop_joints(landmarks: np.ndarray, point_is_dropped: np.ndarray) -> np.ndarr
     return dropped
 
 
+# ---- changes of the person, not the sign ----------------------------------------------------------------------
+
+# (shoulder, elbow, body wrist, hand start) for the signer's left and right arm
+_ARMS = ((LEFT_SHOULDER, 49, 51, LEFT_HAND_START), (RIGHT_SHOULDER, 50, 52, RIGHT_HAND_START))
+
+
+def _move_points(landmarks: np.ndarray, points, offsets: np.ndarray) -> None:
+    """Adds `offsets` ([T, 2]) to the seen ones of `points`, in place."""
+    for point in points:
+        seen = landmarks[:, point, CONFIDENCE] > 0
+        landmarks[seen, point, :2] += offsets[seen]
+
+
+def change_bone_lengths(landmarks: np.ndarray, shoulder_width: float, upper_arm: float, forearm: float, hand: float,
+                        picture_aspect: float = 1.0) -> np.ndarray:
+    """A person with other proportions making the same sign: the shoulders moved apart or together (arms and
+    hands follow), each upper arm and forearm scaled about the joint it hangs from (what is below follows), and each
+    hand scaled about its own wrist. Factors are 1 for no change; frames where a joint isn't seen are left alone."""
+    changed = landmarks.astype(np.float64, copy=True)
+    aspect = np.array([picture_aspect, 1.0])
+    changed[:, :, :2] *= aspect
+    seen = changed[:, :, CONFIDENCE] > 0
+    both_shoulders = seen[:, LEFT_SHOULDER] & seen[:, RIGHT_SHOULDER]
+    middle = np.where(both_shoulders[:, None], (changed[:, LEFT_SHOULDER, :2] + changed[:, RIGHT_SHOULDER, :2]) / 2, 0.0)
+    for shoulder, elbow, body_wrist, hand_start in _ARMS:
+        hand_points = range(hand_start, hand_start + HAND_JOINT_COUNT)
+        # shoulder width: this shoulder (and everything below it) moved along the line from the middle
+        offset = np.where(both_shoulders[:, None], (changed[:, shoulder, :2] - middle) * (shoulder_width - 1), 0.0)
+        _move_points(changed, [shoulder, elbow, body_wrist, *hand_points], offset)
+        # upper arm: the elbow about the shoulder
+        usable = seen[:, shoulder] & seen[:, elbow]
+        offset = np.where(usable[:, None], (changed[:, elbow, :2] - changed[:, shoulder, :2]) * (upper_arm - 1), 0.0)
+        _move_points(changed, [elbow, body_wrist, *hand_points], offset)
+        # forearm: the wrist about the elbow (the hand follows its body wrist)
+        usable = seen[:, elbow] & seen[:, body_wrist]
+        offset = np.where(usable[:, None], (changed[:, body_wrist, :2] - changed[:, elbow, :2]) * (forearm - 1), 0.0)
+        _move_points(changed, [body_wrist, *hand_points], offset)
+        # hand: every joint about the hand's own wrist
+        hand_wrist = hand_start + WRIST_JOINT
+        usable = seen[:, hand_wrist]
+        for point in hand_points:
+            point_usable = usable & seen[:, point]
+            changed[point_usable, point, :2] = changed[point_usable, hand_wrist, :2] + (changed[point_usable, point, :2] - changed[point_usable, hand_wrist, :2]) * hand
+    changed[:, :, :2] /= aspect
+    return _zero_missing_points(changed.astype(np.float32))
+
+
+def turn_hand(landmarks: np.ndarray, hand_start: int, angle_degrees: float, picture_aspect: float = 1.0) -> np.ndarray:
+    """One hand turned about its own wrist (the same sign with the wrist held a little differently)."""
+    turned = landmarks.astype(np.float64, copy=True)
+    aspect = np.array([picture_aspect, 1.0])
+    angle = np.deg2rad(angle_degrees)
+    rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+    wrist = hand_start + WRIST_JOINT
+    wrist_seen = turned[:, wrist, CONFIDENCE] > 0
+    for point in range(hand_start, hand_start + HAND_JOINT_COUNT):
+        usable = wrist_seen & (turned[:, point, CONFIDENCE] > 0)
+        relative = (turned[usable, point, :2] - turned[usable, wrist, :2]) * aspect
+        turned[usable, point, :2] = turned[usable, wrist, :2] + (relative @ rotation.T) / aspect
+    return _zero_missing_points(turned.astype(np.float32))
+
+
+def change_camera_height(landmarks: np.ndarray, strength: float) -> np.ndarray:
+    """A camera a little higher (strength > 0) or lower: things further down the picture get narrower (or wider),
+    about the shoulder centre, as a keystone does."""
+    changed = landmarks.astype(np.float64, copy=True)
+    centre = shoulder_centre(landmarks)
+    seen = changed[:, :, CONFIDENCE] > 0
+    width_factor = 1.0 - strength * (changed[:, :, 1] - centre[1])
+    changed[:, :, 0] = np.where(seen, centre[0] + (changed[:, :, 0] - centre[0]) * width_factor, 0.0)
+    return _zero_missing_points(changed.astype(np.float32))
+
+
+def warp_time(landmarks: np.ndarray, generator: np.random.Generator, strength: float) -> np.ndarray:
+    """Uneven speed within the sign: the same number of frames, but some parts played faster and some slower (a
+    smooth random speed curve), each new frame between its two nearest source frames as `resample_time` does."""
+    frame_count = landmarks.shape[0]
+    if frame_count < 3 or strength <= 0:
+        return landmarks.astype(np.float32, copy=True)
+    knots = generator.uniform(1 - strength, 1 + strength, size=4)
+    speed = np.interp(np.linspace(0, 3, frame_count - 1), np.arange(4), knots)
+    source_times = np.concatenate([[0.0], np.cumsum(speed)])
+    source_times = source_times / source_times[-1] * (frame_count - 1)
+    earlier_frame = np.floor(source_times).astype(np.int64).clip(0, frame_count - 1)
+    later_frame = np.minimum(earlier_frame + 1, frame_count - 1)
+    fraction = (source_times - earlier_frame)[:, None, None]
+    earlier_values = landmarks[earlier_frame].astype(np.float64)
+    later_values = landmarks[later_frame].astype(np.float64)
+    interpolated = earlier_values + fraction * (later_values - earlier_values)
+    nearer = np.where(fraction < 0.5, earlier_values, later_values)
+    seen_in_both = (earlier_values[:, :, CONFIDENCE] > 0) & (later_values[:, :, CONFIDENCE] > 0)
+    return np.where(seen_in_both[:, :, None], interpolated, nearer).astype(np.float32)
+
+
+def _happens(generator: np.random.Generator, probability: float) -> bool:
+    """A coin flip that draws nothing when the change is off, so turning it on never reshuffles older runs."""
+    return probability > 0 and generator.random() < probability
+
+
 def augment_clip(
     landmarks: np.ndarray,
     generator: np.random.Generator,
@@ -254,8 +377,22 @@ def augment_clip(
         if (~frame_is_dropped).sum() >= settings.fewest_frames_kept:
             augmented = drop_frames(augmented, frame_is_dropped)
 
+    if _happens(generator, settings.time_warp_probability):
+        augmented = warp_time(augmented, generator, settings.largest_time_warp)
+
     if generator.random() < settings.mirror_probability:
         augmented = mirror(augmented)
+    if _happens(generator, settings.bone_length_probability):
+        change = settings.largest_bone_length_change
+        augmented = change_bone_lengths(augmented, *(generator.uniform(1 - change, 1 + change) for _ in range(4)),
+                                        picture_aspect=picture_aspect)
+    if _happens(generator, settings.hand_turn_probability):
+        for hand_start in (RIGHT_HAND_START, LEFT_HAND_START):
+            augmented = turn_hand(augmented, hand_start,
+                                  generator.uniform(-settings.largest_hand_turn_degrees, settings.largest_hand_turn_degrees),
+                                  picture_aspect)
+    if _happens(generator, settings.perspective_probability):
+        augmented = change_camera_height(augmented, generator.uniform(-settings.largest_perspective, settings.largest_perspective))
     if generator.random() < settings.rotation_probability:
         augmented = rotate(
             augmented,

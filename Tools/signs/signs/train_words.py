@@ -70,6 +70,8 @@ class WordTrainingSettings:
     device: str = "auto"
     resume: str | None = None
     no_augment: bool = False
+    # Person changes to add to the usual augmentations (AugmentSettings.with_person_changes).
+    person_changes: str = ""
 
 
 def parse_arguments(argument_list=None) -> WordTrainingSettings:
@@ -97,6 +99,10 @@ def parse_arguments(argument_list=None) -> WordTrainingSettings:
     argument_parser.add_argument("--device", choices=DEVICE_CHOICES, default=defaults.device)
     argument_parser.add_argument("--resume", default=None, help="checkpoint file or run folder to carry on from")
     argument_parser.add_argument("--no-augment", action="store_true")
+    argument_parser.add_argument(
+        "--person-changes", default="",
+        help="comma-separated: bones, hand_turn, perspective, time_warp (changes of the person, not the sign)",
+    )
     return WordTrainingSettings(**vars(argument_parser.parse_args(argument_list)))
 
 
@@ -187,6 +193,8 @@ def main(argument_list=None) -> None:
         raise SystemExit("no word has enough training clips; lower --min-clips-per-word")
 
     augment_settings = None if settings.no_augment else AugmentSettings()
+    if augment_settings is not None and settings.person_changes:
+        augment_settings = augment_settings.with_person_changes([name for name in settings.person_changes.split(",") if name])
     training_dataset = WordClipDataset(sources, training_references, word_list, augment_settings, settings.seed)
     validation_dataset = WordClipDataset(sources, validation_references, word_list, None, settings.seed)
 
