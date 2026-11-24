@@ -29,14 +29,22 @@ protocol ConversationBrain: AnyObject {
     var isRunning: Bool { get }
     /// Gets ready now, so the first turn is quick. Throws when the brain isn't there, with words naming it and its fix.
     func start() throws
-    /// Sends one message; the reply streams in. Turns stay in order.
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
+    /// Sends one message; the reply streams in. Turns stay in order. `images`: screenshots that go with it (Vello's eyes on
+    /// a call), JPEG or PNG blocks; text blocks among them go along as text.
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
     /// Stops the reply in progress; the conversation stays, with what was said so far.
     func interrupt()
     /// Stops the reply in progress and takes the turn out of the conversation altogether: the owner kept talking before
     /// any of the answer was heard, and the turn is about to be asked again with all their words (`CallCutIn`).
     func forgetTheTurnBeingAnswered()
     func stop()
+}
+
+extension ConversationBrain {
+    /// Words only.
+    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+        send(text, images: [], onDelta: onDelta, onDone: onDone)
+    }
 }
 
 /// Which conversation a model setting gets.
@@ -59,6 +67,7 @@ enum ConversationBrains {
 final class OneTurnConversation: ConversationBrain {
     private struct WaitingTurn {
         let text: String
+        let images: [ClaudeContentBlock]
         let onDelta: (String) -> Void
         let onDone: (Result<String, Error>) -> Void
     }
@@ -97,12 +106,12 @@ final class OneTurnConversation: ConversationBrain {
         isStarted = true
     }
 
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
         do { try start() } catch {
             onDone(.failure(error))
             return
         }
-        waiting.append(WaitingTurn(text: text, onDelta: onDelta, onDone: onDone))
+        waiting.append(WaitingTurn(text: text, images: images, onDelta: onDelta, onDone: onDone))
         if currentTask == nil { runNextTurn() }
     }
 
@@ -119,7 +128,7 @@ final class OneTurnConversation: ConversationBrain {
             let result: Result<String, Error>
             do {
                 // Room for a thinking model to think before it answers (an OpenAI-style server's own default can stop it first).
-                let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)],
+                let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)] + turn.images,
                                                                 persistentSessionIdentifier: sessionIdentifier,
                                                                 maxOutputTokens: APIChat.roomForThinkingTokens,
                                                                 onTextChunk: { rawSoFar in
@@ -253,12 +262,23 @@ final class ClaudeConversation: ConversationBrain {
     }
 
     /// Sends one message; the reply streams in. Turns stay in order if one is still finishing.
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
         do { try start() } catch {
             onDone(.failure(error))
             return
         }
-        let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": text]]] as [String: Any]]
+        var content: [[String: Any]] = [["type": "text", "text": text]]
+        for block in images {
+            switch block {
+            case .text(let blockText):
+                content.append(["type": "text", "text": blockText])
+            case .jpegImage(let data):
+                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": data.base64EncodedString()]])
+            case .pngImage(let data):
+                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": data.base64EncodedString()]])
+            }
+        }
+        let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": content] as [String: Any]]
         guard let process, let data = try? JSONSerialization.data(withJSONObject: message) else {
             onDone(.failure(Failure.ended("Couldn't write the message.")))
             return

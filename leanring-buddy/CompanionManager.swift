@@ -2159,6 +2159,19 @@ final class CompanionManager: ObservableObject {
 
     private(set) var lastFlightSource: CompanionFlightSource = .screen
 
+    /// Flies the companion beside an element on the real screen (its rect, CG): Vello's point step on a call.
+    func flyCompanion(toScreenRectCG rectCG: CGRect) {
+        let displays = ScreenTopology.current()
+        guard let display = displays.first(where: { $0.boundsCG.contains(rectCG.center) }) ?? displays.first else { return }
+        let markObstacles = markController.marks.map { MarkLayout.padded($0.rectCG) }
+        let landing = CompanionLanding.landing(target: rectCG, visible: display.visibleCG, obstacles: markObstacles)
+        markController.companionRect = landing
+        detectedElementScreenLocation = ScreenTopology.appKit(fromCG: landing.center, flipH: ScreenTopology.mainDisplayHeight)
+        detectedElementDisplayFrame = display.frameAppKit
+        pointTargetCG = rectCG
+        lastFlightSource = .screen
+    }
+
     /// Flies the companion beside a board element (its rect on screen, CG).
     func flyCompanion(toBoardRectCG rectCG: CGRect) {
         let displays = ScreenTopology.current()

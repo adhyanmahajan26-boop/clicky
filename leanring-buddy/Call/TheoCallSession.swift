@@ -176,16 +176,15 @@ enum CallPrompt {
         var rules = CallPromptText.talkingRules(owner: owner)
         // The apps Vello has in its own text chat, which a call reaches with [TELL: Vello: …].
         let ownApps = theo.map { bot in BotConnectors.known.filter { bot.apps.contains($0.id) && $0.id != "theo" && !$0.isSkill }.map(\.name) } ?? []
-        rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner, ownChatApps: ownApps)
+        // Vello's own hands: it looks at the screen and acts itself (ClickyCore `CallHands`), with no Pointer Assistant between.
+        rules += "\n" + ClickyTeamPrompts.callHowTo(owner: owner, ownChatApps: ownApps, hasHands: VelloHands.isOn,
+                                                    leavesSafariAlone: ClickySettings.actionsLeaveSafariAlone)
         rules += "\n" + languageRule(owner: owner, usesSarvamVoice: usesSarvamVoice, language: language)
         parts.append(rules)
         if let theo {
             parts += BotPrompts.reportingLines(for: theo, store: store)
             let roster = store.rosterForCEO
             if !roster.isEmpty { parts.append(roster) }
-            if !TheoProducts.isOn(.clicky) {
-                parts.append("Pointer Assistant is off right now, so a [CLICKY: …] line does nothing until it's on. When \(owner) wants something done on screen, offer to turn it on, and once they say yes put [POINTER: on] before the [CLICKY: …] line.")
-            }
             let routineNames = store.routines.map(\.name)
             if !routineNames.isEmpty { parts.append("\(OwnerName.startingSentence(owner))'s routines: " + routineNames.joined(separator: ", ") + ".") }
             let work = store.memoryStore.teamWorkContext()
@@ -288,6 +287,21 @@ final class TheoCallSession: ObservableObject {
     private var orders = ClickyOrderStream()
     /// Keeps the call's own switches ([POINTER: on], [ROUTINE: …]) out of the voice the same way.
     private var controls = CallControlStream()
+    /// Takes Vello's own screen work out of the voice: [LOOK] and <actions> blocks (ClickyCore `CallHands`).
+    private var screenPieces = CallScreenStream()
+    /// The screen Vello's brain was last shown, whose badge numbers its next block uses, and when.
+    private var lastShownScreen: GroundedTurn?
+    private var lastShownScreenAt: Date?
+    /// This reply answers the screen work (an observe or look turn) or carried steps: its end is reported to the task.
+    private var replyIsScreenWork = false
+    private var replyHadBlock = false
+    /// The owner's words this reply answers, for the safety tiers ("delete it" said by the owner).
+    private var replyOwnerWords = ""
+    /// After this reply the brain is shown the screen with these words ([LOOK], or a stray Pointer Assistant line).
+    private var looksAfterReply: String?
+    /// Turns about the screen waiting for the call to be free: their words, and whether they belong to a task's loop.
+    private var waitingScreenTurns: [(text: String, isObserveTurn: Bool)] = []
+    private var screenTurnPump: Task<Void, Never>?
     private var clickyReports: [String] = []
     private var flushTimer: Task<Void, Never>?
     private var replyInProgress = false
@@ -439,6 +453,8 @@ final class TheoCallSession: ObservableObject {
         guard state != .ended else { return }
         state = .ended
         heldTurnTask?.cancel()
+        screenTurnPump?.cancel()
+        if isVellosOwnBot { CompanionManager.current?.actionTaskController.endCallTask() }
         if let liveActivity { ProcessInfo.processInfo.endActivity(liveActivity) }
         liveActivity = nil
         ears?.stop()
@@ -646,8 +662,11 @@ final class TheoCallSession: ObservableObject {
         }
         if voiceWasPlaying { voiceLastStoppedAt = Date() }
         voice?.stopNow()
+        let screenReplyWasCut = replyInProgress && (replyIsScreenWork || replyHadBlock)
         if replyInProgress { brain?.interrupt() }
         replyInProgress = false
+        // A screen turn cut off before its steps came: the task isn't left waiting for an answer that won't arrive.
+        if screenReplyWasCut, isVellosOwnBot { screenReplyEnded(failed: !replyHadBlock) }
         flushTimer?.cancel()
         chunker = CallSpeechChunker()
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
@@ -888,12 +907,15 @@ final class TheoCallSession: ObservableObject {
             ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: true), acknowledgesIfSlow: true)
             return
         }
+        // Vello is working on screen: a yes or no to a step is answered at once, and anything else pauses the steps and
+        // reaches the brain with what was done and the screen as it is now.
+        if isVellosOwnBot, ownerWordsReachTheScreenWork(words) { return }
         // Back from Listen mode with things Vello hasn't been given yet: they come with this turn.
         if listenTranscript.hasUnsent {
             ask(listenTranscript.messageForVello(asking: words, owner: owner, staysInListenMode: false), acknowledgesIfSlow: true)
             return
         }
-        ask(words, acknowledgesIfSlow: true)
+        ask(words, acknowledgesIfSlow: true, ownerWords: words)
     }
 
     /// Vello's name as the ears hear it: its own name and the usual mishearings.
@@ -932,8 +954,13 @@ final class TheoCallSession: ObservableObject {
 
     /// `acknowledgesIfSlow`: an answer to the owner. If none of it has sounded `CallQuietLimit.acknowledgeAfterSeconds`
     /// after the turn was let go, Vello says a few words first, so a slow answer never sounds like it wasn't heard.
-    private func ask(_ text: String, acknowledgesIfSlow: Bool = false) {
+    private func ask(_ text: String, images: [ClaudeContentBlock] = [], acknowledgesIfSlow: Bool = false, isScreenWork: Bool = false,
+                     ownerWords: String? = nil) {
         guard let brain else { return }
+        replyIsScreenWork = isScreenWork
+        replyHadBlock = false
+        looksAfterReply = nil
+        if let ownerWords { replyOwnerWords = ownerWords }
         turnNumber += 1
         let turn = turnNumber
         state = isOwnerSpeaking ? .userSpeaking : .thinking
@@ -948,13 +975,14 @@ final class TheoCallSession: ObservableObject {
         chunker = CallSpeechChunker()
         orders = ClickyOrderStream()
         controls = CallControlStream()
+        screenPieces = CallScreenStream()
         bracketLines = CallBracketLineStream()
         let line = Line(who: .theo, text: "", isLive: true)
         lines.append(line)
         theoLineID = line.id
         let note = pendingLanguageNote
         pendingLanguageNote = ""
-        brain.send(note + text, onDelta: { [weak self] delta in
+        brain.send(note + text, images: images, onDelta: { [weak self] delta in
             guard let self, self.turnNumber == turn, self.replyInProgress else { return }
             self.replyDelta(delta)
         }, onDone: { [weak self] result in
@@ -983,7 +1011,9 @@ final class TheoCallSession: ObservableObject {
         }
         let delta: String
         if isVellosOwnBot {
-            let switched = controls.feed(rawDelta)
+            let looked = screenPieces.feed(rawDelta)
+            looked.pieces.forEach(takeScreenPiece)
+            let switched = controls.feed(looked.speech)
             switched.controls.forEach(carryOut)
             let filtered = orders.feed(switched.speech)
             filtered.orders.forEach(orderClicky)
@@ -1019,15 +1049,21 @@ final class TheoCallSession: ObservableObject {
         let restSpeech: String
         if isVellosOwnBot {
             if case .success(let whole) = result, neverStreamed {
-                let switched = CallControlStream.extract(from: whole)
+                let looked = CallScreenStream.extract(from: whole)
+                looked.pieces.forEach(takeScreenPiece)
+                let switched = CallControlStream.extract(from: looked.text)
                 switched.controls.forEach(carryOut)
                 let taken = ClickyOrder.extract(from: switched.text)
                 unstreamed = taken.text
                 taken.orders.forEach(orderClicky)
             }
+            let lookedRest = screenPieces.finish()
+            lookedRest.pieces.forEach(takeScreenPiece)
+            let switchedMore = controls.feed(lookedRest.speech)
+            switchedMore.controls.forEach(carryOut)
             let switchedRest = controls.finish()
             switchedRest.controls.forEach(carryOut)
-            let tail = orders.feed(switchedRest.speech)
+            let tail = orders.feed(switchedMore.speech + switchedRest.speech)
             tail.orders.forEach(orderClicky)
             let finished = orders.finish()
             finished.orders.forEach(orderClicky)
@@ -1068,6 +1104,11 @@ final class TheoCallSession: ObservableObject {
             if state == .thinking { state = .listening }
             sayTheBrainFailed(error.localizedDescription)
         }
+        if isVellosOwnBot {
+            var failed = false
+            if case .failure = result { failed = true }
+            screenReplyEnded(failed: failed)
+        }
     }
 
     /// The brain gave no answer: say so out loud, with the reason, rather than go quiet. A call that only set its window's
@@ -1085,6 +1126,12 @@ final class TheoCallSession: ObservableObject {
     /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
     private func orderClicky(_ order: String) {
         turnActedOnTheCall = true
+        // There's no Pointer Assistant between Vello and the screen any more: a line for it out of habit is done by Vello's
+        // own hands, after Vello sees the screen. [TELL: …] lines still go to their bots.
+        if VelloHands.isOn, ClickyOrder.tellTarget(in: order) == nil {
+            looksAfterReply = CallHands.pointerOrderNote(order: order, owner: BotPrompts.ownerName)
+            return
+        }
         let addySaid = lines.filter { $0.who == .addy && !$0.isLive }.suffix(6).reversed().map(\.text).joined(separator: "\n")
         // Clicky's helpers finish after Clicky's first answer: their reports come here too.
         store.onCEOReport = { [weak self] report in self?.reportArrived(report) }
@@ -1099,11 +1146,10 @@ final class TheoCallSession: ObservableObject {
         turnActedOnTheCall = true
         switch control {
         case .pointerAssistant(let turnOn):
-            let products = TheoProducts.shared
-            if products.isOn(.clicky) != turnOn { products.set(.clicky, on: turnOn) }
-            // On means the spark shows too, not just the product switched on with its cursor hidden.
-            if turnOn, let manager = CompanionManager.current, !manager.isClickyCursorEnabled { manager.setClickyCursorEnabled(true) }
-            store.post(BotChatMessage(author: BotsStore.noteAuthor, text: "Pointer Assistant is \(turnOn ? "on" : "off"), as asked on the call."), to: store.primary?.id ?? "theo")
+            // [POINTER: on|off] is Vello's own hands now: seeing and using the screen on calls.
+            VelloHands.set(turnOn)
+            if !turnOn { CompanionManager.current?.actionTaskController.endCallTask() }
+            store.post(BotChatMessage(author: BotsStore.noteAuthor, text: "Vello's use of the screen is \(turnOn ? "on" : "off"), as asked on the call."), to: store.primary?.id ?? "theo")
         case .runRoutine(let name):
             let routines = store.routines
             guard let index = CallControl.routine(named: name, among: routines.map(\.name)) else {
@@ -1160,6 +1206,172 @@ final class TheoCallSession: ObservableObject {
     private func voiceFinished() {
         voiceLastStoppedAt = Date()
         if state == .speaking || state == .thinking { state = .listening }
+    }
+
+    // MARK: Vello's hands
+
+    /// A [LOOK] or an <actions> block in Vello's reply.
+    private func takeScreenPiece(_ piece: CallScreenPiece) {
+        turnActedOnTheCall = true
+        switch piece {
+        case .look:
+            if looksAfterReply == nil { looksAfterReply = CallHands.lookMessage(owner: BotPrompts.ownerName) }
+        case .actions(let body):
+            replyHadBlock = true
+            startSteps(body)
+        }
+    }
+
+    /// Runs a block Vello wrote. Steps with badge numbers need the screen Vello last saw to be recent; otherwise Vello is
+    /// shown the screen again first, since a number from an old screen could press the wrong thing.
+    private func startSteps(_ body: String) {
+        guard let manager = CompanionManager.current else { return }
+        let owner = BotPrompts.ownerName
+        guard VelloHands.isOn else {
+            looksAfterReply = nil
+            waitingScreenTurns.append(("(Vello's eyes, not \(owner) speaking: using the screen is switched off, so nothing ran. Say so, and offer to switch it on.)", false))
+            pumpScreenTurns()
+            return
+        }
+        var usesBadgeNumbers = false
+        if case .success(let plan) = ActionDSL.parse(body) { usesBadgeNumbers = plan.steps.contains { !$0.referencedElementIDs.isEmpty } }
+        let screenIsRecent = lastShownScreenAt.map { Date().timeIntervalSince($0) < VelloHands.badgeNumbersLastSeconds } ?? false
+        if usesBadgeNumbers, !screenIsRecent || lastShownScreen == nil {
+            looksAfterReply = "(Vello's eyes, not \(owner) speaking: those steps used numbers from a screen you saw a while ago, so nothing ran. Here is the screen now with new numbers; write the steps again.)"
+            return
+        }
+        let ownerWords = replyOwnerWords
+        let replyStillOpen = replyInProgress
+        Task { @MainActor [weak self] in
+            guard let self, self.state != .ended else { return }
+            var grounded = self.lastShownScreen
+            if grounded == nil { grounded = await self.captureScreen() }
+            guard let grounded else {
+                self.waitingScreenTurns.append(("(Vello's eyes, not \(owner) speaking: the screen couldn't be read, so nothing ran. Say so.)", false))
+                self.pumpScreenTurns()
+                return
+            }
+            let trouble = manager.actionTaskController.handleCallActionsBlock(body, groundedTurn: grounded, ownerWords: ownerWords, hooks: self.screenHooks())
+            if let trouble {
+                self.waitingScreenTurns.append(("(Vello's eyes, not \(owner) speaking: \(trouble))", false))
+                self.pumpScreenTurns()
+            } else if !replyStillOpen || !self.replyInProgress {
+                // The reply that carried the steps already ended: the task mustn't wait for it.
+                manager.actionTaskController.callTurnDidFinish(hadBlock: true, failed: false)
+            }
+            print("🖐️ Vello's hands: steps started")
+        }
+    }
+
+    private func screenHooks() -> ActionTaskController.CallTaskHooks {
+        ActionTaskController.CallTaskHooks(
+            speak: { [weak self] line in self?.sayAside(line) },
+            wantsObserveTurn: { [weak self] continuation in
+                guard let self else { return }
+                self.waitingScreenTurns.append((CallHands.observeMessage(continuation: continuation, owner: BotPrompts.ownerName), true))
+                self.pumpScreenTurns()
+            },
+            ended: { [weak self] report, status, cancelReason in
+                guard let self, self.state != .ended else { return }
+                print("🖐️ Vello's hands: work \(status.rawValue)\(cancelReason.map { " (\($0))" } ?? "")")
+                // Done: Vello already said so in its last answer. Anything else is told to Vello, who tells the owner.
+                guard status != .done else { return }
+                self.waitingScreenTurns.removeAll { $0.isObserveTurn }
+                self.waitingScreenTurns.append((CallHands.workStopped(report: report, owner: BotPrompts.ownerName), false))
+                self.pumpScreenTurns()
+            })
+    }
+
+    /// A screen turn's reply ended (or was cut off): the task hears it, and a [LOOK] shows the screen next.
+    private func screenReplyEnded(failed: Bool) {
+        guard let manager = CompanionManager.current else { return }
+        if replyIsScreenWork || replyHadBlock {
+            manager.actionTaskController.callTurnDidFinish(hadBlock: replyHadBlock, failed: failed)
+        }
+        replyIsScreenWork = false
+        replyHadBlock = false
+        if let look = looksAfterReply, !failed {
+            looksAfterReply = nil
+            waitingScreenTurns.append((look, false))
+            pumpScreenTurns()
+        }
+    }
+
+    /// Sends the waiting screen turns one at a time, each once the call is free: no answer being written, the owner not
+    /// talking and no turn of theirs held. Vello's voice may still be playing: the next line queues behind it, so it keeps
+    /// talking through a long job.
+    private func pumpScreenTurns() {
+        guard screenTurnPump == nil else { return }
+        screenTurnPump = Task { @MainActor [weak self] in
+            defer { self?.screenTurnPump = nil }
+            while let self, self.state != .ended, !self.waitingScreenTurns.isEmpty {
+                guard !Task.isCancelled else { return }
+                if self.replyInProgress || self.isOwnerSpeaking || !self.heldTurnWords.isEmpty || self.isHoldingTurn {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    continue
+                }
+                let next = self.waitingScreenTurns.removeFirst()
+                // A task's next look is moot once the task has ended (the owner spoke, the mouse moved).
+                if next.isObserveTurn, CompanionManager.current?.actionTaskController.isRunningCallTask != true { continue }
+                let screen = await self.captureScreen()
+                guard self.state != .ended, !self.replyInProgress, !self.isOwnerSpeaking, self.heldTurnWords.isEmpty else {
+                    self.waitingScreenTurns.insert(next, at: 0)
+                    continue
+                }
+                if next.isObserveTurn, CompanionManager.current?.actionTaskController.isRunningCallTask != true { continue }
+                self.speechEndedAt = nil
+                self.ask(next.text, images: screen?.contentBlocks ?? [], isScreenWork: next.isObserveTurn)
+            }
+        }
+    }
+
+    /// The screen as Vello's brain sees it: every display's badged screenshot and element list (the same grounding Pointer
+    /// Assistant used). Kept as the screen the next block's numbers refer to.
+    private func captureScreen() async -> GroundedTurn? {
+        guard let manager = CompanionManager.current else { return nil }
+        do {
+            let grounded = try await manager.groundingCoordinator.prepareTurn(keyUpDate: Date())
+            lastShownScreen = grounded
+            lastShownScreenAt = Date()
+            return grounded
+        } catch {
+            print("🖐️ Vello's hands: the screen couldn't be read: \(error)")
+            return nil
+        }
+    }
+
+    /// The owner's turn while Vello works on screen. True when it was a yes or no to a waiting step and needs nothing more.
+    private func ownerWordsReachTheScreenWork(_ words: String) -> Bool {
+        guard let manager = CompanionManager.current else { return false }
+        let owner = BotPrompts.ownerName
+        switch manager.actionTaskController.takeCallOwnerWords(words, ownerName: owner) {
+        case .noCallTask:
+            return false
+        case .answeredConfirmation:
+            print("🖐️ Vello's hands: the owner answered a step waiting for a yes")
+            return true
+        case .pausedWork(let report):
+            print("🖐️ Vello's hands: paused for the owner's words")
+            waitingScreenTurns.removeAll { $0.isObserveTurn }
+            Task { @MainActor [weak self] in
+                guard let self, self.state != .ended else { return }
+                let screen = await self.captureScreen()
+                guard self.state != .ended else { return }
+                self.ask(CallHands.ownerSpokeDuringWork(words: words, report: report, owner: owner), images: screen?.contentBlocks ?? [],
+                         acknowledgesIfSlow: true, ownerWords: words)
+            }
+            return true
+        }
+    }
+
+    /// A line said by the work itself (a refusal, a yes to wait for), through the call's voice, without a turn for the brain.
+    private func sayAside(_ text: String) {
+        guard state != .ended else { return }
+        let words = CallPrompt.speakable(text)
+        guard !words.isEmpty else { return }
+        lines.append(Line(who: .theo, text: words, isLive: false))
+        voice?.speak(words)
+        if !replyInProgress { voice?.endOfTurn() }
     }
 
     // MARK: Test files

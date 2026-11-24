@@ -57,6 +57,18 @@ final class ActionTaskController {
         var expiryLine: String
     }
 
+    /// Vello on a call drives this task: its own brain plans each batch in the call's conversation, and everything the task
+    /// would say goes through the call's voice. Nil for Pointer Assistant's own turns.
+    struct CallTaskHooks {
+        /// A line the task says by itself (a refusal, a yes to wait for, a step left unsent).
+        let speak: (String) -> Void
+        /// The batch ran: the call shows its brain this text (the step results) with a fresh screen, and the brain's reply
+        /// brings the next block (`handleCallActionsBlock`) or ends the task (`callTurnDidFinish`).
+        let wantsObserveTurn: (String) -> Void
+        /// The task ended: what was done (`ActionTaskReport`), how it ended, and why it was stopped if it was.
+        let ended: (_ report: String, _ status: AgentStatus, _ cancelReason: String?) -> Void
+    }
+
     final class ActiveTask {
         var loop: ActionTaskLoop
         /// The app the last step that ran acted on: a key step goes there when a notification alert or one of
@@ -85,6 +97,8 @@ final class ActionTaskController {
         let speaks: Bool
         /// False for the debug inbox's actionsRun: no observe turns.
         let continuesWithModel: Bool
+        /// Set when Vello's call drives the task.
+        var callHooks: CallTaskHooks?
 
         init(loop: ActionTaskLoop, agentID: String, isAnswerTurnOpen: Bool, speaks: Bool, continuesWithModel: Bool) {
             self.loop = loop
@@ -144,6 +158,8 @@ final class ActionTaskController {
             session.speakNow("doing things on screen is turned off.")
             return
         }
+        // Pointer Assistant's own block while Vello's call is working on screen: the newer request wins.
+        if let task, task.callHooks != nil { cancel(reason: Self.replacedByNewerRequestReason, stopsSpeech: false, speaksLine: false) }
         let plan: ActionPlan
         switch ActionDSL.parse(blockBody) {
         case .failure(let error):
@@ -182,6 +198,114 @@ final class ActionTaskController {
         companionManager.agentsCenter.log(agentID, "first batch: \(plan.steps.count) steps\(plan.isDone ? " (done)" : "")")
         note("task started: \(goal.prefix(80))")
         startBatch(plan: plan, steps: plan.steps, groundedTurn: session.groundedTurn, session: session, screenChangedEarlier: false, approvedFirstStep: false)
+    }
+
+    // MARK: - Vello on a call
+
+    /// The task running now is Vello's call's.
+    var isRunningCallTask: Bool { task?.callHooks != nil }
+
+    /// Vello's call wrote an `<actions>` block. It starts the call's task, or is the next batch of the one waiting for it.
+    /// `groundedTurn`: the screen the brain was last shown, whose ids the block uses. Returns words for the brain when nothing
+    /// could start (unreadable, switched off), nil when steps are running.
+    func handleCallActionsBlock(_ blockBody: String, groundedTurn: GroundedTurn, ownerWords: String, hooks: CallTaskHooks) -> String? {
+        let plan: ActionPlan
+        switch ActionDSL.parse(blockBody) {
+        case .failure(let error):
+            note("unreadable actions block from the call: \(error.explanation)")
+            if let task, task.callHooks != nil, task.phase == .waitingForModel {
+                task.didReceiveBlockThisTurn = true
+                finish(status: .failed, line: nil, errorDescription: error.explanation)
+            }
+            return "Your last steps couldn't be read (\(error.explanation)), so nothing ran. Write the block again as one JSON object."
+        case .success(let parsedPlan):
+            plan = parsedPlan
+        }
+        if let task {
+            if task.callHooks != nil, task.phase == .waitingForModel, !task.isBatchRunning {
+                task.didReceiveBlockThisTurn = true
+                companionManager.agentsCenter.log(task.agentID, "next batch: \(plan.steps.count) steps\(plan.isDone ? " (done)" : "")")
+                startBatch(plan: plan, steps: plan.steps, groundedTurn: groundedTurn, session: nil, screenChangedEarlier: false, approvedFirstStep: false)
+                return nil
+            }
+            // Something else is going on screen (Pointer Assistant's own task, or a batch still running): the call's newer
+            // block replaces it.
+            cancel(reason: Self.replacedByNewerRequestReason, stopsSpeech: false, speaksLine: false)
+        }
+        let goal = plan.goal.isEmpty ? ownerWords : plan.goal
+        let agentID = companionManager.agentsCenter.begin(kind: .actionTask, title: goal, model: nil)
+        let newTask = ActiveTask(loop: ActionTaskLoop(goal: goal, ownerTranscript: ownerWords, stepLimit: CallHands.stepLimit, observeTurnLimit: CallHands.observeTurnLimit),
+                                 agentID: agentID, isAnswerTurnOpen: true, speaks: true, continuesWithModel: true)
+        newTask.callHooks = hooks
+        task = newTask
+        companionManager.agentsCenter.setCancelHandler(agentID) { [weak self] in self?.cancel(reason: "cancelled from the dashboard", stopsSpeech: false) }
+        companionManager.agentsCenter.log(agentID, "Vello on a call: \(ownerWords)")
+        companionManager.agentsCenter.log(agentID, "first batch: \(plan.steps.count) steps\(plan.isDone ? " (done)" : "")")
+        note("call task started: \(goal.prefix(80))")
+        startBatch(plan: plan, steps: plan.steps, groundedTurn: groundedTurn, session: nil, screenChangedEarlier: false, approvedFirstStep: false)
+        return nil
+    }
+
+    /// A reply of the call's brain ended while its task is open. `hadBlock`: it carried the next steps. `failed`: the brain
+    /// gave no answer or was cut off.
+    func callTurnDidFinish(hadBlock: Bool, failed: Bool) {
+        guard let task, task.callHooks != nil else { return }
+        task.isAnswerTurnOpen = false
+        if task.phase == .waitingForModel && !task.isBatchRunning {
+            if failed {
+                finish(status: .failed, line: nil, errorDescription: "the brain gave no answer")
+                return
+            }
+            if !hadBlock && !task.didReceiveBlockThisTurn {
+                // An answer with no more steps: the job is done (or Vello said why it can't be).
+                finish(status: .done, line: nil)
+                return
+            }
+        }
+        continueIfReady()
+    }
+
+    /// The owner spoke on the call while the call's task runs. A yes or no to a step waiting for one is answered here
+    /// (true). Anything else stops the steps where they are and gives back what was done, for the brain to hear with the
+    /// owner's words: it decides whether that's a new job or a comment on this one.
+    enum CallOwnerWordsOutcome {
+        case answeredConfirmation
+        case pausedWork(report: String)
+        case noCallTask
+    }
+
+    func takeCallOwnerWords(_ words: String, ownerName: String) -> CallOwnerWordsOutcome {
+        guard let task, let hooks = task.callHooks else { return .noCallTask }
+        if task.phase == .awaitingConfirmation {
+            if task.pendingConfirmation?.isReturnStep == true, ActionEnterIntent.ownerAsked(words, stepPressesReturn: true) {
+                approvePendingStep(how: "the call")
+                return .answeredConfirmation
+            }
+            switch ActionConfirmReply.parseRelayed(words) {
+            case .yes:
+                approvePendingStep(how: "the call")
+                return .answeredConfirmation
+            case .no:
+                // Declining ends the task; the brain hears it from the hook like any other ending.
+                declinePendingStep(how: "the call")
+                return .answeredConfirmation
+            case .notAReply:
+                break
+            }
+        }
+        // The task's end is told to the brain with the owner's words, not as a turn of its own.
+        task.callHooks = CallTaskHooks(speak: hooks.speak, wantsObserveTurn: { _ in }, ended: { _, _, _ in })
+        let agentID = task.agentID
+        cancel(reason: "\(ownerName) started talking", stopsSpeech: false, speaksLine: false)
+        let report = endedTaskReports.last(where: { $0.agentID == agentID })?.report ?? "nothing yet."
+        return .pausedWork(report: report)
+    }
+
+    /// The call ended: its task stops with it.
+    func endCallTask() {
+        guard let task, task.callHooks != nil else { return }
+        task.callHooks = CallTaskHooks(speak: { _ in }, wantsObserveTurn: { _ in }, ended: { _, _, _ in })
+        cancel(reason: "the call ended", stopsSpeech: false, speaksLine: false)
     }
 
     // MARK: - One press Prism picked
@@ -230,7 +354,9 @@ final class ActionTaskController {
     private func runBatch(plan: ActionPlan, steps: [ActionStep], groundedTurn: GroundedTurn, session: AnswerSession?,
                           screenChangedEarlier: Bool, approvedFirstStep: Bool) async {
         guard let task else { return }
-        inputMonitor.arm(excusingMouseMovesUntilUptime: mouseMovesExcusedUntilUptime)
+        // On a call the owner's hand rests on the trackpad: only a real move takes over (ClickyCore `ActionCancelLogic`).
+        inputMonitor.arm(excusingMouseMovesUntilUptime: mouseMovesExcusedUntilUptime,
+                         mouseTolerance: task.callHooks != nil ? ActionCancelLogic.handsFreeMouseTolerance : ActionCancelLogic.mouseJitterTolerance)
         mouseMovesExcusedUntilUptime = nil
         defer { if self.task === task { inputMonitor.disarm() } }
         var screenChanged = screenChangedEarlier
@@ -244,9 +370,9 @@ final class ActionTaskController {
                 task.loop.record(step, tier: nil, tierReason: nil, outcome: .skipped(reason: "an earlier step in this batch was refused"))
                 continue
             }
-            let gate = task.loop.gate(step, screenChangedEarlierInBatch: screenChanged)
+            let gate = task.loop.gate(step, screenChangedEarlierInBatch: screenChanged, previousStepInBatch: offset > 0 ? steps[offset - 1] : nil)
             guard gate == .run else {
-                task.loop.record(step, tier: nil, tierReason: nil, outcome: .skipped(reason: ActionTaskLoop.skipReason(for: gate)))
+                task.loop.record(step, tier: nil, tierReason: nil, outcome: .skipped(reason: ActionTaskLoop.skipReason(for: gate, stepLimit: task.loop.stepLimit)))
                 publish()
                 continue
             }
@@ -305,10 +431,12 @@ final class ActionTaskController {
             if decision.dropsReturn, case .key = step {
                 result = ActionPerformResult(.done(detail: "left unsent"))
             } else {
-                result = await executor.perform(stepToRun, target: target, groundedTurn: groundedTurn, session: session ?? companionManager.currentAnswerSession,
+                // A call's task draws nothing through Pointer Assistant's answer on screen.
+                let answerSession = task.callHooks != nil ? nil : (session ?? companionManager.currentAnswerSession)
+                result = await executor.perform(stepToRun, target: target, groundedTurn: groundedTurn, session: answerSession,
                                                 ownerTranscript: task.loop.ownerTranscript, isCancelled: { [weak task] in task?.isCancelled ?? true })
             }
-            if decision.dropsReturn, let line = decision.spokenLine, case .done = result.outcome { companionManager.speakCodeModeLine(line) }
+            if decision.dropsReturn, let line = decision.spokenLine, case .done = result.outcome { say(line, for: task) }
             if task.isCancelled { return }
             if case .done = result.outcome {
                 if let actedProcessIdentifier = target.processIdentifier ?? target.runningApplication?.processIdentifier {
@@ -334,7 +462,10 @@ final class ActionTaskController {
         task.isBatchRunning = false
         task.currentStepText = nil
         inputMonitor.disarm()
-        let wantsObserveTurn = task.loop.needsObserveTurn(planWasDone: plan.isDone, wasCancelled: false) && task.continuesWithModel
+        // Vello on a call always looks once more after a batch, even one it called done: it checks the screen shows the job
+        // worked before it says so (Pointer Assistant called "done" on a prompt whose typing step never ran).
+        let callLooksAgain = task.callHooks != nil && task.loop.observeTurnCount < task.loop.observeTurnLimit && !task.loop.isStepBudgetExhausted
+        let wantsObserveTurn = (task.loop.needsObserveTurn(planWasDone: plan.isDone, wasCancelled: false) || callLooksAgain) && task.continuesWithModel
         if wantsObserveTurn {
             task.phase = .waitingForModel
             task.needsObserveTurn = true
@@ -357,7 +488,16 @@ final class ActionTaskController {
     private func speakRefusal(_ line: String) {
         guard let task else { return }
         note("refused: \(line)")
-        if task.speaks { companionManager.speakCodeModeLine(line) }
+        say(line, for: task)
+    }
+
+    /// A line the task says by itself: through the call's voice when Vello's call drives it, else Pointer Assistant's.
+    private func say(_ line: String, for task: ActiveTask) {
+        if let callHooks = task.callHooks {
+            callHooks.speak(line)
+        } else if task.speaks {
+            companionManager.speakCodeModeLine(line)
+        }
     }
 
     private func recordDecision(step: ActionStep, decision: ActionTierDecision, target: ResolvedActionTarget) {
@@ -453,10 +593,10 @@ final class ActionTaskController {
         task.currentStepText = "waiting for your yes: \(step.shortDescription)"
         publish()
         confirmCard.show(title: "\(step.shortDescription.prefix(1).uppercased() + step.shortDescription.dropFirst())\(appName)?", detail: decision.reason)
-        if task.speaks { companionManager.speakCodeModeLine(question) }
+        say(question, for: task)
         note("waiting for confirmation: \(step.shortDescription)")
         confirmationExpiryTask?.cancel()
-        let speaks = task.speaks
+        let speaks = task.speaks && task.callHooks == nil
         confirmationExpiryTask = Task { [weak self] in
             // The window starts once the question has been said.
             if speaks {
@@ -567,7 +707,8 @@ final class ActionTaskController {
 
     /// Every answer turn's end (CompanionManager).
     func answerTurnDidFinish(turnError: Error?, wasCancelled: Bool) {
-        guard let task else { return }
+        // Vello's call reports its own turns (`callTurnDidFinish`).
+        guard let task, task.callHooks == nil else { return }
         task.isAnswerTurnOpen = false
         if task.phase == .waitingForModel && !task.isBatchRunning {
             if wasCancelled || turnError != nil {
@@ -597,6 +738,14 @@ final class ActionTaskController {
         task.currentStepText = "looking at the screen again"
         publish()
         companionManager.agentsCenter.log(task.agentID, "observe turn \(task.loop.observeTurnCount)")
+        if let callHooks = task.callHooks {
+            // Vello's call shows its own brain the results with a fresh screen, in the same conversation it talks in.
+            Task { @MainActor [weak self] in
+                guard let self, self.task === task, !task.isCancelled else { return }
+                callHooks.wantsObserveTurn(continuationText)
+            }
+            return
+        }
         var turnOptions = CompanionManager.TurnOptions()
         turnOptions.speaksResponse = task.speaks
         turnOptions.extraUserText = continuationText
@@ -625,7 +774,7 @@ final class ActionTaskController {
             task.loop.record(step, tier: .confirm, tierReason: nil, outcome: .cancelled)
         }
         finish(status: .cancelled, line: speaksLine ? "stopped: \(reason)." : nil, errorDescription: nil)
-        if stopsSpeech || ownObserveTurnIsInFlight { companionManager.stopBuddySpeechAndCancelResponse() }
+        if task.callHooks == nil, stopsSpeech || ownObserveTurnIsInFlight { companionManager.stopBuddySpeechAndCancelResponse() }
     }
 
     private func finish(status: AgentStatus, line: String?, errorDescription: String? = nil) {
@@ -648,6 +797,11 @@ final class ActionTaskController {
         if endedTaskReports.count > 10 { endedTaskReports.removeFirst(endedTaskReports.count - 10) }
         // The next question knows what was already clicked and opened, instead of starting from nothing.
         companionManager.rememberActionTaskOutcome(goal: task.loop.goal, report: report)
+        if let callHooks = task.callHooks {
+            // The call's brain hears how it ended and says so in its own words; only a refusal or a no was said already.
+            callHooks.ended(report, status, task.cancelReason ?? (status == .done ? nil : line))
+            return
+        }
         if let line, task.speaks { companionManager.speakCodeModeLine(line) }
     }
 
@@ -684,7 +838,7 @@ final class ActionTaskController {
             "status": status,
             "phase": task.phase.rawValue,
             "stepsUsed": task.loop.executedStepCount,
-            "stepLimit": ActionTaskLoop.maximumStepsPerTask,
+            "stepLimit": task.loop.stepLimit,
             "observeTurns": task.loop.observeTurnCount,
             "steps": task.loop.records.map(\.resultLine),
             "tierDecisions": task.tierDecisions,
@@ -730,7 +884,7 @@ final class ActionTaskController {
                 var entry: [String: Any] = ["step": step.shortDescription, "verb": step.verb]
                 let gate = loop.gate(step, screenChangedEarlierInBatch: screenChanged)
                 if step.changesScreen { screenChanged = true }
-                if gate != .run { entry["gate"] = ActionTaskLoop.skipReason(for: gate) }
+                if gate != .run { entry["gate"] = ActionTaskLoop.skipReason(for: gate, stepLimit: loop.stepLimit) }
                 let target = executor.resolve(step, groundedTurn: groundedTurn, ownerTranscript: ownerTranscript)
                 if let failure = target.failure {
                     entry["tier"] = NSNull()
