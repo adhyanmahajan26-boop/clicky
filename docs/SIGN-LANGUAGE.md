@@ -45,8 +45,13 @@ and bounce rules hide single bad frames, but light, framing and speed matter mor
   those joints. **T** is often read as **A**, and **U/V/R**, **K/V** and **E/S** get mixed up now and then.
 - **J and Z** (they move), and every other moving sign: most ASL and ISL words are movements, not shapes.
 - **Signed sentences**, facial grammar and body movement: only hands are read, one still shape at a time.
-- **ISL out of the box**: most ISL letters use two hands, and there are no built-in ISL shapes yet. Teaching
-  works, at about 5 to 6 in 10 letters right from a few photos each; on your own hand it should do better.
+- **ISL out of the box**: with the letter model `SignSpellISL` (25-26 two-handed letters, not J and Z, which move)
+  in the models folder, Spell to text reads ISL letters by itself. Measured on photos of a signer it never saw
+  (ISLAN signer 6, 25 photos): 15 of 25 letters right (60%); on photos of the same people it was trained on (the
+  multimodal set names no signers): 82% (56 of 68). Calibrated to answer only when sure, it answered 72% of the
+  test photos and was right on 85% of those. The training photos are close-ups of hands at chest height, not a
+  laptop camera's view, so expect less on your own camera until there is data from one. Without the model, ISL reads
+  taught signs only: teaching works, at about 5 to 6 in 10 letters right from a few photos each.
 
 ## Measuring it again
 
