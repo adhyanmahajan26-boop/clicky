@@ -259,3 +259,34 @@ def test_sentence_dataset_survives_pickling_for_spawned_workers(tmp_path):
     for item_number in (0, 4):
         for original_part, unpickled_part in zip(training[item_number], unpickled[item_number]):
             torch.testing.assert_close(original_part, unpickled_part)
+
+
+def _resting_then_signing_clip():
+    """Shoulders at y 0.4 (0.2 apart); a right hand at rest low (y 0.95) for 10 frames, raised (y 0.5) for 20, at
+    rest again for 10."""
+    from signs.landmarks import RIGHT_SHOULDER, empty_clip
+
+    clip = empty_clip(40)
+    clip[:, LEFT_SHOULDER] = [0.6, 0.4, 1.0]
+    clip[:, RIGHT_SHOULDER] = [0.4, 0.4, 1.0]
+    for frame in range(40):
+        wrist_y = 0.5 if 10 <= frame < 30 else 0.95
+        for joint in range(21):
+            clip[frame, RIGHT_HAND_START + joint] = [0.45 + joint * 0.002, wrist_y - joint * 0.002, 1.0]
+    return clip
+
+
+def test_a_clip_is_cut_to_its_signing_part_or_kept_with_a_short_rest():
+    from signs.sentences import signing_part
+
+    clip = _resting_then_signing_clip()
+    cut = signing_part(clip, 640, 640, SentenceSettings())
+    assert cut.shape[0] == 20
+    np.testing.assert_allclose(cut, clip[10:30])
+    with_rest = signing_part(clip, 640, 640, SentenceSettings(), rest_frames_kept=8)
+    np.testing.assert_allclose(with_rest, clip[2:38])
+    # joins: with rest_join_share 0 no resting frame ever reaches the sentence
+    sentence = join_signs([(clip, 640, 640), (clip, 640, 640)], np.random.default_rng(1),
+                          SentenceSettings(shave_probability=0.0, rest_join_share=0.0))
+    resting = sentence[:, RIGHT_HAND_START, 1] > 0.9
+    assert not resting.any()

@@ -6,8 +6,13 @@ ship, so the sentence model learns from sentences joined together here from isol
 1. Pick 1 to 6 clips (`choose_sign_count`: one sign about a quarter of the time, so the model still reads a lone
    sign well, 2 to 6 equally often otherwise). After the first, clips come from the same signer when the manifest
    names signers, else from any clip.
-2. Trim each to its frames with a hand (`trim_frames_without_hands`) and, half the time, shave up to a fifth off
-   each end, since in fluent signing one sign runs into the next.
+2. Cut each to its signing part (`signing_part`: from the first to the last frame with a wrist above the rest line,
+   1.5 body sizes under the features' own centre, the wrist being the hand's own when the hand is seen, else the
+   body pose's), so the hands never drop to rest between signs, as in fluent signing. About a fifth of the clips
+   (`rest_join_share`) keep up to `short_rest_frames` of their resting frames at each end instead, since real
+   signers do sometimes pause. Then, half the time, shave up to a fifth off each end, since in fluent signing one
+   sign runs into the next. (Until round 6 clips were only trimmed of frames with no hand at all, which in INCLUDE
+   kept the hands resting at the sides at both ends of every clip: every join had a rest.)
 3. Bring every clip onto the first clip's body: move and scale it so its shoulder centre and body size (what
    `features.py` computes, in units where x and y are the same size) match the first clip's.
 4. Join them with 3 to 10 in-between frames: a point seen at the end of one sign and the start of the next slides
@@ -35,7 +40,17 @@ from torch.utils.data import Dataset
 from .augment import AugmentSettings, augment_clip
 from .data import SampleReference, ctc_frames_needed
 from .features import compute_feature_details, compute_features, thin_evenly_frame_indices, trim_frames_without_hands
-from .landmarks import CONFIDENCE, POINTS_PER_FRAME, VALUES_PER_POINT, PackedDataset
+from .landmarks import (
+    CONFIDENCE,
+    LEFT_BODY_WRIST,
+    LEFT_HAND_START,
+    POINTS_PER_FRAME,
+    RIGHT_BODY_WRIST,
+    RIGHT_HAND_START,
+    VALUES_PER_POINT,
+    WRIST_JOINT,
+    PackedDataset,
+)
 
 SENTENCES_TASK_NAME = "sentences"
 SENTENCE_MODEL_FRAME_COUNT = 384  # 192 output rows, one per 2 frames
@@ -53,6 +68,10 @@ class SentenceSettings:
     fewest_frames_after_shaving: int = 4
     fewest_in_between_frames: int = 3
     most_in_between_frames: int = 10
+    # The signing part: a wrist above this many body sizes under the centre. A share of clips keep a short rest.
+    rest_line_below_centre_in_body_sizes: float = 1.5
+    rest_join_share: float = 0.2
+    short_rest_frames: int = 8
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -82,6 +101,37 @@ def choose_sign_count(generator: np.random.Generator, settings: SentenceSettings
     if settings.most_signs <= 1 or generator.random() < settings.one_sign_share:
         return 1
     return int(generator.integers(2, settings.most_signs + 1))
+
+
+def signing_part(landmarks: np.ndarray, width: float, height: float, settings: SentenceSettings,
+                 rest_frames_kept: int = 0) -> np.ndarray:
+    """The frames from the first to the last with a wrist above the rest line (plus up to `rest_frames_kept` frames
+    either side). The rest line is `rest_line_below_centre_in_body_sizes` body sizes under the frame's centre, both
+    as `features.py` measures them; a wrist is the hand's own when the hand counts as seen, else the body pose's on
+    that side. A clip with no raised wrist (or nothing measurable) is only trimmed of frames with no hand."""
+    trimmed = trim_frames_without_hands(landmarks)
+    if trimmed.shape[0] == 0:
+        return trimmed
+    details = compute_feature_details(trimmed, width, height)
+    if details.centre.shape[0] != trimmed.shape[0] or not np.isfinite(details.body_size) or details.body_size <= 0:
+        return trimmed
+    rest_line_y = details.centre[:, 1] + settings.rest_line_below_centre_in_body_sizes * details.body_size
+    raised = np.zeros(trimmed.shape[0], dtype=bool)
+    for hand_seen, hand_start, body_wrist in (
+        (details.right_hand_seen, RIGHT_HAND_START, RIGHT_BODY_WRIST),
+        (details.left_hand_seen, LEFT_HAND_START, LEFT_BODY_WRIST),
+    ):
+        hand_wrist = trimmed[:, hand_start + WRIST_JOINT]
+        pose_wrist = trimmed[:, body_wrist]
+        wrist_y = np.where(hand_seen, hand_wrist[:, 1], pose_wrist[:, 1])
+        wrist_is_seen = np.where(hand_seen, hand_wrist[:, CONFIDENCE] > 0, pose_wrist[:, CONFIDENCE] > 0)
+        raised |= wrist_is_seen & (wrist_y < rest_line_y)
+    raised_frames = np.nonzero(raised)[0]
+    if raised_frames.size == 0:
+        return trimmed
+    first = max(int(raised_frames[0]) - rest_frames_kept, 0)
+    last = min(int(raised_frames[-1]) + rest_frames_kept, trimmed.shape[0] - 1)
+    return trimmed[first : last + 1]
 
 
 def shave_ends(landmarks: np.ndarray, generator: np.random.Generator, settings: SentenceSettings) -> np.ndarray:
@@ -156,7 +206,8 @@ def join_signs(
     joined_parts = []
     first_placement = None
     for sign_number, (landmarks, width, height) in enumerate(sign_clips):
-        sign_landmarks = trim_frames_without_hands(landmarks)
+        rest_frames_kept = settings.short_rest_frames if generator.random() < settings.rest_join_share else 0
+        sign_landmarks = signing_part(landmarks, width, height, settings, rest_frames_kept)
         if generator.random() < settings.shave_probability:
             sign_landmarks = shave_ends(sign_landmarks, generator, settings)
         if sign_landmarks.shape[0] == 0:
