@@ -94,18 +94,12 @@ def extract_batch(batch_name, jobs):
     if not todo:
         return 0, 0
     folder = WORK / batch_name
-    by_folder = defaultdict(list)
-    for split, sign, name in todo:
-        by_folder[(split, sign)].append(name)
-    started = time.time()
-    downloaded_bytes = 0
-    for (split, sign), names in by_folder.items():
-        target = folder / split / sign
-        target.mkdir(parents=True, exist_ok=True)
-        names_file = target / "names.txt"
-        names_file.write_text("\n".join(names) + "\n")
-        subprocess.run([sys.executable, str(FETCH_MANY), f"{BASE}{split}/{urllib.parse.quote(sign)}/", str(target), str(names_file), "12"],
-                       stdout=subprocess.DEVNULL)
+    # One download pool for the whole batch: a sign's folder holds only 4-24 of the batch's videos, too few to keep
+    # 12 connections busy one folder at a time.
+    folder.mkdir(parents=True, exist_ok=True)
+    names_file = folder / "names.txt"
+    names_file.write_text("".join(f"{split}/{sign}/{name}\n" for split, sign, name in todo))
+    subprocess.run([sys.executable, str(FETCH_MANY), BASE, str(folder), str(names_file), "12"], stdout=subprocess.DEVNULL)
     lines = []
     for split, sign, name in todo:
         path = folder / split / sign / name
