@@ -148,6 +148,20 @@ func summarize(frames: [SignLandmarkFrame]) -> (rightHand: Int, leftHand: Int, s
     return (framesWithRightHand, framesWithLeftHand, framesWithShoulders)
 }
 
+/// Opens a log file for appending, writing its header only when this call creates the file (O_EXCL makes exactly
+/// one of several processes starting together do that).
+func openForAppending(fileURL: URL, headerLine: String) throws -> FileHandle {
+    let createdFileDescriptor = open(fileURL.path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND, 0o644)
+    if createdFileDescriptor >= 0 {
+        let createdHandle = FileHandle(fileDescriptor: createdFileDescriptor, closeOnDealloc: true)
+        createdHandle.write(Data((headerLine + "\n").utf8))
+        return createdHandle
+    }
+    let existingFileDescriptor = open(fileURL.path, O_WRONLY | O_APPEND)
+    guard existingFileDescriptor >= 0 else { throw ExtractionError("can't open \(fileURL.path) for appending") }
+    return FileHandle(fileDescriptor: existingFileDescriptor, closeOnDealloc: true)
+}
+
 /// Shared between the workers: what is left to do, the output files and the counters. Everything behind one lock;
 /// the work under it is tiny next to a Vision frame.
 final class ExtractionProgress: @unchecked Sendable {
@@ -163,17 +177,10 @@ final class ExtractionProgress: @unchecked Sendable {
 
     init(clips: [ClipToExtract], extractCSVURL: URL, failedTSVURL: URL) throws {
         self.clips = clips
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: extractCSVURL.path) {
-            try (ClipExtractionResult.csvHeader + "\n").write(to: extractCSVURL, atomically: true, encoding: .utf8)
-        }
-        if !fileManager.fileExists(atPath: failedTSVURL.path) {
-            try "clip_id\tpath\treason\n".write(to: failedTSVURL, atomically: true, encoding: .utf8)
-        }
-        extractCSVHandle = try FileHandle(forWritingTo: extractCSVURL)
-        failedTSVHandle = try FileHandle(forWritingTo: failedTSVURL)
-        try extractCSVHandle.seekToEnd()
-        try failedTSVHandle.seekToEnd()
+        // Several sign-extract processes (each with a slice of one list) share one output folder, so the files are
+        // opened in append mode: every row lands at the end in one write and no process overwrites another's rows.
+        extractCSVHandle = try openForAppending(fileURL: extractCSVURL, headerLine: ClipExtractionResult.csvHeader)
+        failedTSVHandle = try openForAppending(fileURL: failedTSVURL, headerLine: "clip_id\tpath\treason")
     }
 
     func takeNextClip() -> ClipToExtract? {
