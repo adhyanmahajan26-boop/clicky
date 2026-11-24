@@ -130,6 +130,24 @@ value (the only time test is read) and, when the data has clips of signs the mod
 those it would wrongly answer. It writes `checkpoint-best.calibration.json` next to the checkpoint. Calibrate
 again after any further training: the file remembers the weights, and export refuses a stale one.
 
+### The "not sure" threshold of a word model: from words it was never taught
+
+Calibration's own choice (right-when-answered on validation) can't see signs outside the word list, which a real
+signer makes all the time; on INCLUDE it answered everything. So a word model's threshold comes from held-out
+words: three extra models, each trained with a different seeded tenth of the words held out, are pooled, and the
+threshold is the lowest at which never-taught signs are wrongly answered at most 10% of the time. Then it goes into
+the full model's calibration file (whose temperature stays) and so into `.reading.json` on export:
+
+```bash
+python -m signs.calibrate --checkpoint runs/words-isl/checkpoint-best.pt --source apple
+python -m signs.unknown_signs folds --data /data/signs/include --language isl --output runs/words-isl-folds   # 3 trainings
+python -m signs.unknown_signs apply --checkpoint runs/words-isl/checkpoint-best.pt --folds runs/words-isl-folds/folds.json
+python -m signs.export_coreml --checkpoint runs/words-isl/checkpoint-best.pt --output out/SignWordsISL.mlpackage
+```
+
+`--most-wrongly-answered` changes the 10%. On the Studio `studio/run_words.sh` does all of it for every word run
+(the PopSign runs that `studio/train_when_ready.sh` starts included). Letter models keep calibration's own rule.
+
 ## 4. Export to Core ML
 
 ```bash

@@ -134,8 +134,27 @@ their numbers on joined sentences are not numbers on real fluent signing.
 A word or letter model that has been calibrated has `<name>.reading.json` beside it:
 `{"leastWordProbability", "rightWhenAnsweredOnValidation", "answeredOnValidation", "temperature"}`. Its `scores`
 are already divided by `temperature`, so a plain softmax gives calibrated probabilities; the app answers only when
-the top probability is at least `leastWordProbability` and says the sign is unclear otherwise. The other two
-numbers are what that threshold did on the validation signers.
+the top probability is at least `leastWordProbability` and says the sign is unclear otherwise.
+
+How `leastWordProbability` is chosen: for a **word model**, from words it was never taught (`signs.unknown_signs
+folds`): three models are trained with a different seeded tenth of the words held out each, their test clips are
+pooled, and the threshold is the lowest at which the held-out (never-taught) signs are wrongly answered at most 10%
+of the time; `leastWordProbabilityChosenFrom` in the file gives the rule and what it did (never-taught answered,
+taught answered, right when answered). The temperature is still the full model's own, fitted on its validation
+signers. For a **letter model** (held-out letters make no sense) it is the lowest threshold where answered
+validation clips are right at least 95% of the time, and `rightWhenAnsweredOnValidation` / `answeredOnValidation`
+say what it did there.
+
+**Reading a stretch with a sentence model** (when `SignSentences<ASL|ISL>` is beside the word model): a stretch
+that isn't finger-spelling is read by the sentence model too. If it finds two or more signs, its words go on the
+line, each with its own confidence (the highest probability its CTC rows reached); a word under
+`leastSentenceWordConfidence` (0.7, the lowest where 95% of the words let through were right on INCLUDE's
+validation streams) becomes an unclear sign. If it finds one sign or none, the word model's answer stands: it reads
+a lone sign better and has the "not sure" threshold. Without a sentence model every stretch is one sign.
+
+An unclear sign is shown as "?" and left out of text typed into another app, but Vello's brain is told about it in
+place ("(a sign I couldn't read, possibly 'table' or 'paper')", the two best guesses when the top one is at least
+0.3 likely), and told that these are guesses. A line of unclear signs alone is not sent.
 
 ## 5. Honest measuring
 
