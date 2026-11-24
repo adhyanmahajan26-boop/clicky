@@ -467,7 +467,8 @@ final class DebugCommandInbox {
             // {action: destination, destination: vello|pointerAssistant|frontApp}, {action: teach, label} (camera on), {action: forget, label}.
             // Sign to text: {action: mode, mode: signs}, {action: language, language: asl|isl}, {action: signsDestination,
             // destination}, {action: signsState} (the line, each token and its alternatives, the models found or missing,
-            // frames a second seen), and, in a test profile only, {action: signsFeed, path, fps?, width?, height?}: a
+            // frames a second seen), in a test profile only {action: spellFeed, path, width?, height?, seconds?} (ISL Spell to
+            // text with SignSpellISL: a landmark clip's first frame held to the letter model), and, in a test profile only, {action: signsFeed, path, fps?, width?, height?}: a
             // landmark .npy clip or a video fed through the live reader as if from the camera, answered with what was read.
             let handSignController = companionManager.handSignController
             switch commandObject["action"] as? String ?? "state" {
@@ -524,6 +525,24 @@ final class DebugCommandInbox {
                 // Loads the models first when they haven't been, so the answer says what was found.
                 handSignController.prepareSignReading()
                 reply(commandIdentifier: commandIdentifier, isSuccess: true, result: handSignController.signsStatusSnapshot(), errorMessage: nil)
+                return
+            case "spellFeed":
+                // Test profile only: a photo's landmarks held to ISL Spell to text's letter model, as the camera would.
+                guard TheoProfile.isTest else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns spellFeed only runs in a test profile (--profile test)")
+                    return
+                }
+                guard let feedPath = commandObject["path"] as? String, !feedPath.isEmpty else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns spellFeed needs \"path\": a landmark .npy clip")
+                    return
+                }
+                let (feedResult, feedProblem) = handSignController.feedSpellingFrame(
+                    path: feedPath,
+                    pictureWidth: (commandObject["width"] as? NSNumber)?.doubleValue ?? 0,
+                    pictureHeight: (commandObject["height"] as? NSNumber)?.doubleValue ?? 0,
+                    seconds: (commandObject["seconds"] as? NSNumber)?.doubleValue ?? 1.0
+                )
+                reply(commandIdentifier: commandIdentifier, isSuccess: feedProblem == nil, result: feedResult, errorMessage: feedProblem)
                 return
             case "signsFeed":
                 // Test profile only: it drives the live reader the camera drives, and the owner's line must never get made-up signs.

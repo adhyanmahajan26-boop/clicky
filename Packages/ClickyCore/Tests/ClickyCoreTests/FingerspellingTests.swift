@@ -317,4 +317,42 @@ struct FingerspellingTests {
         #expect(!HandSignMode.spell.needsPointerAssistant)
         #expect(!HandSignMode.signs.needsPointerAssistant)
     }
+
+    // MARK: ISL letters from the letter model
+
+    @Test func theLetterModelGivesALetterOnlyWhenSureEnough() {
+        let sure = ISLLetterReading.reading(scores: [0, 5, 0], letters: ["A", "B", "C"], leastProbability: 0.9)
+        #expect(sure?.label == "b")
+        #expect(sure.map { $0.distance < 0.02 } == true)
+        #expect(ISLLetterReading.reading(scores: [0, 1, 0], letters: ["A", "B", "C"], leastProbability: 0.9) == nil)
+        #expect(ISLLetterReading.reading(scores: [0, 1], letters: ["A", "B", "C"], leastProbability: 0.1) == nil)
+    }
+
+    @Test func forISLTheModelsLetterStandsWhereTheNearestShapeDoesForASL() {
+        // A fist-like hand: not the send hand, not thumbs down.
+        var joints: [HandJoint: HandPoint] = [.wrist: HandPoint(x: 0, y: 0)]
+        for (index, joint) in HandJoint.allCases.dropFirst().enumerated() {
+            joints[joint] = HandPoint(x: Double(index % 4) * 0.1, y: 0.3 + Double(index / 4) * 0.05)
+        }
+        let hand = HandPose(joints: joints)
+        let modelLetter = FingerspellingReading(label: "k", distance: 0.05, isTaught: false)
+        let read = FingerspellingReader.read(hands: [hand, hand], alphabet: .isl, taughtSigns: TaughtSignBook(), islModelLetter: modelLetter)
+        #expect(read == modelLetter)
+        // without the model, ISL reads only taught signs (none here)
+        #expect(FingerspellingReader.read(hands: [hand, hand], alphabet: .isl, taughtSigns: TaughtSignBook()) == nil)
+        // a taught sign for this shape wins over the model
+        let taughtBook = TaughtSignBook(signs: [TaughtSign(label: "my k", handCount: 2, examples: [HandShapeMeasure.measure(firstHand: hand, secondHand: hand)!])])
+        #expect(FingerspellingReader.read(hands: [hand, hand], alphabet: .isl, taughtSigns: taughtBook, islModelLetter: modelLetter)?.label == "my k")
+    }
+
+    @Test func aHandFromTheLandmarksBecomesAHandPoseInPixelsYUp() {
+        var frame = SignLandmarkFrame()
+        for (index, joint) in HandJoint.allCases.enumerated() {
+            frame.setHandJoint(side: .left, joint: joint, point: SignLandmarkPoint(x: 0.5 + Float(index) * 0.01, y: 0.25, confidence: 0.9))
+        }
+        let pose = ISLLetterReading.handPose(in: frame, side: .left, pictureWidth: 640, pictureHeight: 480)
+        #expect(pose?.joints.count == 21)
+        #expect(pose?[.wrist] == HandPoint(x: 320, y: 360))
+        #expect(ISLLetterReading.handPose(in: frame, side: .right, pictureWidth: 640, pictureHeight: 480) == nil)
+    }
 }

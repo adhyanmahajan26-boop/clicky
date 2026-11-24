@@ -126,7 +126,8 @@ final class HandSignController: ObservableObject {
             seenSign = nil
             seenSpellingLabel = nil
             holdProgress = 0
-            camera.setReadsSignLanguage(mode == .signs)
+            updateWhatTheCameraReads()
+            prepareISLLetterModel()
             if mode == .signs {
                 prepareSignReading()
             } else {
@@ -144,7 +145,11 @@ final class HandSignController: ObservableObject {
     /// The letter (or taught sign) the current frame shows, before it's held long enough.
     @Published private(set) var seenSpellingLabel: String?
     @Published var alphabet: FingerspellingAlphabet = HandSignController.savedAlphabet {
-        didSet { Self.savedAlphabet = alphabet }
+        didSet {
+            Self.savedAlphabet = alphabet
+            prepareISLLetterModel()
+            updateWhatTheCameraReads()
+        }
     }
     @Published var destination: SpelledTextDestination = HandSignController.savedDestination {
         didSet { Self.savedDestination = destination }
@@ -218,7 +223,7 @@ final class HandSignController: ObservableObject {
                 self?.handleSignFrame(frame, at: frameTime, pictureWidth: pictureWidth, pictureHeight: pictureHeight)
             }
         }
-        camera.setReadsSignLanguage(mode == .signs)
+        updateWhatTheCameraReads()
     }
 
     /// At launch: watch for lock and sleep, and turn the camera on if it was left on.
@@ -249,6 +254,7 @@ final class HandSignController: ObservableObject {
             problem = nil
             lastLine = Self.startingLine(for: mode)
             if mode == .signs { prepareSignReading() }
+            prepareISLLetterModel()
             return
         }
         guard await HandSignCamera.requestAccess() else {
@@ -270,6 +276,7 @@ final class HandSignController: ObservableObject {
         spellingSession.reset()
         lastLine = Self.startingLine(for: mode)
         if mode == .signs { prepareSignReading() }
+        prepareISLLetterModel()
         panelController.show()
     }
 
@@ -328,8 +335,8 @@ final class HandSignController: ObservableObject {
 
     // MARK: - Spell to text
 
-    private func handleSpelling(_ handPoses: [HandPose], at now: CFTimeInterval) {
-        let reading = FingerspellingReader.read(hands: handPoses, alphabet: alphabet, taughtSigns: taughtSigns)
+    private func handleSpelling(_ handPoses: [HandPose], at now: CFTimeInterval, islModelLetter: FingerspellingReading? = nil) {
+        let reading = FingerspellingReader.read(hands: handPoses, alphabet: alphabet, taughtSigns: taughtSigns, islModelLetter: islModelLetter)
         if handIsVisible != !handPoses.isEmpty { handIsVisible = !handPoses.isEmpty }
         if seenSpellingLabel != reading?.label { seenSpellingLabel = reading?.label }
         let event = spellingSession.observe(label: reading?.label, handIsVisible: !handPoses.isEmpty, at: now)
@@ -441,7 +448,12 @@ final class HandSignController: ObservableObject {
     }
 
     private func handleSignFrame(_ frame: SignLandmarkFrame, at frameTime: Double, pictureWidth: Int, pictureHeight: Int) {
-        guard isRunning, !isPausedForLockOrSleep, mode == .signs else { return }
+        guard isRunning, !isPausedForLockOrSleep else { return }
+        if readsISLLettersWithTheModel {
+            handleISLLetterFrame(frame, pictureWidth: pictureWidth, pictureHeight: pictureHeight, at: CACurrentMediaTime())
+            return
+        }
+        guard mode == .signs else { return }
         let handIsInThePicture = SignFeatures.handIsSeen(in: frame, side: .right) || SignFeatures.handIsSeen(in: frame, side: .left)
         if handIsVisible != handIsInThePicture { handIsVisible = handIsInThePicture }
         recentSignFrameTimes.append(frameTime)
@@ -821,6 +833,89 @@ final class HandSignController: ObservableObject {
 
     // MARK: - Debug inbox
 
+    // MARK: - ISL letters from the letter model (Spell to text)
+
+    /// `SignSpellISL` (one frame in, a score per letter), when the models folder or the bundle has it.
+    private var islLetterModel: SignModelRunner?
+    /// "SignSpellISL, 26 letters"; nil without the model (then ISL in Spell to text reads taught signs only).
+    @Published private(set) var islLetterModelSummary: String?
+    private var isLoadingISLLetterModel = false
+
+    /// Spell to text in ISL with the letter model: the camera then reads the 61 landmarks of every frame.
+    private var readsISLLettersWithTheModel: Bool { mode == .spell && alphabet == .isl && islLetterModel != nil }
+
+    private func updateWhatTheCameraReads() {
+        camera.setReadsSignLanguage(mode == .signs || readsISLLettersWithTheModel)
+    }
+
+    /// Loads `SignSpellISL` off the main thread the first time Spell to text is in ISL. A model that reads more than one
+    /// frame isn't a still-letter model and is left alone.
+    func prepareISLLetterModel() {
+        guard mode == .spell, alphabet == .isl, islLetterModel == nil, !isLoadingISLLetterModel else { return }
+        isLoadingISLLetterModel = true
+        let searchFolders = SignModelFolders.searchFolders
+        let cacheFolder = SignModelFolders.compiledModelCacheFolder
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = SignModelFiles.find(in: searchFolders, language: .isl)
+            let loadedModel = found.spellingModelURL.flatMap { try? SignModelRunner(modelURL: $0, compiledModelCacheFolder: cacheFolder) }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isLoadingISLLetterModel = false
+                    if let loadedModel, loadedModel.frameCount == 1 {
+                        self.islLetterModel = loadedModel
+                        self.islLetterModelSummary = "\(loadedModel.name), \(loadedModel.labels.count) letters"
+                    }
+                    self.updateWhatTheCameraReads()
+                }
+            }
+        }
+    }
+
+    /// One camera frame in ISL Spell to text: the hands become hand poses (for delete, send and taught signs), the
+    /// letter model reads the frame, and both go to the same spelling session as ASL's built-in shapes.
+    private func handleISLLetterFrame(_ frame: SignLandmarkFrame, pictureWidth: Int, pictureHeight: Int, at now: CFTimeInterval) {
+        let width = Double(pictureWidth), height = Double(pictureHeight)
+        let handPoses = SignSide.allCases.compactMap { ISLLetterReading.handPose(in: frame, side: $0, pictureWidth: width, pictureHeight: height) }
+        if teachingLabel != nil {
+            takeTeachingExample(from: handPoses, at: now)
+            return
+        }
+        handleSpelling(handPoses, at: now, islModelLetter: islLetterReading(of: frame, pictureWidth: width, pictureHeight: height))
+    }
+
+    private func islLetterReading(of frame: SignLandmarkFrame, pictureWidth: Double, pictureHeight: Double) -> FingerspellingReading? {
+        guard let islLetterModel, SignFeatures.handIsSeen(in: frame, side: .right) || SignFeatures.handIsSeen(in: frame, side: .left) else { return nil }
+        let fitted = SignFeatures.fitted(SignFeatures.featureClip(of: [frame], pictureWidth: pictureWidth, pictureHeight: pictureHeight), toFrameCount: 1)
+        guard let scores = try? islLetterModel.scores(features: fitted.values, mask: fitted.mask).values else { return nil }
+        // The model's own threshold (calibrated, in its .reading.json); 0.5 when it has none.
+        return ISLLetterReading.reading(scores: scores, letters: islLetterModel.labels, leastProbability: islLetterModel.leastWordProbabilityOverride ?? 0.5)
+    }
+
+    /// `handSigns {action: spellFeed, path}` (test profile only): a landmark clip's first frame held to the "camera" for
+    /// `seconds` at 30 frames a second, as ISL Spell to text with the letter model reads it. Answers the reading and
+    /// the spelled text.
+    func feedSpellingFrame(path: String, pictureWidth: Double, pictureHeight: Double, seconds: Double) -> ([String: Any]?, String?) {
+        guard mode == .spell, alphabet == .isl else { return (nil, "set mode spell and alphabet isl first") }
+        guard islLetterModel != nil else { return (nil, "no ISL letter model (SignSpellISL.mlpackage) loaded") }
+        guard let frames = try? SignLandmarkClipFile.read(from: URL(fileURLWithPath: (path as NSString).expandingTildeInPath)),
+              let frame = frames.first(where: { SignFeatures.handIsSeen(in: $0, side: .right) || SignFeatures.handIsSeen(in: $0, side: .left) }) ?? frames.first
+        else { return (nil, "can't read \(path)") }
+        let width = pictureWidth > 0 ? pictureWidth : 640, height = pictureHeight > 0 ? pictureHeight : 480
+        let reading = islLetterReading(of: frame, pictureWidth: width, pictureHeight: height)
+        let startTime = CACurrentMediaTime()
+        let frameCount = max(1, Int(seconds * 30))
+        for frameIndex in 0..<frameCount {
+            handleISLLetterFrame(frame, pictureWidth: Int(width), pictureHeight: Int(height), at: startTime + Double(frameIndex) / 30)
+        }
+        // The hand leaves, so a letter held to the end counts as let go.
+        handleSpelling([], at: startTime + Double(frameCount) / 30 + 0.05)
+        return ([
+            "modelLetter": reading.map { ["label": $0.label, "probability": 1 - $0.distance] as [String: Any] } ?? NSNull(),
+            "spelledText": spelledText.text
+        ], nil)
+    }
+
     func statusSnapshot() -> [String: Any] {
         let cameraAccess: String
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -845,6 +940,7 @@ final class HandSignController: ObservableObject {
             "showsCameraPicture": showsCameraPicture,
             "signs": signsStatusSnapshot(),
             "spell": [
+                "islLetterModel": islLetterModelSummary.map { $0 as Any } ?? NSNull(),
                 "alphabet": alphabet.rawValue,
                 "destination": destination.rawValue,
                 "text": spelledText.text,

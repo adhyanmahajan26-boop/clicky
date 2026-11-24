@@ -391,7 +391,11 @@ public struct TaughtSignBook: Codable, Equatable, Sendable {
 public enum FingerspellingReader {
     /// What the hands in one frame show: thumbs down is delete; otherwise the nearer of a taught sign and (for ASL)
     /// a built-in letter.
-    public static func read(hands: [HandPose], alphabet: FingerspellingAlphabet, taughtSigns: TaughtSignBook) -> FingerspellingReading? {
+    /// - Parameter islModelLetter: for ISL, the letter model's reading of this frame (`ISLLetterReading`), when the
+    ///   model is there; it stands where ASL's nearest built-in shape does. A sign the owner taught still wins (it only
+    ///   matches when the hand is near it), and the send hand still sends.
+    public static func read(hands: [HandPose], alphabet: FingerspellingAlphabet, taughtSigns: TaughtSignBook,
+                            islModelLetter: FingerspellingReading? = nil) -> FingerspellingReading? {
         guard let firstHand = hands.first else { return nil }
         if hands.count == 1, HandSignClassifier.classify(firstHand) == .thumbsDown {
             return FingerspellingReading(label: FingerspellingReading.deleteLabel, distance: 0, isTaught: false)
@@ -410,6 +414,10 @@ public enum FingerspellingReader {
                 }
             }
         }
+        if alphabet == .isl, builtInReading == nil, let islModelLetter {
+            // The letter model, unless the hand is the send hand (checked above) or the owner taught this shape.
+            return taughtReading ?? islModelLetter
+        }
         switch (taughtReading, builtInReading) {
         case let (taught?, builtIn?):
             // A shape the owner taught never sends by mistake: an open-handed ISL letter can look like the send hand.
@@ -419,6 +427,34 @@ public enum FingerspellingReader {
         case let (nil, builtIn?): return builtIn
         case (nil, nil): return nil
         }
+    }
+}
+
+// MARK: - ISL letters from the letter model
+
+/// `SignSpellISL` (Tools/signs SPEC section 4): one frame's features in, a score per letter out. Read here into a
+/// letter, or nothing when the top letter is under the model's own threshold (its `.reading.json`).
+public enum ISLLetterReading {
+    public static func reading(scores: [Float], letters: [String], leastProbability: Float) -> FingerspellingReading? {
+        guard scores.count == letters.count, !letters.isEmpty else { return nil }
+        let probabilities = SignScoreMath.softmax(scores)
+        guard let bestIndex = probabilities.indices.max(by: { probabilities[$0] < probabilities[$1] }),
+              Float(probabilities[bestIndex]) >= leastProbability else { return nil }
+        // "Distance" is how far from sure (0 = certain), so a reading always says how sure it was.
+        return FingerspellingReading(label: letters[bestIndex].lowercased(), distance: 1 - probabilities[bestIndex], isTaught: false)
+    }
+
+    /// One side's hand from the 61 landmarks as a `HandPose` in picture pixels, y up (what the shape readers take),
+    /// so the delete and send hands and taught signs work from the same frames. Nil when the hand isn't seen.
+    public static func handPose(in frame: SignLandmarkFrame, side: SignSide, pictureWidth: Double, pictureHeight: Double) -> HandPose? {
+        guard SignFeatures.handIsSeen(in: frame, side: side) else { return nil }
+        var joints: [HandJoint: HandPoint] = [:]
+        for joint in HandJoint.allCases {
+            let point = frame.handJoint(side: side, joint: joint)
+            guard point.isSeen else { continue }
+            joints[joint] = HandPoint(x: Double(point.x) * pictureWidth, y: (1 - Double(point.y)) * pictureHeight)
+        }
+        return HandPose(joints: joints)
     }
 }
 
