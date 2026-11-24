@@ -166,4 +166,66 @@ test reads every file directly in `tests/golden/`. The pytest suite fails while 
 
 - `torch.nn.functional.ctc_loss` isn't implemented on MPS in some torch versions; then only the loss is computed
   on the CPU (printed once), the model stays on the GPU.
-- Augmentation and features run in the DataLoader workers (`--workers`, default up to 8).
+- Augmentation and features run in the DataLoader workers (`--workers`, default up to 8; 0 on macOS, where
+  spawned workers cost ~35 s an epoch on small data. With workers, batches cross as NumPy arrays so no
+  torch_shm_manager process is left behind to keep the run from exiting).
+
+## On the Mac Studio (how the data was made, and how to run it again)
+
+Everything lives under `~/sign-data/` (never in the repo):
+
+| Folder | What |
+| --- | --- |
+| `tools/` | copies of `Tools/signs/studio/*`, the built `sign-extract` (`sign-extract-padded` is the padded-body build) |
+| `venv/` | Python 3.12, torch 2.7.0 (MPS), coremltools 9.0 (its newest supported torch), numpy, pandas, pyarrow, pytest |
+| `downloads/` | videos and zips while they are being read; each is deleted once its landmarks exist |
+| `landmarks/<dataset>/` | SPEC clips + `manifest.csv` + `extract.csv` (one row a clip) + `failed.tsv` |
+| `logs/` | one `.log` and `.pid` per detached job, and its resume state |
+| `runs/`, `out/` | training runs and exported models |
+
+Setup:
+
+```bash
+cd ~/sign-data && uv venv --python 3.12 venv
+VIRTUAL_ENV=~/sign-data/venv uv pip install "torch==2.7.0" coremltools numpy pandas pyarrow pytest
+cd <repo>/Packages/ClickyCore && swift build -c release --product sign-extract
+cp .build/release/sign-extract ~/sign-data/tools/sign-extract-padded
+cp <repo>/Tools/signs/studio/* ~/sign-data/tools/
+cd <repo>/Tools/signs && ~/sign-data/venv/bin/python -m pytest tests -q
+```
+
+`sign-extract videos --list clips.tsv --out <folder> --face` reads Apple Vision landmarks (SPEC section 1; the
+body pose runs on the padded picture unless `--no-pad-body`). One process tops out near 200 frames a second; four
+processes with `--jobs 4` and a quarter of the list each reach about 340 with `--face`, and may share one `--out`.
+
+Detached jobs (each resumable: run the same line again after a stop; stop one with `kill $(cat ~/sign-data/logs/<job>.pid)`):
+
+```bash
+# INCLUDE (ISL words, Zenodo 4010759, CC BY 4.0): 44 zips, one at a time; splits from AI4Bharat/INCLUDE's lists
+nohup ~/sign-data/tools/include_run.sh > ~/sign-data/logs/include.log 2>&1 &
+# PopSign ASL v2.1 (CC BY 4.0): balanced sweeps (per sign 24 train / 4 val / 8 test a sweep, round the participants)
+nohup /usr/bin/python3 ~/sign-data/tools/popsign_sweeps.py > ~/sign-data/logs/popsign.log 2>&1 &
+```
+
+`fetch.py` downloads one big file over many range requests (Zenodo gives one connection ~0.2 MB/s);
+`fetch_many.py` downloads many small files at once. The line here tops out near 10 MB/s in all (4 connections to
+signdata.cc.gatech.edu already reach it), so jobs that download at the same time share it.
+
+FSboard (finger-spelling, CC BY 4.0, `https://signdata.cc.gatech.edu/data/fsboard/`): its published landmark shards
+are scrambled (see `signs/fsboard_source.py`), so `python -m signs.fsboard_source convert` refuses them; FSboard
+has to be read from `video_clips/` with `sign-extract`. `studio/fsboard_gap.py` compares Apple's landmarks with
+what survives of FSboard's MediaPipe ones on the same clips.
+
+Smoke check of the whole path on whatever INCLUDE has so far (a smoke number, not a result):
+
+```bash
+cd <repo>/Tools/signs
+~/sign-data/venv/bin/python -m signs.landmarks pack ~/sign-data/smoke/include
+~/sign-data/venv/bin/python -m signs.train_words --data ~/sign-data/smoke/include --language isl --output ~/sign-data/runs/smoke-include --epochs 15
+~/sign-data/venv/bin/python -m signs.evaluate --checkpoint ~/sign-data/runs/smoke-include/checkpoint-best.pt --split test
+~/sign-data/venv/bin/python -m signs.export_coreml --checkpoint ~/sign-data/runs/smoke-include/checkpoint-best.pt --output ~/sign-data/out/SignWordsISL-smoke.mlpackage
+PYTHONPATH=$PWD ~/sign-data/venv/bin/python studio/coreml_check.py ~/sign-data/runs/smoke-include/checkpoint-best.pt ~/sign-data/out/SignWordsISL-smoke.mlpackage 40
+```
+
+(`~/sign-data/smoke/include` is hard links to the INCLUDE clips listed in a copy of its manifest, so packing it
+doesn't disturb the running job.)
