@@ -17,6 +17,7 @@
 
 import ClickyCore
 import CoreGraphics
+import CoreImage
 import Foundation
 import Vision
 
@@ -66,13 +67,24 @@ final class VisionLandmarkReader {
 
     /// Runs the requests on one picture. `requestHandler` already carries the orientation that makes the picture
     /// upright, so every point comes back in the upright picture.
-    func readLandmarks(requestHandler: VNImageRequestHandler, pictureWidthOverHeight: Float) throws -> SignLandmarkFrame {
-        var requests: [VNRequest] = [handPoseRequest, bodyPoseRequest]
+    ///
+    /// `uprightPictureForPaddedBody`, when given, is the same picture upright; the body pose then runs on it placed at
+    /// the top middle of a bigger grey canvas instead of on the picture itself. Why: Vision's body pose finds nobody
+    /// in a close head-and-shoulders picture (a phone or laptop camera at arm's length: PopSign's selfie videos gave
+    /// shoulders in 0 of 67 frames), but finds the same person once they look smaller in a bigger picture (62–67 of 67).
+    func readLandmarks(requestHandler: VNImageRequestHandler, pictureWidthOverHeight: Float, uprightPictureForPaddedBody: CIImage? = nil) throws -> SignLandmarkFrame {
+        var requests: [VNRequest] = [handPoseRequest]
+        if uprightPictureForPaddedBody == nil { requests.append(bodyPoseRequest) }
         if let faceLandmarksRequest { requests.append(faceLandmarksRequest) }
         try requestHandler.perform(requests)
 
+        var pictureLocationFromBodyLocation: (CGPoint) -> CGPoint = { $0 }
+        if let uprightPictureForPaddedBody {
+            pictureLocationFromBodyLocation = try runBodyPoseOnPaddedCanvas(uprightPicture: uprightPictureForPaddedBody)
+        }
+
         var frame = SignLandmarkFrame()
-        let bodyPoints = biggestPersonBodyPoints()
+        let bodyPoints = biggestPersonBodyPoints(pictureLocationFromBodyLocation: pictureLocationFromBodyLocation)
         for (bodyPoint, landmarkPoint) in bodyPoints {
             frame[bodyPoint] = landmarkPoint
         }
@@ -132,9 +144,39 @@ final class VisionLandmarkReader {
 
     // MARK: Body
 
+    /// The canvas is twice as wide and 1.6 times as tall as the picture, with the picture at its top middle (the
+    /// person's lower body would be below a head-and-shoulders picture). Returns how to turn a Vision location on the
+    /// canvas back into one on the picture (both 0–1, y up).
+    private func runBodyPoseOnPaddedCanvas(uprightPicture: CIImage) throws -> (CGPoint) -> CGPoint {
+        // Vision looks at the body pose at a few hundred pixels anyway, so the picture is first made at most 640
+        // pixels on its long side: drawing a 5-megapixel phone frame into a canvas 3 times its size was the slow part.
+        let longestSide = max(uprightPicture.extent.width, uprightPicture.extent.height)
+        let shrinkScale = min(1, 640 / max(longestSide, 1))
+        let picture = uprightPicture
+            .transformed(by: CGAffineTransform(translationX: -uprightPicture.extent.minX, y: -uprightPicture.extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: shrinkScale, y: shrinkScale))
+        let pictureWidth = picture.extent.width
+        let pictureHeight = picture.extent.height
+        let canvasWidth = (pictureWidth * 2).rounded()
+        let canvasHeight = (pictureHeight * 1.6).rounded()
+        let pictureOffsetX = ((canvasWidth - pictureWidth) / 2).rounded()
+        let pictureOffsetY = canvasHeight - pictureHeight  // CoreImage's y is up, so this is the top of the canvas
+        let canvasRectangle = CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight)
+        let greyCanvas = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: canvasRectangle)
+        let paddedPicture = picture.transformed(by: CGAffineTransform(translationX: pictureOffsetX, y: pictureOffsetY)).composited(over: greyCanvas)
+        try VNImageRequestHandler(ciImage: paddedPicture, options: [:]).perform([bodyPoseRequest])
+        return { canvasLocation in
+            CGPoint(
+                x: (canvasLocation.x * canvasWidth - pictureOffsetX) / pictureWidth,
+                y: (canvasLocation.y * canvasHeight - pictureOffsetY) / pictureHeight
+            )
+        }
+    }
+
     /// The body points of the person whose seen points cover the most picture (the signer is nearly always the
-    /// biggest person; a small one in the background is ignored).
-    private func biggestPersonBodyPoints() -> [SignBodyPoint: SignLandmarkPoint] {
+    /// biggest person; a small one in the background is ignored). A point that lands outside the picture (possible
+    /// with the padded canvas) counts as not seen, since landmarks are 0–1 of the picture.
+    private func biggestPersonBodyPoints(pictureLocationFromBodyLocation: (CGPoint) -> CGPoint) -> [SignBodyPoint: SignLandmarkPoint] {
         var biggestPersonPoints: [SignBodyPoint: SignLandmarkPoint] = [:]
         var biggestPersonArea: Float = -1
         for observation in bodyPoseRequest.results ?? [] {
@@ -150,7 +192,9 @@ final class VisionLandmarkReader {
             var personPoints: [SignBodyPoint: SignLandmarkPoint] = [:]
             for (bodyPoint, visionJointName) in visionBodyJointNames {
                 guard let recognizedPoint = recognizedPoints[visionJointName], recognizedPoint.confidence >= minimumSeenJointConfidence else { continue }
-                let point = picturePoint(fromVisionLocation: recognizedPoint.location)
+                let pictureLocation = pictureLocationFromBodyLocation(recognizedPoint.location)
+                guard (0...1).contains(pictureLocation.x), (0...1).contains(pictureLocation.y) else { continue }
+                let point = picturePoint(fromVisionLocation: pictureLocation)
                 personPoints[bodyPoint] = SignLandmarkPoint(x: point.x, y: point.y, confidence: recognizedPoint.confidence)
             }
             biggestPersonPoints = personPoints

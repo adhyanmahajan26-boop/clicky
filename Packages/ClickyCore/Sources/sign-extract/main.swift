@@ -1,8 +1,11 @@
 //
 //  sign-extract: videos and photos to Apple Vision landmarks for Sign to text training (Tools/signs/SPEC.md).
 //
-//  sign-extract videos --list <file.tsv> --out <folder> [--face] [--jobs N] [--max-fps 30]
-//  sign-extract images --list <file.tsv> --out <folder> [--face] [--jobs N]
+//  sign-extract videos --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N] [--max-fps 30]
+//  sign-extract images --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N]
+//
+//  --pad-body runs the body pose on the picture placed in a bigger canvas: needed for close head-and-shoulders
+//  framing (phone selfies, laptop cameras), where Vision otherwise finds no body at all.
 //
 //  The list has `clip_id<TAB>absolute path` per line. Each clip becomes `<out>/<clip_id>.npy` ([T, 61, 3] float32)
 //  and a row in `<out>/extract.csv`; a clip whose `.npy` already exists is skipped, so a stopped run just starts
@@ -12,6 +15,7 @@
 //
 
 import ClickyCore
+import CoreImage
 import Foundation
 import Vision
 
@@ -25,6 +29,7 @@ struct ExtractionOptions {
     var listPath: String
     var outputFolderPath: String
     var readsFace: Bool
+    var padsPictureForBody: Bool
     var jobCount: Int
     var maximumFramesPerSecond: Double
 }
@@ -65,8 +70,8 @@ struct ClipExtractionResult {
 
 func printUsageAndExit() -> Never {
     print("""
-    usage: sign-extract videos --list <file.tsv> --out <folder> [--face] [--jobs N] [--max-fps 30]
-           sign-extract images --list <file.tsv> --out <folder> [--face] [--jobs N]
+    usage: sign-extract videos --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N] [--max-fps 30]
+           sign-extract images --list <file.tsv> --out <folder> [--face] [--pad-body] [--jobs N]
     The list has clip_id<TAB>absolute path per line.
     """)
     exit(2)
@@ -87,6 +92,7 @@ func parseOptions(arguments: [String]) -> ExtractionOptions {
     var listPath: String?
     var outputFolderPath: String?
     var readsFace = false
+    var padsPictureForBody = false
     var jobCount = defaultJobCount()
     var maximumFramesPerSecond = 30.0
     var argumentIndex = 1
@@ -100,6 +106,7 @@ func parseOptions(arguments: [String]) -> ExtractionOptions {
         case "--list": listPath = nextValue()
         case "--out": outputFolderPath = nextValue()
         case "--face": readsFace = true
+        case "--pad-body": padsPictureForBody = true
         case "--jobs":
             guard let parsedJobCount = Int(nextValue()), parsedJobCount > 0 else { printUsageAndExit() }
             jobCount = parsedJobCount
@@ -118,6 +125,7 @@ func parseOptions(arguments: [String]) -> ExtractionOptions {
         listPath: listPath,
         outputFolderPath: outputFolderPath,
         readsFace: readsFace,
+        padsPictureForBody: padsPictureForBody,
         jobCount: jobCount,
         maximumFramesPerSecond: maximumFramesPerSecond
     )
@@ -245,7 +253,8 @@ func extractOneClip(
         var framesSinceLastReport = 0
         let summary = try readVideoFrames(videoURL: sourceURL, maximumFramesPerSecond: options.maximumFramesPerSecond) { pixelBuffer, orientation, uprightWidthOverHeight in
             let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
-            frames.append(try landmarkReader.readLandmarks(requestHandler: requestHandler, pictureWidthOverHeight: uprightWidthOverHeight))
+            let uprightPicture = options.padsPictureForBody ? CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation) : nil
+            frames.append(try landmarkReader.readLandmarks(requestHandler: requestHandler, pictureWidthOverHeight: uprightWidthOverHeight, uprightPictureForPaddedBody: uprightPicture))
             framesSinceLastReport += 1
             if framesSinceLastReport == 30 {
                 progress.addFramesRead(framesSinceLastReport)
@@ -261,7 +270,8 @@ func extractOneClip(
         let photo = try loadStillPhoto(photoURL: sourceURL)
         let requestHandler = VNImageRequestHandler(cgImage: photo.image, orientation: photo.orientation, options: [:])
         let uprightWidthOverHeight = Float(photo.uprightWidth) / Float(max(1, photo.uprightHeight))
-        frames.append(try landmarkReader.readLandmarks(requestHandler: requestHandler, pictureWidthOverHeight: uprightWidthOverHeight))
+        let uprightPicture = options.padsPictureForBody ? CIImage(cgImage: photo.image).oriented(photo.orientation) : nil
+        frames.append(try landmarkReader.readLandmarks(requestHandler: requestHandler, pictureWidthOverHeight: uprightWidthOverHeight, uprightPictureForPaddedBody: uprightPicture))
         progress.addFramesRead(1)
         // A photo is a one-frame clip with no rate.
         framesPerSecond = 0
@@ -341,7 +351,7 @@ for clip in clipsWithBadIDs {
 }
 
 let jobCount = min(options.jobCount, max(1, clipsToDo.count))
-print("sign-extract \(options.mode.rawValue): \(allClips.count) listed, \(clipsAlreadyDone) already done, \(clipsToDo.count) to do, \(jobCount) jobs, face \(options.readsFace ? "on" : "off")"
+print("sign-extract \(options.mode.rawValue): \(allClips.count) listed, \(clipsAlreadyDone) already done, \(clipsToDo.count) to do, \(jobCount) jobs, face \(options.readsFace ? "on" : "off"), padded body \(options.padsPictureForBody ? "on" : "off")"
     + (options.mode == .videos ? ", max \(Int(options.maximumFramesPerSecond)) fps" : ""))
 
 let runStartTime = Date()
