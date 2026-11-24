@@ -198,8 +198,8 @@ struct BotsRootView: View {
                             if sortMode == "urgent" || laneFilter != nil {
                                 urgentList
                             } else {
-                                // Clicky's own team leaves with Clicky (Settings › Products).
-                                ForEach(store.rootSections.filter { products.isOn(.clicky) || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
+                                // Clicky's own team leaves with Clicky (Settings › Products), and with Vello on, since Pointer Assistant is Vello's hands then.
+                                ForEach(store.rootSections.filter { showsPointerAssistant || $0.leaderID != BotsStore.clickyID }) { section in teamSection(section, depth: 0) }
                                 unfiledBots
                                 newCategoryButton
                             }
@@ -208,7 +208,7 @@ struct BotsRootView: View {
                 }
                 .padding(.bottom, 10)
             }
-            if products.isOn(.clicky) {
+            if showsPointerAssistant {
                 clickyPill
                     .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 6)
             }
@@ -325,7 +325,7 @@ struct BotsRootView: View {
         let unfiled = store.bots.filter { bot in
             let item = BotsLayout.item(forBot: bot.id)
             return !filed.contains(item) && item != "clicky" && bot.id != Self.theoID && !isCEO(item) && !store.isPinned(item) && !store.isHidden(item)
-                && (products.isOn(.clicky) || bot.owner != BotsStore.clickyID)
+                && (showsPointerAssistant || bot.owner != BotsStore.clickyID)
         }
         if !unfiled.isEmpty {
             sectionTitle("Other bots", count: unfiled.count)
@@ -499,7 +499,7 @@ struct BotsRootView: View {
 
     /// Needs you, Failed, Working, Done, then Quiet (ready, asleep, off), each with a small mono heading and its count.
     @ViewBuilder private var urgentList: some View {
-        let shown = store.bots.filter { !$0.primary && $0.id != Self.theoID && !store.isHidden("bot:\($0.id)") && (products.isOn(.clicky) || $0.owner != BotsStore.clickyID) }
+        let shown = store.bots.filter { !$0.primary && $0.id != Self.theoID && !store.isHidden("bot:\($0.id)") && (showsPointerAssistant || $0.owner != BotsStore.clickyID) }
         let lanes = Dictionary(grouping: shown) { store.pixelState(of: $0).state.lane }
         ForEach(PixelState.Lane.allCases.filter { laneFilter == nil || $0 == laneFilter }, id: \.self) { lane in
             if let bots = lanes[lane], !bots.isEmpty {
@@ -790,6 +790,10 @@ struct BotsRootView: View {
         default: return false
         }
     }
+
+    /// Pointer Assistant's chat, team and pill: only while Vello is off. With Vello on, Pointer Assistant is Vello's hands
+    /// on calls (`VelloHands`), so there's one assistant to talk to.
+    private var showsPointerAssistant: Bool { products.isOn(.clicky) && !products.isOn(.theo) }
 
     @ViewBuilder private var detail: some View {
         if paneIsTheos && !products.isOn(.theo) {

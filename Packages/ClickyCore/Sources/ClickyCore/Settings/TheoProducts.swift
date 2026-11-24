@@ -23,7 +23,7 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
     public var title: String {
         switch self {
         case .dictation: return "Dictation"
-        case .clicky: return "Pointer Assistant"
+        case .clicky: return "Vello's hands"
         case .theo: return "Vello"
         }
     }
@@ -32,7 +32,7 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
     public var tagline: String {
         switch self {
         case .dictation: return "Talk in any app. Clean, punctuated words are typed where your cursor is."
-        case .clicky: return "A companion on your screen that sees what you see, points at things and answers out loud."
+        case .clicky: return "Vello sees your screen on a call, points at things, and clicks, types and scrolls for you while you talk."
         case .theo: return "Your own team of bots that chat, run routines and hand coding work to your agents."
         }
     }
@@ -46,8 +46,8 @@ public enum TheoProduct: String, CaseIterable, Identifiable, Sendable {
                     "Hindi, Hinglish and 10 Indian languages"]
         case .clicky:
             return ["Say \u{201C}hey Vello\u{201D} or hold Control + Option",
-                    "Flies to the button you need and circles it",
-                    "Draws boards and researches links for you"]
+                    "Flies to the button you need and points at it",
+                    "Opens apps, types and clicks while you talk"]
         case .theo:
             return ["Make bots from stencils, with teams and schedules",
                     "Hand a fix to Claude Code, Codex, Cursor and more",

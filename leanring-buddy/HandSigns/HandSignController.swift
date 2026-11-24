@@ -378,6 +378,10 @@ final class HandSignController: ObservableObject {
         case .vello:
             BotsStore.shared.send(SpelledTextMessage.forVello(text), command: text, to: "theo")
             lastLine = "To Vello: \(text)"
+        case .pointerAssistant where SpelledTextRouting.goesToVelloCall(target, velloIsOn: TheoProducts.isOn(.theo)):
+            // Vello on a call sees the screen and does it, the same as if it had been said.
+            TheoCallController.start(activates: false, openingWords: SpelledTextMessage.forVello(text))
+            lastLine = "To Vello on the call: \(text)"
         case .pointerAssistant:
             companionManager?.sendTranscriptToClaudeWithScreenshot(transcript: text)
             lastLine = "To Pointer Assistant: \(text)"
@@ -551,6 +555,9 @@ final class HandSignController: ObservableObject {
         case .vello:
             BotsStore.shared.send(messageForBrain, command: plainText, to: "theo")
             lastLine = "To Vello: \(plainText)"
+        case .pointerAssistant where SpelledTextRouting.goesToVelloCall(target, velloIsOn: TheoProducts.isOn(.theo)):
+            TheoCallController.start(activates: false, openingWords: messageForBrain)
+            lastLine = "To Vello on the call: \(plainText)"
         case .pointerAssistant:
             companionManager?.sendTranscriptToClaudeWithScreenshot(transcript: messageForBrain)
             lastLine = "To Pointer Assistant: \(plainText)"
@@ -779,7 +786,12 @@ final class HandSignController: ObservableObject {
             }
             return "Nothing is waiting for a yes or no."
         case .ask(let words):
-            companionManager.sendTranscriptToClaudeWithScreenshot(transcript: words)
+            // Pointer Assistant is Vello's hands: a sign's question goes to Vello on a call, which can see and act.
+            if VelloHands.answersEveryVoice {
+                TheoCallController.start(activates: false, openingWords: words)
+            } else {
+                companionManager.sendTranscriptToClaudeWithScreenshot(transcript: words)
+            }
             return words
         case .speak(let words):
             Task { try? await companionManager.speechOutputClient.speakText(words) }

@@ -63,7 +63,7 @@ enum SettingsTab {
             case .look: return "Look"
             case .devices: return "Devices"
             case .studio: return "VM screens"
-            case .clicky: return "Pointer Assistant"
+            case .clicky: return "Vello's hands"
             case .accessibility: return "Accessibility"
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
@@ -505,12 +505,12 @@ struct ClickySettingsContent: View {
                 HStack(spacing: 12) {
                     ClickyAvatar(size: 44)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Pointer Assistant").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
-                        Text("Sees your screens, points at things, draws boards, researches links with helpers, and acts on Vello's own screen.")
+                        Text("Vello's hands").font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
+                        Text("Vello sees your screens on a call, points at things, and clicks, types and scrolls for you while you talk. Push-to-talk and \u{201C}hey Vello\u{201D} start the call.")
                             .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 12)
-                    Toggle("Pointer Assistant on", isOn: Binding(get: { listens }, set: setClicky)).toggleStyle(.switch).labelsHidden()
+                    Toggle("Vello's hands on", isOn: Binding(get: { listens }, set: setClicky)).toggleStyle(.switch).labelsHidden()
                 }
                 .padding(14)
             }

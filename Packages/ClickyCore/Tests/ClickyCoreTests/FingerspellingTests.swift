@@ -311,6 +311,15 @@ struct FingerspellingTests {
         #expect(SpelledTextRouting.route(chosen: .vello, velloIsOn: false, pointerAssistantIsOn: false) == .send(.frontApp))
     }
 
+    @Test func screenWordsGoToVelloOnACallWhileVelloIsOn() {
+        // Pointer Assistant is Vello's hands: a signed "open Codex" reaches the call that sees and acts, as a spoken one does.
+        #expect(SpelledTextRouting.goesToVelloCall(.pointerAssistant, velloIsOn: true))
+        #expect(!SpelledTextRouting.goesToVelloCall(.pointerAssistant, velloIsOn: false))
+        #expect(!SpelledTextRouting.goesToVelloCall(.vello, velloIsOn: true))
+        #expect(!SpelledTextRouting.goesToVelloCall(.frontApp, velloIsOn: true))
+        #expect(SpelledTextDestination.pointerAssistant.displayName.contains("Vello"))
+    }
+
     @Test func spellAndSignsModesWorkWithoutPointerAssistant() {
         #expect(HandSignMode.control.needsPointerAssistant)
         #expect(HandSignMode.speakForMe.needsPointerAssistant)

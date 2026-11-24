@@ -26,8 +26,9 @@ final class ActionInputMonitor {
     var isArmed: Bool { logic.isArmed }
 
     /// `excusingMouseMovesUntilUptime`: right after the owner clicked the confirm card, moving the mouse away doesn't cancel.
-    func arm(excusingMouseMovesUntilUptime: TimeInterval? = nil) {
-        logic.arm(excusingMouseMovesUntilUptime: excusingMouseMovesUntilUptime)
+    /// `mouseTolerance`: how far the mouse may move before it cancels (more while Vello works on a call).
+    func arm(excusingMouseMovesUntilUptime: TimeInterval? = nil, mouseTolerance: CGFloat = ActionCancelLogic.mouseJitterTolerance) {
+        logic.arm(excusingMouseMovesUntilUptime: excusingMouseMovesUntilUptime, mouseTolerance: mouseTolerance)
         guard monitors.isEmpty else { return }
         if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: Self.watchedEvents, handler: { [weak self] event in
             let physicalEvent = Self.physicalEvent(from: event)
