@@ -71,15 +71,18 @@ struct SignLiveReaderTests {
     private static let rightOfMiddleWristX: Float = 0.7
 
     /// Shoulders at y 0.45, 0.2 apart (the rest line is at 0.75) and, when `wristX` is given, a right hand with
-    /// every joint seen, raised, its wrist at that x.
-    private static func frame(wristX: Float?) -> SignLandmarkFrame {
+    /// every joint seen, raised, its wrist at that x. Its fingertips bob 0.04 on odd frames, as a signing hand moves
+    /// (the stretch finder ignores a hand lying still); the wrist stays put.
+    private static func frame(wristX: Float?, frameNumber: Int = 0) -> SignLandmarkFrame {
         var frame = SignLandmarkFrame()
         frame[SignBodyPoint.leftShoulder] = SignLandmarkPoint(x: 0.6, y: 0.45, confidence: 0.9)
         frame[SignBodyPoint.rightShoulder] = SignLandmarkPoint(x: 0.4, y: 0.45, confidence: 0.9)
         if let wristX {
+            let fingertips: Set<HandJoint> = [.thumbTip, .indexTip, .middleTip, .ringTip, .littleTip]
             for (jointNumber, joint) in HandJoint.allCases.enumerated() {
                 let offset = Float(jointNumber) * 0.002
-                frame.setHandJoint(side: .right, joint: joint, point: SignLandmarkPoint(x: wristX + offset, y: raisedWristY - offset, confidence: 0.9))
+                let bob: Float = fingertips.contains(joint) && frameNumber % 2 == 1 ? 0.04 : 0
+                frame.setHandJoint(side: .right, joint: joint, point: SignLandmarkPoint(x: wristX + offset, y: raisedWristY - offset - bob, confidence: 0.9))
             }
         }
         return frame
@@ -108,7 +111,7 @@ struct SignLiveReaderTests {
         for part in plan {
             for _ in 0..<part.count {
                 let time = Double(frameNumber) / framesPerSecond
-                events += reader.observeAndReadNow(frame(wristX: part.wristX), at: time, scoring: scoring)
+                events += reader.observeAndReadNow(frame(wristX: part.wristX, frameNumber: frameNumber), at: time, scoring: scoring)
                 frameNumber += 1
             }
         }
@@ -195,7 +198,7 @@ struct SignLiveReaderTests {
         let plan = [Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(25), Self.sign(at: Self.rightOfMiddleWristX, 30), Self.rest(30)]
         for part in plan {
             for _ in 0..<part.count {
-                for event in reader.observe(Self.frame(wristX: part.wristX), at: Double(frameNumber) / 30) {
+                for event in reader.observe(Self.frame(wristX: part.wristX, frameNumber: frameNumber), at: Double(frameNumber) / 30) {
                     if case .readingNeeded(let job) = event { jobs.append(job) }
                 }
                 frameNumber += 1
@@ -225,7 +228,7 @@ struct SignLiveReaderTests {
         var frameNumber = 0
         for part in [Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)] {
             for _ in 0..<part.count {
-                for event in otherReader.observe(Self.frame(wristX: part.wristX), at: Double(frameNumber) / 30) {
+                for event in otherReader.observe(Self.frame(wristX: part.wristX, frameNumber: frameNumber), at: Double(frameNumber) / 30) {
                     if case .readingNeeded(let job) = event { otherJobs.append(job) }
                 }
                 frameNumber += 1
@@ -300,7 +303,7 @@ struct SignLiveReaderTests {
         var frameNumber = 0
         for part in [Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)] {
             for _ in 0..<part.count {
-                for event in reader.observe(Self.frame(wristX: part.wristX), at: Double(frameNumber) / 30) {
+                for event in reader.observe(Self.frame(wristX: part.wristX, frameNumber: frameNumber), at: Double(frameNumber) / 30) {
                     if case .readingNeeded(let job) = event { jobs.append(job) }
                 }
                 frameNumber += 1
@@ -364,7 +367,7 @@ struct SignLiveReaderTests {
         }
         for step in 0..<30 {
             let travellingWristX = 0.2 + Float(step) * 0.01
-            _ = reader.observeAndReadNow(Self.frame(wristX: travellingWristX), at: Double(frameNumber) / 30, scoring: scorer)
+            _ = reader.observeAndReadNow(Self.frame(wristX: travellingWristX, frameNumber: frameNumber), at: Double(frameNumber) / 30, scoring: scorer)
             frameNumber += 1
         }
         for _ in 0..<30 {

@@ -4,8 +4,12 @@
 //
 //  Sign to text, live: where one sign (or one finger-spelled word) starts and ends in the camera's stream of
 //  frames. Signing happens with the hands up in front of the body; between signs the hands drop to rest, below
-//  the chest. So a stretch starts once a hand has been raised for a couple of frames, and ends once no hand has
-//  been raised for a short while. Each stretch is then read on its own (SignFeatures, the models, SignReading).
+//  the chest, or lie still (on a desk, in the lap). So a stretch starts once a raised wrist has been moving for a
+//  couple of frames, and ends once no wrist has been raised and moving for a short while. Each stretch is then read
+//  on its own (SignFeatures, the models, SignReading).
+//
+//  A wrist is the hand's own wrist when Vision saw the hand, else the body pose's wrist on that side: in a fast sign
+//  Vision finds the whole hand in only a few frames, but the body pose keeps the wrist all through.
 //
 //  Pure Foundation: the app feeds frames and their times in.
 //
@@ -34,15 +38,24 @@ public struct SignStretchSettings: Equatable, Sendable {
     /// A stretch is cut here even with the hands still up, so one reading never waits forever (and memory stays
     /// bounded); the finger-spelling model reads at most about 8.5 s anyway.
     public var longestStretchSeconds: Double
+    /// A raised hand only counts while it has moved lately: over the last `stillSeconds` its wrist or, when Vision saw
+    /// the hand, one of its fingertips has gone further than `stillDistanceInShoulderWidths` (0.03 picture heights
+    /// before shoulders were ever seen). Hands lying still above the rest line (on a desk, holding a phone) then start
+    /// nothing, and a sign held without moving ends its stretch once it has been still this long. Fingertips count
+    /// because finger-spelling moves the fingers while the wrist stays nearly put.
+    public var stillSeconds: Double
+    public var stillDistanceInShoulderWidths: Double
 
     public init(
         restLineBelowShouldersInShoulderWidths: Double = 1.5,
         framesToStart: Int = 2,
         endGapSeconds: Double = 0.4,
-        leadInFrames: Int = 4,
+        leadInFrames: Int = 6,
         leadOutFrames: Int = 2,
         shortestStretchSeconds: Double = 0.25,
-        longestStretchSeconds: Double = 12
+        longestStretchSeconds: Double = 12,
+        stillSeconds: Double = 1.0,
+        stillDistanceInShoulderWidths: Double = 0.15
     ) {
         self.restLineBelowShouldersInShoulderWidths = restLineBelowShouldersInShoulderWidths
         self.framesToStart = framesToStart
@@ -51,6 +64,8 @@ public struct SignStretchSettings: Equatable, Sendable {
         self.leadOutFrames = leadOutFrames
         self.shortestStretchSeconds = shortestStretchSeconds
         self.longestStretchSeconds = longestStretchSeconds
+        self.stillSeconds = stillSeconds
+        self.stillDistanceInShoulderWidths = stillDistanceInShoulderWidths
     }
 }
 
@@ -115,6 +130,19 @@ public struct SignStretchFinder: Sendable {
 
     /// Where the rest line was last measured (picture y, down), nil before shoulders were ever seen.
     private var lastKnownRestLineY: Double? = nil
+    /// The last shoulder width measured (picture heights), for how far a wrist must move to count as moving.
+    private var lastKnownShoulderWidth: Double? = nil
+
+    /// Where one side's hand was at one moment: the wrist first, then the five fingertips when the hand was seen.
+    private struct HandPlaceSample: Equatable, Sendable {
+        var time: Double
+        var points: [SignPicturePoint]
+    }
+
+    /// Each side's hand over the last `stillSeconds` (oldest first), to tell a moving hand from one lying still.
+    private var recentHandPlacesBySide: [SignSide: [HandPlaceSample]] = [:]
+
+    private static let fingertipJoints: [HandJoint] = [.thumbTip, .indexTip, .middleTip, .ringTip, .littleTip]
     private var lastStretchEndTime: Double? = nil
 
     public init(settings: SignStretchSettings = SignStretchSettings(), pictureWidth: Double = 0, pictureHeight: Double = 0) {
@@ -140,6 +168,8 @@ public struct SignStretchFinder: Sendable {
         lastRaisedFrameIndex = 0
         firstRaisedFrameIndex = 0
         lastKnownRestLineY = nil
+        lastKnownShoulderWidth = nil
+        recentHandPlacesBySide = [:]
         lastStretchEndTime = nil
     }
 
@@ -154,7 +184,7 @@ public struct SignStretchFinder: Sendable {
     /// Takes the next frame (times in seconds, rising) and says what happened, if anything.
     public mutating func observe(_ frame: SignLandmarkFrame, at time: Double) -> SignStretchEvent? {
         updateRestLine(from: frame)
-        let timedFrame = TimedFrame(frame: frame, time: time, hasARaisedHand: hasARaisedHand(in: frame))
+        let timedFrame = TimedFrame(frame: frame, time: time, hasARaisedHand: hasARaisedMovingWrist(in: frame, at: time))
 
         if !stretchIsRunning {
             recentIdleFrames.append(timedFrame)
@@ -224,19 +254,64 @@ public struct SignStretchFinder: Sendable {
         let shoulderWidth = (horizontalDistance * horizontalDistance + verticalDistance * verticalDistance).squareRoot()
         let shoulderMidpointY = (Double(leftShoulder.y) + Double(rightShoulder.y)) / 2
         lastKnownRestLineY = shoulderMidpointY + settings.restLineBelowShouldersInShoulderWidths * shoulderWidth
+        lastKnownShoulderWidth = shoulderWidth
     }
 
-    /// A hand is raised when it counts as seen and its wrist is above the rest line (y is down, so above is a
-    /// smaller y). Before any shoulders were seen there is no line, so every seen hand counts.
-    private func hasARaisedHand(in frame: SignLandmarkFrame) -> Bool {
+    /// One side's hand places: the hand's own wrist and its seen fingertips when the hand counts as seen, else the body
+    /// pose's wrist on that side when it was seen; nil when neither. The wrist is always first.
+    private func handPlaces(in frame: SignLandmarkFrame, side: SignSide) -> [SignPicturePoint]? {
+        if SignFeatures.handIsSeen(in: frame, side: side) {
+            let handWrist = frame.handJoint(side: side, joint: .wrist)
+            var places = [SignPicturePoint(x: handWrist.x, y: handWrist.y)]
+            for fingertip in Self.fingertipJoints {
+                let fingertipPoint = frame.handJoint(side: side, joint: fingertip)
+                // A fingertip not seen keeps its slot (at the wrist), so slots line up from frame to frame.
+                places.append(fingertipPoint.isSeen ? SignPicturePoint(x: fingertipPoint.x, y: fingertipPoint.y) : places[0])
+            }
+            return places
+        }
+        let bodyWrist = frame[side == .right ? SignBodyPoint.rightWrist : SignBodyPoint.leftWrist]
+        guard bodyWrist.isSeen else { return nil }
+        return [SignPicturePoint(x: bodyWrist.x, y: bodyWrist.y)]
+    }
+
+    /// True when some side's wrist is above the rest line (y is down, so above is a smaller y; before any shoulders
+    /// were seen there is no line and any wrist counts) and that hand has moved lately (`stillSeconds`,
+    /// `stillDistanceInShoulderWidths`). Keeps each side's recent hand places as it goes.
+    private mutating func hasARaisedMovingWrist(in frame: SignLandmarkFrame, at time: Double) -> Bool {
+        let movingDistance = settings.stillDistanceInShoulderWidths * (lastKnownShoulderWidth ?? 0.2)
+        let pictureWidthOverHeight = (pictureWidth > 0 && pictureHeight > 0) ? pictureWidth / pictureHeight : 1.0
+        func distance(_ firstPoint: SignPicturePoint, _ secondPoint: SignPicturePoint) -> Double {
+            let horizontalDistance = Double(firstPoint.x - secondPoint.x) * pictureWidthOverHeight
+            let verticalDistance = Double(firstPoint.y - secondPoint.y)
+            return (horizontalDistance * horizontalDistance + verticalDistance * verticalDistance).squareRoot()
+        }
+
+        var someRaisedHandIsMoving = false
         for side in SignSide.allCases {
-            guard SignFeatures.handIsSeen(in: frame, side: side) else { continue }
-            guard let restLineY = lastKnownRestLineY else { return true }
-            let wristY = Double(frame.handJoint(side: side, joint: .wrist).y)
-            if wristY < restLineY {
-                return true
+            var samples = recentHandPlacesBySide[side] ?? []
+            samples.removeAll { time - $0.time > settings.stillSeconds }
+            guard let places = handPlaces(in: frame, side: side) else {
+                recentHandPlacesBySide[side] = samples
+                continue
+            }
+            samples.append(HandPlaceSample(time: time, points: places))
+            recentHandPlacesBySide[side] = samples
+
+            let isRaised = lastKnownRestLineY.map { Double(places[0].y) < $0 } ?? true
+            guard isRaised else { continue }
+            // A hand that has only just come into view counts as moving (it got there somehow); one lying still is
+            // found out from the next frame on, so it never starts a stretch (that takes `framesToStart` in a row).
+            let hasJustAppeared = samples.count == 1
+            let hasMoved = hasJustAppeared || samples.contains { sample in
+                // Fingertips are compared only between two frames where the hand itself was seen; the wrist always.
+                let comparedCount = sample.points.count == places.count ? places.count : 1
+                return (0..<comparedCount).contains { pointIndex in distance(sample.points[pointIndex], places[pointIndex]) > movingDistance }
+            }
+            if hasMoved {
+                someRaisedHandIsMoving = true
             }
         }
-        return false
+        return someRaisedHandIsMoving
     }
 }

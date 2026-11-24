@@ -17,8 +17,9 @@ struct SignStretchesTests {
     }
 
     /// A frame whose nose x carries its number (number / 1000), with the shoulders (unless left out) and, when
-    /// `wristY` is given, a right hand with every joint seen and its wrist at that height.
-    private static func frame(number frameNumber: Int, wristY: Float?, shoulders: Bool = true) -> SignLandmarkFrame {
+    /// `wristY` is given, a right hand with every joint seen and its wrist at that height. The fingertips bob 0.04 up
+    /// and down from frame to frame (a signing hand moves; the finder ignores a hand lying still), unless `stillHand`.
+    private static func frame(number frameNumber: Int, wristY: Float?, shoulders: Bool = true, stillHand: Bool = false) -> SignLandmarkFrame {
         var frame = SignLandmarkFrame()
         frame[SignBodyPoint.nose] = SignLandmarkPoint(x: Float(frameNumber) / 1000, y: 0.3, confidence: 0.9)
         if shoulders {
@@ -26,9 +27,12 @@ struct SignStretchesTests {
             frame[SignBodyPoint.rightShoulder] = SignLandmarkPoint(x: 0.4, y: 0.45, confidence: 0.9)
         }
         if let wristY {
+            let fingertips: Set<HandJoint> = [.thumbTip, .indexTip, .middleTip, .ringTip, .littleTip]
+            let fingertipBob: Float = (stillHand || frameNumber % 2 == 0) ? 0 : 0.04
             for (jointNumber, joint) in HandJoint.allCases.enumerated() {
                 let offset = Float(jointNumber) * 0.002
-                frame.setHandJoint(side: .right, joint: joint, point: SignLandmarkPoint(x: 0.45 + offset, y: wristY - offset, confidence: 0.9))
+                let bob = fingertips.contains(joint) ? fingertipBob : 0
+                frame.setHandJoint(side: .right, joint: joint, point: SignLandmarkPoint(x: 0.45 + offset, y: wristY - offset - bob, confidence: 0.9))
             }
         }
         return frame
@@ -97,9 +101,9 @@ struct SignStretchesTests {
             Issue.record("expected an ended stretch, got \(observedEvents[1].event)")
             return
         }
-        // 4 lead-in frames (28–31), the 32 raised ones, then 2 lead-out frames (64, 65), not the whole gap.
-        #expect(stretch.frames.map { Self.frameNumber(of: $0) } == Array(28...65))
-        #expect(stretch.startTime == Self.time(ofFrame: 28))
+        // 6 lead-in frames (26–31), the 32 raised ones, then 2 lead-out frames (64, 65), not the whole gap.
+        #expect(stretch.frames.map { Self.frameNumber(of: $0) } == Array(26...65))
+        #expect(stretch.startTime == Self.time(ofFrame: 26))
         #expect(stretch.endTime == Self.time(ofFrame: 65))
         #expect(!finder.isInStretch)
         #expect(finder.secondsSinceLastStretchEnded(at: Self.time(ofFrame: 81)) == Self.time(ofFrame: 16))
@@ -125,6 +129,102 @@ struct SignStretchesTests {
         }
         #expect(endedStretch.startTime == endedStretch.frameTimes.first)
         #expect(endedStretch.endTime == endedStretch.frameTimes.last)
+    }
+
+    // MARK: Wrists from the body pose, and hands that aren't signing
+
+    /// Shoulders as usual; the body pose's right wrist at (bodyWristX, bodyWristY) when given; a fully seen right hand
+    /// at (handX, handY) with still fingers when given (Vision often misses the hand in a fast sign).
+    private static func bodyFrame(
+        number frameNumber: Int,
+        bodyWrist: (x: Float, y: Float)?,
+        hand: (x: Float, y: Float)? = nil
+    ) -> SignLandmarkFrame {
+        var frame = Self.frame(number: frameNumber, wristY: nil)
+        if let bodyWrist {
+            frame[SignBodyPoint.rightWrist] = SignLandmarkPoint(x: bodyWrist.x, y: bodyWrist.y, confidence: 0.8)
+        }
+        if let hand {
+            for (jointNumber, joint) in HandJoint.allCases.enumerated() {
+                let offset = Float(jointNumber) * 0.002
+                frame.setHandJoint(side: .right, joint: joint, point: SignLandmarkPoint(x: hand.x + offset, y: hand.y - offset, confidence: 0.9))
+            }
+        }
+        return frame
+    }
+
+    private static func feedFrames(_ frames: [SignLandmarkFrame], into finder: inout SignStretchFinder) -> [ObservedEvent] {
+        var observedEvents: [ObservedEvent] = []
+        for (frameNumber, frame) in frames.enumerated() {
+            if let event = finder.observe(frame, at: Self.time(ofFrame: frameNumber)) {
+                observedEvents.append(ObservedEvent(frameNumber: frameNumber, event: event))
+            }
+        }
+        return observedEvents
+    }
+
+    @Test func aFastSignSeenMostlyThroughTheBodyWristIsOneStretch() {
+        // Rest (wrist low), then a second of signing where the hand itself is seen only every eighth frame but the
+        // body pose's wrist is there throughout, swinging between two places, then rest again.
+        var frames: [SignLandmarkFrame] = (0..<20).map { Self.bodyFrame(number: $0, bodyWrist: (0.45, 0.9)) }
+        for frameNumber in 20..<52 {
+            let wristX: Float = frameNumber % 6 < 3 ? 0.40 : 0.52
+            let handSeen = frameNumber % 8 == 0
+            frames.append(Self.bodyFrame(number: frameNumber, bodyWrist: (wristX, 0.5), hand: handSeen ? (wristX, 0.5) : nil))
+        }
+        frames += (52..<100).map { Self.bodyFrame(number: $0, bodyWrist: (0.45, 0.9)) }
+        var finder = SignStretchFinder()
+        let observedEvents = Self.feedFrames(frames, into: &finder)
+        let endedStretches = observedEvents.compactMap { Self.endedStretch($0) }
+        #expect(endedStretches.count == 1)
+        #expect(observedEvents.filter { $0.event == .started }.count == 1)
+        let stretchFrameNumbers = endedStretches.first.map { $0.frames.map { Self.frameNumber(of: $0) } } ?? []
+        #expect(stretchFrameNumbers.first.map { $0 <= 21 } == true)
+        #expect(stretchFrameNumbers.last.map { $0 >= 51 } == true)
+    }
+
+    @Test func handsLyingStillOnADeskAboveTheRestLineStartNothing() {
+        // Seated at a desk: hands rest above the rest line (y 0.6 < 0.75) for 20 s, with Vision's small jitter.
+        var finder = SignStretchFinder()
+        var frames: [SignLandmarkFrame] = []
+        for frameNumber in 0..<640 {
+            let jitter: Float = Float((frameNumber * 7) % 5) * 0.002
+            frames.append(Self.bodyFrame(number: frameNumber, bodyWrist: (0.45 + jitter, 0.6), hand: (0.45 + jitter, 0.6 - jitter)))
+        }
+        let observedEvents = Self.feedFrames(frames, into: &finder)
+        #expect(observedEvents.isEmpty)
+    }
+
+    @Test func scratchingTheFaceOnceIsAtMostTwoStretchesAndRestingAfterwardsAddsNone() {
+        // Hand on the desk 3 s, up to the face and scratching for 1.5 s, back on the desk for 10 s.
+        var frames: [SignLandmarkFrame] = []
+        for frameNumber in 0..<96 { frames.append(Self.bodyFrame(number: frameNumber, bodyWrist: (0.45, 0.62), hand: (0.45, 0.62))) }
+        for frameNumber in 96..<144 {
+            let scratch: Float = frameNumber % 4 < 2 ? 0 : 0.03
+            frames.append(Self.bodyFrame(number: frameNumber, bodyWrist: (0.5 + scratch, 0.3), hand: (0.5 + scratch, 0.3)))
+        }
+        for frameNumber in 144..<464 { frames.append(Self.bodyFrame(number: frameNumber, bodyWrist: (0.45, 0.62), hand: (0.45, 0.62))) }
+        var finder = SignStretchFinder()
+        let observedEvents = Self.feedFrames(frames, into: &finder)
+        // At most two: the hand going up and scratching, and perhaps the hand coming back down onto the desk (it
+        // moves above the rest line). Then nothing at all for the 10 s it lies there.
+        #expect(observedEvents.filter { $0.event == .started }.count <= 2)
+        #expect(observedEvents.allSatisfy { $0.frameNumber < 144 + 64 })
+        #expect(!finder.isInStretch)
+    }
+
+    @Test func aSignHeldWithoutMovingEndsAfterBeingStillForTheStillTime() {
+        // Raised and moving for half a second, then held without any movement: the stretch ends once the hand has been
+        // still for `stillSeconds` and then the end gap has passed, not at the longest length.
+        var finder = SignStretchFinder()
+        var frames: [SignLandmarkFrame] = (0..<10).map { Self.frame(number: $0, wristY: Self.restingWristY) }
+        frames += (10..<26).map { Self.frame(number: $0, wristY: Self.raisedWristY) }
+        frames += (26..<200).map { Self.frame(number: $0, wristY: Self.raisedWristY, stillHand: true) }
+        let observedEvents = Self.feedFrames(frames, into: &finder)
+        let endedEvent = observedEvents.first { Self.endedStretch($0) != nil }
+        let settings = SignStretchSettings()
+        let latestEndFrame = 26 + Int(((settings.stillSeconds + settings.endGapSeconds) / Self.frameInterval).rounded(.up)) + 2
+        #expect(endedEvent.map { $0.frameNumber <= latestEndFrame } == true)
     }
 
     @Test func isInStretchFollowsTheStretch() {
@@ -209,8 +309,8 @@ struct SignStretchesTests {
         var finder = SignStretchFinder()
         let observedEvents = Self.feed(Self.repeated(Self.restingWristY, 200), into: &finder)
         #expect(observedEvents.isEmpty)
-        // Memory stays bounded while idle: the lead-in ring only.
-        #expect(finder.heldFrameCount <= 6)
+        // Memory stays bounded while idle: the lead-in ring only (2 frames to start + 6 lead-in).
+        #expect(finder.heldFrameCount <= 8)
     }
 
     @Test func theRestLineCountsAcrossAsWiderInAWidePicture() {

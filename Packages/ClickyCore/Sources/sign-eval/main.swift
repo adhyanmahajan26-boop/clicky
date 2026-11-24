@@ -4,7 +4,7 @@
 //  second, features, fitting) and the Core ML models (`SignCoreMLScorer`), frame by frame with the clip's own times.
 //
 //  sign-eval clips --manifest <manifest.csv> --clips <folder of .npy> --models <folder> --language asl|isl
-//                  [--split test] [--whole-clip] [--limit N]
+//                  [--split test] [--whole-clip] [--limit N] [--stretch name=value ...]
 //      Each clip of that language (and split) in the manifest is fed as if from the camera at the manifest's fps.
 //      Prints how many clips were read as a word, how many of those were right, how many were right overall, how
 //      many were "unclear", and the 20 most common mix-ups. --whole-clip reads each clip as one sign instead of
@@ -45,6 +45,31 @@ struct EvaluationOptions {
     var split: String?
     var readsWholeClip: Bool
     var clipLimit: Int?
+    /// `--stretch name=value` (repeatable) changes one of `SignStretchSettings`' numbers, to try settings without a build.
+    var stretchSettings = SignStretchSettings()
+}
+
+/// Sets one stretch-finding number by name, as `--stretch` gives it. Unknown names stop the run.
+func applyStretchSetting(_ assignment: String, to settings: inout SignStretchSettings) {
+    let parts = assignment.split(separator: "=", maxSplits: 1).map(String.init)
+    guard parts.count == 2, let value = Double(parts[1]) else {
+        print("--stretch needs name=value, got \(assignment)")
+        exit(2)
+    }
+    switch parts[0] {
+    case "restLineBelowShouldersInShoulderWidths": settings.restLineBelowShouldersInShoulderWidths = value
+    case "framesToStart": settings.framesToStart = Int(value)
+    case "endGapSeconds": settings.endGapSeconds = value
+    case "leadInFrames": settings.leadInFrames = Int(value)
+    case "leadOutFrames": settings.leadOutFrames = Int(value)
+    case "shortestStretchSeconds": settings.shortestStretchSeconds = value
+    case "longestStretchSeconds": settings.longestStretchSeconds = value
+    case "stillSeconds": settings.stillSeconds = value
+    case "stillDistanceInShoulderWidths": settings.stillDistanceInShoulderWidths = value
+    default:
+        print("unknown stretch setting \(parts[0])")
+        exit(2)
+    }
 }
 
 func parseOptions(arguments: [String]) -> EvaluationOptions {
@@ -57,6 +82,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
     var split: String?
     var readsWholeClip = false
     var clipLimit: Int?
+    var stretchSettings = SignStretchSettings()
     var argumentIndex = 1
     func nextValue() -> String {
         argumentIndex += 1
@@ -74,6 +100,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
             language = parsedLanguage
         case "--split": split = nextValue()
         case "--whole-clip": readsWholeClip = true
+        case "--stretch": applyStretchSetting(nextValue(), to: &stretchSettings)
         case "--limit":
             guard let parsedLimit = Int(nextValue()), parsedLimit > 0 else { printUsageAndExit() }
             clipLimit = parsedLimit
@@ -99,7 +126,8 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         language: language,
         split: split,
         readsWholeClip: readsWholeClip,
-        clipLimit: clipLimit
+        clipLimit: clipLimit,
+        stretchSettings: stretchSettings
     )
 }
 
@@ -223,9 +251,10 @@ func readClipLikeTheCamera(
     pictureWidth: Double,
     pictureHeight: Double,
     language: SignLanguage,
-    scorer: SignCoreMLScorer
+    scorer: SignCoreMLScorer,
+    stretchSettings: SignStretchSettings = SignStretchSettings()
 ) -> [SignLiveLineEntry] {
-    var reader = SignLiveReader(language: language, pictureWidth: pictureWidth, pictureHeight: pictureHeight, autoSendSeconds: 0)
+    var reader = SignLiveReader(language: language, pictureWidth: pictureWidth, pictureHeight: pictureHeight, autoSendSeconds: 0, stretchSettings: stretchSettings)
     var frameNumber = 0
     for frame in frames {
         _ = reader.observeAndReadNow(frame, at: Double(frameNumber) / framesPerSecond, scoring: scorer)
@@ -294,7 +323,7 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
         let framesPerSecond = row.framesPerSecond > 0 ? row.framesPerSecond : SignFrameRate.modelFramesPerSecond
         let entries = options.readsWholeClip
             ? readWholeClip(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer)
-            : readClipLikeTheCamera(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer)
+            : readClipLikeTheCamera(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer, stretchSettings: options.stretchSettings)
 
         let line = SignedLine(tokens: entries.compactMap { $0.token })
         if entries.count > 1 { clipsReadAsMoreThanOneSign += 1 }
