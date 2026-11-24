@@ -516,14 +516,41 @@ extension BotsStore {
         // Orders take turns: each one waits for the one before it to have finished its steps and reported. Two orders
         // used to wait on the same "is Pointer Assistant free" check, both started the moment it was, and the second
         // cancelled the first or was mixed into its steps ("open Safari", then "search this in Safari").
-        let thisOrdersTicket = ClickyOrderTicket(normalizedOrder: normalizedOrder)
+        let newestOwnerLine = ownerWords.map(Self.latestLine(of:)) ?? ""
+        let thisOrdersTicket = ClickyOrderTicket(normalizedOrder: normalizedOrder, newestOwnerLine: newestOwnerLine)
         let ordersAhead = Self.clickyOrderLine.filter { !$0.isDone }
-        Self.clickyOrderLine = ordersAhead + [thisOrdersTicket]
+        // The owner said something new since those orders were given: theirs is the newest instruction, so the older
+        // orders are dropped instead of being finished first (it used to carry on with the old steps for minutes).
+        // Orders from the same words ("open Safari", then "search this") still take turns.
+        let replacedOrders = ordersAhead.filter { ClickyOrderReplacement.replaces(newOwnerLine: newestOwnerLine, earlierOwnerLine: $0.newestOwnerLine) }
+        if !replacedOrders.isEmpty {
+            replacedOrders.forEach { $0.isReplaced = true }
+            print("🧭 Pointer Assistant: \(replacedOrders.count) older order(s) dropped for a newer instruction")
+            if replacedOrders.contains(where: \.hasStarted) {
+                // A turn still answering an older order is stopped, then the steps it started on screen.
+                if manager.currentAnswerSession?.theoOrder != nil, manager.voiceState != .idle { manager.stopBuddySpeechAndCancelResponse() }
+                if actions.isActive {
+                    actions.cancel(reason: ActionTaskController.replacedByNewerRequestReason, stopsSpeech: false, speaksLine: false)
+                }
+            }
+        }
+        Self.clickyOrderLine = ordersAhead.filter { !$0.isReplaced } + [thisOrdersTicket]
         Task { [weak self] in
             let giveUpDate = Date().addingTimeInterval(Self.longestOrderWaitSeconds)
-            while Date() < giveUpDate, ordersAhead.contains(where: { !$0.isDone }) {
+            while Date() < giveUpDate, ordersAhead.contains(where: { !$0.isDone && !$0.isReplaced }) {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
+            // A newer instruction came while this one was waiting its turn: it never starts.
+            let dropIfReplaced: () -> Bool = { [weak self] in
+                guard thisOrdersTicket.isReplaced else { return false }
+                thisOrdersTicket.isDone = true
+                let line = "Dropped: a newer instruction replaced it."
+                print("🧭 Pointer Assistant order dropped before it started: \(order.prefix(80))")
+                self?.finish(job.id, result: line, succeeded: true)
+                onReport?(line)
+                return true
+            }
+            if dropIfReplaced() { return }
             // A turn the owner has going isn't cut off, and neither are the steps of an earlier task still running on
             // screen. A turn that looks stuck (no answer for a while) isn't waited on for the full three minutes.
             let ownerTurnGiveUpDate = Date().addingTimeInterval(Self.longestWaitForOwnersTurnSeconds)
@@ -531,9 +558,11 @@ extension BotsStore {
                   (manager.voiceState != .idle && Date() < ownerTurnGiveUpDate) || (actions.isActive && !actions.isAwaitingConfirmation) {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
+            if dropIfReplaced() { return }
             // The owner moved on from a step that was waiting for their yes.
             if actions.isAwaitingConfirmation { actions.cancel(reason: "a new order came in", stopsSpeech: false, speaksLine: false) }
             guard let self else { thisOrdersTicket.isDone = true; return }
+            thisOrdersTicket.hasStarted = true
             self.setPhase(.working, job.id)
             print("🧭 Pointer Assistant order starts (\(ordersAhead.count) were ahead): \(order.prefix(80))")
             let orderTurnStartedAt = Date()
@@ -550,6 +579,7 @@ extension BotsStore {
                     } else if error == nil, let startedNothing = actions.lastBlockThatStartedNothing, startedNothing.date >= orderTurnStartedAt {
                         report = "Nothing was done on screen: \(startedNothing.why)."
                     }
+                    if thisOrdersTicket.isReplaced, error != nil { report = "Stopped: a newer instruction replaced it." }
                     thisOrdersTicket.isDone = true
                     print("🧭 Pointer Assistant order reported: \(report.prefix(120))")
                     self?.finish(job.id, result: report, succeeded: error == nil)
@@ -985,9 +1015,16 @@ extension BotImport {
 @MainActor
 final class ClickyOrderTicket {
     let normalizedOrder: String
+    /// The newest line the owner had said when the order was given ("" when it didn't come from their words).
+    let newestOwnerLine: String
     var isDone = false
+    /// Its turn has started (a brain turn, then maybe steps on screen).
+    var hasStarted = false
+    /// A newer instruction from the owner replaced it: it doesn't start, or what it started was stopped.
+    var isReplaced = false
 
-    init(normalizedOrder: String) {
+    init(normalizedOrder: String, newestOwnerLine: String = "") {
         self.normalizedOrder = normalizedOrder
+        self.newestOwnerLine = newestOwnerLine
     }
 }

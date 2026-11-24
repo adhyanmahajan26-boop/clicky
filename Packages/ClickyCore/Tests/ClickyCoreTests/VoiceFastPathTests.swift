@@ -152,8 +152,8 @@ struct VoiceFastPathPolicyTests {
     }
 
     @Test func closeIsExplicitConfirmUnlessUnsaved() {
-        // cmd+w is a confirm-tier key; saying "close tab" is the confirm.
-        #expect(VoiceFastPathPolicy.tier(for: .key(.closeTab), facts: VoiceFastPathFacts(frontmost: textEdit), context: ActionTurnContext(ownerTranscript: "close tab")).tier == .confirm)
+        // cmd+w only gets the countdown now (hands-free); saying "close tab" runs it at once.
+        #expect(VoiceFastPathPolicy.tier(for: .key(.closeTab), facts: VoiceFastPathFacts(frontmost: textEdit), context: ActionTurnContext(ownerTranscript: "close tab")).tier == .countdown)
         #expect(decide(.key(.closeTab), VoiceFastPathFacts(frontmost: textEdit), "close tab").tierName == "execute")
         let unsaved = VoiceFastPathFacts(frontmost: textEdit, frontWindowHasUnsavedChanges: true)
         #expect(decide(.key(.closeWindow), unsaved, "close window").tierName == "confirm")

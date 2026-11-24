@@ -21,18 +21,25 @@
 //               same window — ActionSafariFollowUp). Safari itself is only
 //               hands-off with v2.actions.leaveSafariAlone on (default off);
 //               a window showing Netflix always is.
-//   confirm   — waits for the owner's spoken "yes" or a real click on the
-//               confirm card: a click, key or typing in Theo's own main
-//               window (Home, Settings, Agents, Setup), anything that sends, posts, submits, buys,
-//               deletes, closes unsaved work or changes settings (classified
-//               by the button's label, the key combo, or System Settings as
-//               the app), and a Return the model planned without the owner
-//               saying so ("Press enter? Say yes.", a 6 s window).
+//   confirm   — waits for the owner's spoken "yes" (Pointer Assistant listens
+//               for it by itself; the confirm card's button is only a spare):
+//               only what can't be taken back and reaches money or other
+//               people: buttons that send, post, submit, buy, pay, book,
+//               delete, discard, merge, deploy, uninstall or sign out
+//               (classified by the button's label), unless the owner's own
+//               words asked for exactly that ("delete it", "click buy",
+//               "send it"), which makes it a countdown.
 //   countdown — 1.5 s on screen first (any key, mouse move or "stop"
 //               cancels): typing into a field, clicking a button / checkbox /
 //               pop-up / row or text that isn't a plain link, other keys,
+//               Save / OK / Apply / Allow and the like, anything in System
+//               Settings outside Privacy & Security, Vello's own main window
+//               (Home, Settings, Agents, Setup), close / quit / save keys,
 //               and Return (or a Send button) when the owner asked for it
 //               (ActionEnterIntent: "press enter", "send it", ASR look-alikes).
+//               Hands-free means hands-free (the owner, 2026-11-24: "what is
+//               the point of having a hands free machine if i have to click"),
+//               so nothing short of the confirm list above waits for a yes.
 //   Every refusal carries a short spoken line (spokenLine) — never silent.
 //   free      — open an app / a link / a search, scroll, links, tabs and
 //               menu items, select & copy, highlight, summarize, switch
@@ -100,7 +107,7 @@ public struct ActionTargetFacts: Equatable, Sendable {
     public var url: String?
     public var isOwnApplication: Bool
     /// The target is in one of Theo's own titled main windows (Home, Settings, Agents, Setup), not a panel or overlay.
-    /// Clicky can see and point there, and act after the owner's yes; every other window of Theo's stays refused.
+    /// Clicky can see and point there, and act after the countdown; every other window of Theo's stays refused.
     public var isOwnMainWindow: Bool
     public var isSecureEventInputOn: Bool
     /// The target window's CGWindowID, when known (Safari follow-ups).
@@ -301,13 +308,29 @@ public enum ActionTierClassifier {
 
     // MARK: Label lists
 
-    /// A button with one of these words sends, posts, buys, deletes or changes something for good.
+    /// A button with one of these words sends, posts, buys or deletes something for good: it waits for a spoken yes,
+    /// unless the owner's own words asked for that very thing (`ownerAskedFor`).
     static let confirmLabelPhrases = [
         "send", "send now", "post", "submit", "publish", "tweet", "reply all", "buy", "buy now", "purchase", "pay", "pay now", "place order", "order now",
-        "checkout", "check out", "subscribe", "unsubscribe", "donate", "transfer", "book now", "reserve", "delete", "remove", "trash", "move to trash",
-        "erase", "discard", "don't save", "dont save", "save", "save changes", "apply", "confirm", "ok", "allow", "accept", "agree", "approve", "merge",
-        "deploy", "install", "uninstall", "sign out", "log out", "sign in", "log in", "upload", "block", "report", "leave", "end call", "archive"
+        "checkout", "check out", "subscribe", "donate", "transfer", "book now", "reserve", "delete", "trash", "move to trash",
+        "erase", "discard", "don't save", "dont save", "merge", "deploy", "uninstall", "sign out", "log out"
     ]
+    /// Buttons that save, apply or end something the owner can undo or redo: the countdown, so a hands-free task
+    /// carries on without anyone pressing a confirm card.
+    static let countdownCommitLabelPhrases = [
+        "save", "save changes", "apply", "confirm", "ok", "allow", "accept", "agree", "approve", "install", "sign in", "log in", "upload",
+        "block", "report", "leave", "end call", "archive", "unsubscribe", "remove"
+    ]
+    /// Money: these always wait for a spoken yes, however the owner put the task ("buy me a charger" isn't a yes to Pay).
+    static let moneyLabelPhrases: Set<String> = ["buy", "buy now", "purchase", "pay", "pay now", "place order", "order now", "checkout", "check out",
+                                                 "subscribe", "donate", "transfer", "book now", "reserve"]
+    /// Words just before a button's word that mean the owner said NOT to ("don't delete it").
+    static let negatingWordsBefore: Set<String> = ["dont", "not", "never", "no"]
+    /// Hindi puts the "not" after the verb ("delete mat karo", "delete nahi karna").
+    static let negatingWordsAfter: Set<String> = ["mat", "nahi", "nahin", "na"]
+    /// The owner asked to be asked ("hold a seat, ask me first"): then saves, applies and onward steps wait for a yes too.
+    static let askMeFirstPhrases = ["ask me first", "ask me before", "ask before", "check with me", "confirm with me", "pooch ke", "puch ke",
+                                    "puchh ke", "pooch kar", "puchkar", "mujhse pooch"]
     /// Buttons that commit to a booking or a hold, whatever the task was.
     static let bookingLabelPhrases = ["book", "book with", "book flight", "hold", "hold seat", "hold fare", "continue to book", "continue to booking",
                                       "continue to payment", "proceed to payment", "proceed to pay", "proceed to checkout"]
@@ -334,10 +357,12 @@ public enum ActionTierClassifier {
         "cmd+opt+escape", "shift+cmd+q", "shift+opt+cmd+q", "ctrl+cmd+q", "shift+cmd+delete", "shift+opt+cmd+delete", "opt+cmd+delete",
         "ctrl+opt+cmd+escape", "shift+cmd+opt+escape", "opt+shift+cmd+escape"
     ].map(normalizedComboText).reduce(into: Set<String>()) { $0.insert($1) }
-    /// Close, quit, save, delete: only after a yes.
-    static let confirmKeyCombos: Set<String> = [
+    /// Close, quit, save, delete: the countdown first.
+    static let countdownKeyCombos: Set<String> = [
         "cmd+q", "cmd+w", "shift+cmd+w", "opt+cmd+w", "cmd+delete", "cmd+forwarddelete", "cmd+s", "shift+cmd+s", "cmd+x", "opt+cmd+q"
     ].map(normalizedComboText).reduce(into: Set<String>()) { $0.insert($1) }
+    /// Keys that belong to the whole Mac rather than the app in front.
+    static let systemWideFreeKeyCombos: Set<String> = ["cmd+space"].map(normalizedComboText).reduce(into: Set<String>()) { $0.insert($1) }
     /// Navigation and copying: free.
     static let freeKeyCombos: Set<String> = [
         "up", "down", "left", "right", "pageup", "pagedown", "home", "end", "tab", "shift+tab", "escape", "cmd+c", "cmd+f", "cmd+l", "cmd+t", "cmd+n",
@@ -358,12 +383,12 @@ public enum ActionTierClassifier {
     public static func classify(_ step: ActionStep, target: ActionTargetFacts?, context: ActionTurnContext) -> ActionTierDecision {
         if let refusal = targetRefusal(for: step, target: target, context: context) { return refusal }
         let decision = baseDecision(step, target: target, context: context)
-        // Theo's own main window: Clicky may press there, but only on the owner's yes (it can hold API keys and settings).
-        if let target, target.isOwnApplication, decision.tier < .confirm {
+        // Theo's own main window: Clicky may press there after the countdown (its key fields are refused above, and its
+        // panels and overlays stay refused), so a hands-free task never stops for a click on a confirm card.
+        if let target, target.isOwnApplication, decision.tier <= .countdown {
             switch step {
             case .click, .type, .key:
-                return ActionTierDecision(.confirm, "\(step.shortDescription) in Vello's own window waits for your yes",
-                                          confirmQuestion: "Do that in Vello's window? Say yes.")
+                return ActionTierDecision(.countdown, "\(step.shortDescription) in Vello's own window")
             default: break
             }
         }
@@ -402,20 +427,27 @@ public enum ActionTierClassifier {
             let label = target?.label ?? ""
             if let word = ActionWordMatch.firstWord(in: label, of: confirmLabelPhrases) {
                 // "send it" said by the owner is his yes for the Send / Submit button.
-                if sendLabelPhrases.contains(word), context.ownerAskedToPressReturn(forReturnStep: false),
-                   !(target.map(isSystemSettings) ?? false) {
+                if sendLabelPhrases.contains(word), context.ownerAskedToPressReturn(forReturnStep: false) {
                     return ActionTierDecision(.countdown, "you asked me to send it")
+                }
+                // "delete it", "click buy", "merge it": the owner's own words are the yes for that very button.
+                if ownerAskedFor(word, context: context) {
+                    return ActionTierDecision(.countdown, "you asked me to \(word)")
                 }
                 return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} \(confirmVerb(for: word))")
             }
             if ActionWordMatch.firstWord(in: label, of: bookingLabelPhrases) != nil {
                 return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} moves toward a booking")
             }
+            let ownerWantsToBeAsked = context.ownerTranscripts.contains { ActionWordMatch.containsWord(in: $0, anyOf: askMeFirstPhrases) }
+            if let word = ActionWordMatch.firstWord(in: label, of: countdownCommitLabelPhrases) {
+                return ActionTierDecision(ownerWantsToBeAsked ? .confirm : .countdown, "\u{201C}\(clipped(label))\u{201D} \(confirmVerb(for: word))")
+            }
             if ActionWordMatch.firstWord(in: label, of: onwardLabelPhrases) != nil,
                context.ownerTranscripts.contains(where: { ActionWordMatch.containsWord(in: $0, anyOf: bookingTaskWords) }) {
-                return ActionTierDecision(.confirm, "\u{201C}\(clipped(label))\u{201D} moves toward a booking")
+                return ActionTierDecision(ownerWantsToBeAsked ? .confirm : .countdown, "\u{201C}\(clipped(label))\u{201D} moves toward a booking")
             }
-            if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+            if let target, isSystemSettings(target) { return ActionTierDecision(.countdown, "changes a setting in System Settings") }
             switch target?.groundingRole ?? roleFromAX(target?.role) {
             case .link?: return ActionTierDecision(.free, "a link")
             case .tab?: return ActionTierDecision(.free, "a tab")
@@ -427,7 +459,7 @@ public enum ActionTierClassifier {
             }
 
         case .type(_, _, let pressesReturn):
-            if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+            if let target, isSystemSettings(target) { return ActionTierDecision(.countdown, "changes a setting in System Settings") }
             if pressesReturn {
                 return ActionReturnRule.decision(context: context, target: target, what: "type it and press enter")
             }
@@ -436,11 +468,14 @@ public enum ActionTierClassifier {
         case .key(let combo):
             let comboText = combo.displayText
             if combo.isReturnKey {
-                if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+                if let target, isSystemSettings(target) { return ActionTierDecision(.countdown, "changes a setting in System Settings") }
                 return ActionReturnRule.keyDecision(context: context, target: target)
             }
-            if confirmKeyCombos.contains(comboText) { return ActionTierDecision(.confirm, "\(comboText) can close, quit, save or delete") }
-            if let target, isSystemSettings(target) { return ActionTierDecision(.confirm, "changes a setting in System Settings") }
+            // The app's own "save changes?" sheet still asks before anything is lost, so these only get the countdown.
+            if countdownKeyCombos.contains(comboText) { return ActionTierDecision(.countdown, "\(comboText) can close, quit, save or delete") }
+            // Spotlight is the whole Mac's, whatever app is in front (it was held for a yes with System Settings in front).
+            if systemWideFreeKeyCombos.contains(comboText) { return ActionTierDecision(.free, "opens Spotlight") }
+            if let target, isSystemSettings(target) { return ActionTierDecision(.countdown, "changes a setting in System Settings") }
             if freeKeyCombos.contains(comboText) { return ActionTierDecision(.free, "navigation key") }
             return ActionTierDecision(.countdown, "a key press")
         }
@@ -561,6 +596,29 @@ public enum ActionTierClassifier {
         case "AXDockItem": return .dock
         default: return nil
         }
+    }
+
+    /// The owner's own words asked for this button's word ("delete it", "click buy", "haan merge karo"), and didn't
+    /// say not to ("don't delete it"). Vello's orders count too: they carry what the owner asked on the call.
+    static func ownerAskedFor(_ buttonWord: String, context: ActionTurnContext) -> Bool {
+        guard !moneyLabelPhrases.contains(buttonWord) else { return false }
+        guard !context.ownerTranscripts.contains(where: { ActionWordMatch.containsWord(in: $0, anyOf: askMeFirstPhrases) }) else { return false }
+        let wantedWords = ActionConfirmReply.normalizedWords(buttonWord)
+        guard !wantedWords.isEmpty else { return false }
+        for transcript in context.ownerTranscripts {
+            let saidWords = ActionConfirmReply.normalizedWords(transcript)
+            guard saidWords.count >= wantedWords.count else { continue }
+            for startIndex in 0...(saidWords.count - wantedWords.count)
+            where Array(saidWords[startIndex..<(startIndex + wantedWords.count)]) == wantedWords {
+                let wordsJustBefore = saidWords[max(0, startIndex - 2)..<startIndex]
+                let endIndex = startIndex + wantedWords.count
+                let wordsJustAfter = saidWords[endIndex..<min(saidWords.count, endIndex + 2)]
+                if wordsJustBefore.contains(where: { negatingWordsBefore.contains($0) }) { continue }
+                if wordsJustAfter.contains(where: { negatingWordsAfter.contains($0) }) { continue }
+                return true
+            }
+        }
+        return false
     }
 
     static func confirmVerb(for word: String) -> String {

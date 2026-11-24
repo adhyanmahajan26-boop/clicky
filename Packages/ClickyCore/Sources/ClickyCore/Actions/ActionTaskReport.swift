@@ -59,7 +59,7 @@ public enum ActionTaskReport {
             return (allDone ? "Done on screen: " : "Finished, but not every step went through: ") + stepsLine + "."
         case .waitingForYes:
             let question = pendingQuestion.map { " It asked: \($0)" } ?? ""
-            return (stepsLine.isEmpty ? "" : "Done so far: \(stepsLine). ") + "Waiting for the owner's yes before the next step.\(question)"
+            return (stepsLine.isEmpty ? "" : "Done so far: \(stepsLine). ") + "Waiting for the owner to say yes out loud before the next step (nothing to click).\(question)"
         case .cancelled:
             let reason = cancelReason.map { " (\($0))" } ?? ""
             return "Stopped\(reason)" + (stepsLine.isEmpty ? " before doing anything on screen." + nothingRanBecause : " after: \(stepsLine).")

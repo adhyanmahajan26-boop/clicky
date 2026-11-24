@@ -1186,9 +1186,18 @@ final class CompanionManager: ObservableObject {
             return
         }
 
-        guard !utteranceOverlappedBuddySpeech else {
-            print("🔇 Hands-free: ignored speech heard while the buddy was talking: \(finishedUtterance)")
-            return
+        if utteranceOverlappedBuddySpeech {
+            // With echo cancellation on, a whole new instruction said over Pointer Assistant's voice is the owner
+            // changing their mind: it replaces what's going on (the turn below stops the voice, the answer and the
+            // task's steps). It used to be dropped as echo, so the old task carried on after a new one was asked for.
+            let activeEchoMode = handsFreeListeningSession?.effectiveEchoMode ?? ClickySettings.echoMode
+            let isNewInstruction = activeEchoMode == .aec
+                && HandsFreeBargeIn.isNewInstruction(finishedUtterance, recentClickySpokenWords: speechOutputClient.recentSpokenWords(at: Date()))
+            guard isNewInstruction else {
+                print("🔇 Hands-free: ignored speech heard while the buddy was talking: \(finishedUtterance)")
+                return
+            }
+            print("🗣️ Hands-free: a new instruction over Pointer Assistant's voice replaces what it was doing")
         }
 
         lastTranscript = finishedUtterance
