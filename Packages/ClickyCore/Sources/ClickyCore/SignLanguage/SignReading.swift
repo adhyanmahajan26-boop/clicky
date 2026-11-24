@@ -30,6 +30,17 @@ public enum SignLanguage: String, CaseIterable, Codable, Sendable {
         case .isl: return "Indian Sign Language"
         }
     }
+
+    /// What Sign to text says when this build has no models for the language.
+    public var notInThisBuildLine: String {
+        "\(rawValue.uppercased()) isn't in this build yet. It arrives in an update."
+    }
+
+    /// The language Sign to text starts with when nobody has chosen one: the first (ASL, then ISL) this build has
+    /// models for, so a fresh install reads something; ASL when it has none at all.
+    public static func defaultChoice(hasModels: (SignLanguage) -> Bool) -> SignLanguage {
+        allCases.first(where: hasModels) ?? .asl
+    }
 }
 
 // MARK: - Word names

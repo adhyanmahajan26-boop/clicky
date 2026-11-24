@@ -299,19 +299,23 @@ public struct HandSignHoldTracker: Sendable {
 
 // MARK: - What a sign does
 
-/// What the signs are for, picked in Settings › Pointer Assistant › Hand signs.
+/// What the signs are for, picked in Settings › Accessibility. Declared in the order Settings and the panel show them:
+/// Sign to text first. The raw values are what's saved, so the order can change without losing anyone's choice.
 public enum HandSignMode: String, CaseIterable, Codable, Sendable {
-    /// Signs drive Pointer Assistant.
-    case control
-    /// Every sign is said out loud as its phrase, for someone who signs.
-    case speakForMe
-    /// Finger-spelled letters (and taught signs) become text, sent on to Vello, Pointer Assistant or the app in
-    /// front. Fingerspelling.swift reads them; the signs above don't act in this mode.
-    case spell
     /// Signed words and finger-spelling on the move (ASL or ISL) become a line of text, read by small Core ML models
     /// from the hands, body and face (ClickyCore SignLanguage/, Tools/signs/SPEC.md), sent on to the same places as
-    /// Spell to text. The signs above don't act in this mode either.
+    /// Spell to text. The signs below don't act in this mode either.
     case signs
+    /// Finger-spelled letters (and taught signs) become text, sent on to Vello, Pointer Assistant or the app in
+    /// front. Fingerspelling.swift reads them; the signs below don't act in this mode.
+    case spell
+    /// Every sign is said out loud as its phrase, for someone who signs.
+    case speakForMe
+    /// Signs drive Pointer Assistant.
+    case control
+
+    /// Shown with the word "Experimental" beside its name: it has only been shown to work for the signers it learned from.
+    public var isExperimental: Bool { self == .signs }
 
     public var displayName: String {
         switch self {

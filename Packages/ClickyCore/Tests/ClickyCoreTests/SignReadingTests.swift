@@ -415,4 +415,21 @@ struct SignReadingTests {
             #expect(autoSend.progress(at: 1000) == 0)
         }
     }
+
+    @Test func theDefaultLanguageIsOneThisBuildHasModelsFor() {
+        #expect(SignLanguage.defaultChoice(hasModels: { $0 == .isl }) == .isl)
+        #expect(SignLanguage.defaultChoice(hasModels: { _ in true }) == .asl)
+        #expect(SignLanguage.defaultChoice(hasModels: { _ in false }) == .asl)
+    }
+
+    @Test func aLanguageWithNoModelsSaysItArrivesInAnUpdate() {
+        #expect(SignLanguage.asl.notInThisBuildLine == "ASL isn't in this build yet. It arrives in an update.")
+    }
+
+    @Test func signToTextComesFirstAndIsMarkedExperimental() {
+        #expect(HandSignMode.allCases.first == .signs)
+        #expect(HandSignMode.allCases.map(\.rawValue) == ["signs", "spell", "speakForMe", "control"])
+        #expect(HandSignMode.signs.isExperimental && !HandSignMode.control.isExperimental)
+        #expect(FingerspellingAlphabet.isl.isExperimental && !FingerspellingAlphabet.asl.isExperimental)
+    }
 }

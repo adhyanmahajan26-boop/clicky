@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case bots, products, teams, look, devices, studio, clicky, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case bots, products, teams, look, devices, studio, clicky, accessibility, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: VM screens on any Mac that can make them (it sets them up here in one click), or that's linked to one.
@@ -42,6 +42,7 @@ enum SettingsTab {
             case .devices: return "screen"
             case .studio: return "studio"
             case .clicky: return "clicky"
+            case .accessibility: return "access"
             case .coding: return "term"
             case .keys: return "key"
             case .voice: return "voice"
@@ -63,6 +64,7 @@ enum SettingsTab {
             case .devices: return "Devices"
             case .studio: return "VM screens"
             case .clicky: return "Pointer Assistant"
+            case .accessibility: return "Accessibility"
             case .coding: return "Harnesses"
             case .keys: return "Models & API keys"
             case .voice: return "Voice"
@@ -84,6 +86,7 @@ enum SettingsTab {
             case .devices: return "Choose which Mac does what."
             case .studio: return "Virtual screens your bots work on, set up in one click, with small live views."
             case .clicky: return "Everything about your screen companion, in one place."
+            case .accessibility: return "For people who sign, or who can't use their voice or hands the usual way. Hand signs on the camera, on this Mac only."
             case .coding: return "Your coding agents: install, sign in, and where builds go."
             case .keys: return "Bring your own key for any provider, and use it anywhere in Vello."
             case .voice: return "How Pointer Assistant and Vello speak, how they hear you, and calls."
@@ -105,6 +108,7 @@ enum SettingsTab {
             case .devices: return "laptopcomputer.and.iphone"
             case .studio: return "rectangle.split.2x1"
             case .clicky: return "cursorarrow.rays"
+            case .accessibility: return "accessibility"
             case .coding: return "terminal.fill"
             case .keys: return "key.fill"
             case .voice: return "waveform"
@@ -126,6 +130,7 @@ enum SettingsTab {
             case .devices: return TileColors.teal
             case .studio: return TileColors.graphite
             case .clicky: return TileColors.ember
+            case .accessibility: return TileColors.violet
             case .coding: return TileColors.graphite
             case .keys: return TileColors.amber
             case .voice: return TileColors.rose
@@ -207,6 +212,7 @@ struct SettingsPage: View {
         case .devices: DevicesSettingsContent()
         case .studio: StudioSettingsContent()
         case .clicky: ClickySettingsContent()
+        case .accessibility: AccessibilitySettingsContent()
         case .coding: CodingSettingsView()
         case .keys: ProviderKeysView()
         case .voice: VoiceSettingsContent()
@@ -556,7 +562,13 @@ struct ClickySettingsContent: View {
                     })).toggleStyle(.switch).labelsHidden()
                 }
             }
-            if let manager { HandSignSettingsSection(controller: manager.handSignController) }
+            TheoSection(title: "Hand signs", hint: nil) {
+                SettingRow(title: "Hand signs moved to Accessibility", detail: "Sign to text, Spell to text, Speak for me and Control are all there now.") {
+                    Button("Open Accessibility") { TheoSettingsWindowController.show(section: .accessibility) }
+                        .buttonStyle(.theo(.secondary, .small))
+                        .pointerCursor()
+                }
+            }
             ClickyVoicePicker()
             TheoSection(title: "Also", hint: nil) {
                 linkRow("Cursor style", detail: look.sparkStyle.displayName, section: .look)

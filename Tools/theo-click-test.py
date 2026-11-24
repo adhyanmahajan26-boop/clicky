@@ -67,7 +67,7 @@ def go(pane):
 # Settings: every page is one click away, and "Back to Theo" returns.
 go("home")
 step("open-settings", click="Settings", expect="Back to Theo", within=SIDEBAR)
-for page, words in [("Clicky", "Thinks with"), ("Harnesses", "Builds go to"), ("Models & API keys", "Anthropic"), ("Voice", "Hears you with"),
+for page, words in [("Clicky", "Thinks with"), ("Accessibility", "Accessibility mode"), ("Harnesses", "Builds go to"), ("Models & API keys", "Anthropic"), ("Voice", "Hears you with"),
                     ("Screen", "Theo's screen"), ("Permissions", "Microphone"), ("Updates", "This is Theo"), ("About", "Show Theo in the Dock"), ("Look", "Cursor")]:
     step(f"settings-{page.split()[0].lower()}", click=page, expect=words, within=SIDEBAR)
 step("settings-back", click="Back to Theo", gone="Back to Theo", within=SIDEBAR)

@@ -40,6 +40,12 @@ enum SignModelFolders {
         }
         return folders
     }
+
+    /// Whether this build (or the data folder) has a word or spelling model for the language: a quick look for the
+    /// files, nothing loaded.
+    static func hasModels(for language: SignLanguage) -> Bool {
+        SignModelFiles.find(in: searchFolders, language: language).hasAnyModel
+    }
 }
 
 /// What loading the models for one language found, for the panel, Settings and the debug state.

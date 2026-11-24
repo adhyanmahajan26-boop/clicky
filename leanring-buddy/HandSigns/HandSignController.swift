@@ -2,7 +2,7 @@
 //  HandSignController.swift
 //  leanring-buddy
 //
-//  Hand signs: with Settings › Pointer Assistant › Hand signs on, the camera watches for a hand
+//  Hand signs: with Settings › Accessibility › Accessibility mode on, the camera watches for a hand
 //  (HandSignCamera), ClickyCore's HandSignClassifier reads each frame's shape, HandSignHoldTracker
 //  makes a held sign count once, and this does what it means (HandSignActions):
 //
@@ -51,7 +51,7 @@ final class HandSignController: ObservableObject {
     static let defaultSignsAutoSendSeconds = 2.5
 
     static var savedSignLanguage: SignLanguage {
-        get { UserDefaults.standard.string(forKey: Keys.signsLanguage).flatMap(SignLanguage.init(rawValue:)) ?? .asl }
+        get { UserDefaults.standard.string(forKey: Keys.signsLanguage).flatMap(SignLanguage.init(rawValue:)) ?? SignLanguage.defaultChoice(hasModels: SignModelFolders.hasModels(for:)) }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.signsLanguage) }
     }
 
@@ -435,7 +435,7 @@ final class HandSignController: ObservableObject {
         guard let signModelsLoad else { return isLoadingSignModels ? "Loading the sign models…" : nil }
         guard let problems = signModelsLoad.problems else { return nil }
         if !signModelsLoad.hasAnyModel {
-            return "Sign to text isn't in this build yet: \(problems)."
+            return signLanguage.notInThisBuildLine
         }
         return "Reads only part of \(signLanguage.rawValue.uppercased()): \(problems)."
     }

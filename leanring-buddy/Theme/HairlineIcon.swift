@@ -42,6 +42,7 @@ enum HairlineIcons {
         "stop": #"<rect x="7" y="7" width="10" height="10" rx="2"/>"#,
         "check": #"<path d="m5.5 12.5 4.5 4.5 8.5-10"/>"#,
         "close": #"<path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/>"#,
+        "access": #"<circle class="fl" cx="12" cy="12" r="8.5"/><circle class="f ac" cx="12" cy="7.7" r="1.2"/><path d="M7.6 10.2h8.8M12 10.2v3.6m0 0-2.4 3.7m2.4-3.7 2.4 3.7"/>"#,
         "eye": #"<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>"#,
         "chev": #"<path d="m9 6 6 6-6 6"/>"#,
         "more": #"<circle class="f" cx="6" cy="12" r="1.5"/><circle class="f" cx="12" cy="12" r="1.5"/><circle class="f" cx="18" cy="12" r="1.5"/>"#,

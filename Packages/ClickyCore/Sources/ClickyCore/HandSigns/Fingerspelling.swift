@@ -214,6 +214,9 @@ public enum FingerspellingAlphabet: String, CaseIterable, Codable, Sendable {
     case asl
     case isl
 
+    /// Shown with the word "Experimental" beside its name: ISL letters come from a model shown on few signers.
+    public var isExperimental: Bool { self == .isl }
+
     public var displayName: String {
         switch self {
         case .asl: return "ASL (American)"
@@ -224,7 +227,7 @@ public enum FingerspellingAlphabet: String, CaseIterable, Codable, Sendable {
     public var detail: String {
         switch self {
         case .asl: return "The 24 still letters are built in (J and Z move, so spell them another way for now). Signs you teach count too."
-        case .isl: return "Reads the signs you teach it: show each letter or word a few times, one hand or two. Nothing is built in for ISL yet."
+        case .isl: return "Experimental. Reads ISL letters with a small model (not J and Z, which move) and the signs you teach it. So far it has read 15 of 25 letters right for a signer it never saw."
         }
     }
 }

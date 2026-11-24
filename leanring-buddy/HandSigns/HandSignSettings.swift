@@ -2,7 +2,9 @@
 //  HandSignSettings.swift
 //  leanring-buddy
 //
-//  Settings › Pointer Assistant › Hand signs: the switch, what signs do, the camera picture, Spell to text
+//  Settings › Accessibility (Addy's "disability mode": for people who sign, or who can't use their voice or hands
+//  the usual way): the Accessibility mode switch (`v5.handSigns.enabled`, as before it moved here from Pointer
+//  Assistant's page), what signs do, the camera picture, Spell to text
 //  (which alphabet, where the text goes, and teaching it new signs), Sign to text (which sign language,
 //  where the line goes, when it sends by itself, and what it can read), and each sign's phrase (what
 //  "Speak for me" says), which the owner can rewrite.
@@ -10,6 +12,19 @@
 
 import ClickyCore
 import SwiftUI
+
+/// The Accessibility page. Pointer Assistant's page keeps one line pointing here.
+struct AccessibilitySettingsContent: View {
+    private var manager: CompanionManager? { CompanionManager.current }
+
+    var body: some View {
+        if let manager {
+            HandSignSettingsSection(controller: manager.handSignController)
+        } else {
+            Text("Accessibility settings appear once Vello has started.").font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
+        }
+    }
+}
 
 struct HandSignSettingsSection: View {
     @ObservedObject var controller: HandSignController
@@ -19,31 +34,34 @@ struct HandSignSettingsSection: View {
 
     var body: some View {
         TheoSection(title: "Hand signs", hint: "On this Mac only: the camera picture is read by Apple's hand tracking and never saved or sent. The camera stops while the screen is locked.") {
-            SettingRow(title: "Read hand signs", detail: controller.problem ?? "Opens the camera and a small panel. Hold a sign still for about a second.") {
-                Toggle("Read hand signs", isOn: Binding(get: { isOn }, set: { value in
+            SettingRow(title: "Accessibility mode", detail: controller.problem ?? "Reads hand signs on the camera. Opens the camera and a small panel; hold a sign still for about a second.") {
+                Toggle("Accessibility mode", isOn: Binding(get: { isOn }, set: { value in
                     isOn = value
                     controller.setEnabled(value)
                 })).toggleStyle(.switch).labelsHidden()
+                .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "What signs do", detail: controller.mode.detail) {
                 // Four modes with long names: a menu rather than segments.
                 Picker("What signs do", selection: $controller.mode) {
-                    ForEach(HandSignMode.allCases, id: \.self) { mode in Text(mode.displayName).tag(mode) }
+                    ForEach(HandSignMode.allCases, id: \.self) { mode in Text(Self.experimentalName(mode.displayName, mode.isExperimental)).tag(mode) }
                 }
-                .labelsHidden().frame(width: 220)
+                .labelsHidden().frame(width: 260)
                 .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "Show the camera picture", detail: "Off: the panel only shows the sign it sees.") {
                 Toggle("Show the camera picture", isOn: $controller.showsCameraPicture).toggleStyle(.switch).labelsHidden()
+                .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "Spell to text: alphabet", detail: controller.alphabet.detail) {
                 Picker("Alphabet", selection: $controller.alphabet) {
-                    ForEach(FingerspellingAlphabet.allCases, id: \.self) { alphabet in Text(alphabet.displayName).tag(alphabet) }
+                    ForEach(FingerspellingAlphabet.allCases, id: \.self) { alphabet in Text(Self.experimentalName(alphabet.displayName, alphabet.isExperimental)).tag(alphabet) }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 240)
+                .pickerStyle(.segmented).labelsHidden().frame(width: 330)
+                .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "Spell to text: send to", detail: controller.destination.detail) {
@@ -51,9 +69,10 @@ struct HandSignSettingsSection: View {
                     ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(Self.destinationName(destination)).tag(destination) }
                 }
                 .labelsHidden().frame(width: 220)
+                .pointerCursor()
             }
             RowDivider()
-            SettingRow(title: "Sign to text: what it reads", detail: Self.signsHonestLine) {
+            SettingRow(title: "Sign to text (Experimental): what it reads", detail: Self.signsHonestLine) {
                 EmptyView()
             }
             RowDivider()
@@ -62,6 +81,7 @@ struct HandSignSettingsSection: View {
                     ForEach(SignLanguage.allCases, id: \.self) { language in Text(language.displayName).tag(language) }
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 240)
+                .pointerCursor()
             }
             RowDivider()
             SettingRow(title: "Sign to text: send to", detail: controller.signsDestination.detail) {
@@ -101,10 +121,17 @@ struct HandSignSettingsSection: View {
         destination == .pointerAssistant && !TheoProducts.isOn(.clicky) ? "\(destination.displayName) (off)" : destination.displayName
     }
 
-    private static let signsHonestLine = "Single signs and finger-spelled words from the lists it was trained on; it will show ? when it isn't sure. Rest your hands between signs."
+    static let signsHonestLine = "Reads 261 ISL signs and short runs of them. So far it has only been shown to work for the signers it learned from, so expect it to show ? often."
+
+    /// "Sign to text (Experimental)": the word beside the names of what has only been shown on a few signers.
+    static func experimentalName(_ name: String, _ isExperimental: Bool) -> String {
+        isExperimental ? "\(name) (Experimental)" : name
+    }
 
     /// Which models Sign to text found for the chosen language, or what's missing.
     private var signModelsWords: String {
+        // Said plainly, before anything loads: a language this build has no models for.
+        if !SignModelFolders.hasModels(for: controller.signLanguage) { return controller.signLanguage.notInThisBuildLine }
         if let modelsProblem = controller.signModelsProblem { return modelsProblem }
         guard let signModelsLoad = controller.signModelsLoad, signModelsLoad.language == controller.signLanguage else {
             return "Its models load when Sign to text is turned on."

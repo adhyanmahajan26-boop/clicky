@@ -215,7 +215,7 @@ struct HandSignPanelView: View {
         if controller.mode == .signs {
             if controller.isLoadingSignModels { return "Loading the sign models…" }
             if let signModelsLoad = controller.signModelsLoad, !signModelsLoad.hasAnyModel {
-                return "Sign to text isn't in this build yet"
+                return controller.signLanguage.notInThisBuildLine
             }
             if controller.isMakingASign { return "Signing…" }
             if controller.signReadingsInProgress > 0 { return "Reading the sign…" }
@@ -248,6 +248,7 @@ struct HandSignPanelView: View {
                 spellingButton("Space", systemImage: "space", help: "End the word") { controller.addSpaceToSpelledText() }
                 spellingButton("Delete", systemImage: "delete.left", help: "Delete the last letter (or hold thumbs down)") { controller.deleteLastSpelledLetter() }
                 spellingButton("Clear", systemImage: "xmark.circle", help: "Start again") { controller.clearSpelledText() }
+                if controller.alphabet.isExperimental { experimentalTag("ISL letters: Experimental") }
                 Spacer(minLength: 0)
                 Button {
                     controller.sendSpelledText()
@@ -272,6 +273,7 @@ struct HandSignPanelView: View {
                 ForEach(SignLanguage.allCases, id: \.self) { language in
                     signLanguageButton(language)
                 }
+                experimentalTag()
                 Spacer(minLength: 4)
                 signingIndicator
             }
@@ -296,6 +298,16 @@ struct HandSignPanelView: View {
                 .help("Send to \(controller.signsDestination.displayName)")
             }
         }
+    }
+
+    /// "Experimental" beside Sign to text and ISL letters: shown to work only for the signers they learned from.
+    private func experimentalTag(_ words: String = "Experimental") -> some View {
+        Text(words)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundColor(.white.opacity(0.7))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+            .help("So far shown to work only for the signers it learned from")
     }
 
     private func signLanguageButton(_ language: SignLanguage) -> some View {
