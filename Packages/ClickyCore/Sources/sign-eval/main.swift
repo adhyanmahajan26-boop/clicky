@@ -10,6 +10,11 @@
 //      many were "unclear", and the 20 most common mix-ups. --whole-clip reads each clip as one sign instead of
 //      letting the reader find where signs start and end (how training measures), to see what the finder costs.
 //
+//  sign-eval stream --manifest … --clips … --models … --language asl|isl [--split test] [--streams 200] [--seed 1]
+//                   [--sentence-model <file>]
+//      2 to 5 clips joined end to end with a short glide and no rest, read as one stream (Streams.swift): word error
+//      rate with the word model on each stretch, and with the sentence model on each stretch when one is given.
+//
 //  sign-eval video <file> --models <folder> --language asl|isl
 //      Reads a video through Apple Vision (`SignVisionReader`, the app's reader) and prints the line the app would
 //      send, token by token with their times.
@@ -31,6 +36,8 @@ func printUsageAndExit() -> Never {
     print("""
     usage: sign-eval clips --manifest <manifest.csv> --clips <folder of .npy> --models <folder> --language asl|isl [--split test] [--whole-clip] [--limit N]
            sign-eval video <file> --models <folder> --language asl|isl
+           sign-eval stream --manifest <manifest.csv> --clips <folder> --models <folder> --language asl|isl [--split test]
+                            [--streams 200] [--seed 1] [--sentence-model <SignSentences….mlpackage>]
     """)
     exit(2)
 }
@@ -47,6 +54,10 @@ struct EvaluationOptions {
     var clipLimit: Int?
     /// `--stretch name=value` (repeatable) changes one of `SignStretchSettings`' numbers, to try settings without a build.
     var stretchSettings = SignStretchSettings()
+    /// `stream`: how many streams to build, from which seed, and a sentence model to read them with too.
+    var streamCount = 200
+    var seed: UInt64 = 1
+    var sentenceModelPath: String?
 }
 
 /// Sets one stretch-finding number by name, as `--stretch` gives it. Unknown names stop the run.
@@ -73,7 +84,7 @@ func applyStretchSetting(_ assignment: String, to settings: inout SignStretchSet
 }
 
 func parseOptions(arguments: [String]) -> EvaluationOptions {
-    guard let command = arguments.first, command == "clips" || command == "video" else { printUsageAndExit() }
+    guard let command = arguments.first, ["clips", "video", "stream"].contains(command) else { printUsageAndExit() }
     var videoPath: String?
     var manifestPath: String?
     var clipsFolderPath: String?
@@ -83,6 +94,9 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
     var readsWholeClip = false
     var clipLimit: Int?
     var stretchSettings = SignStretchSettings()
+    var streamCount = 200
+    var seed: UInt64 = 1
+    var sentenceModelPath: String?
     var argumentIndex = 1
     func nextValue() -> String {
         argumentIndex += 1
@@ -101,6 +115,13 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         case "--split": split = nextValue()
         case "--whole-clip": readsWholeClip = true
         case "--stretch": applyStretchSetting(nextValue(), to: &stretchSettings)
+        case "--streams":
+            guard let parsedCount = Int(nextValue()), parsedCount > 0 else { printUsageAndExit() }
+            streamCount = parsedCount
+        case "--seed":
+            guard let parsedSeed = UInt64(nextValue()) else { printUsageAndExit() }
+            seed = parsedSeed
+        case "--sentence-model": sentenceModelPath = nextValue()
         case "--limit":
             guard let parsedLimit = Int(nextValue()), parsedLimit > 0 else { printUsageAndExit() }
             clipLimit = parsedLimit
@@ -115,7 +136,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         argumentIndex += 1
     }
     guard let modelsFolderPath, let language else { printUsageAndExit() }
-    if command == "clips" && (manifestPath == nil || clipsFolderPath == nil) { printUsageAndExit() }
+    if (command == "clips" || command == "stream") && (manifestPath == nil || clipsFolderPath == nil) { printUsageAndExit() }
     if command == "video" && videoPath == nil { printUsageAndExit() }
     return EvaluationOptions(
         command: command,
@@ -127,7 +148,10 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         split: split,
         readsWholeClip: readsWholeClip,
         clipLimit: clipLimit,
-        stretchSettings: stretchSettings
+        stretchSettings: stretchSettings,
+        streamCount: streamCount,
+        seed: seed,
+        sentenceModelPath: sentenceModelPath
     )
 }
 
@@ -456,6 +480,7 @@ let scorer = loadScorer(options: options)
 do {
     switch options.command {
     case "clips": try evaluateClips(options: options, scorer: scorer)
+    case "stream": try evaluateStreams(options: options, scorer: scorer)
     default: try evaluateVideo(options: options, scorer: scorer)
     }
 } catch {
