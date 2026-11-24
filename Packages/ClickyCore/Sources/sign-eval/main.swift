@@ -66,6 +66,9 @@ struct EvaluationOptions {
     var usesSentenceModel = true
     /// `--least-sentence-confidence x`: a sentence-model word under this becomes an unclear sign.
     var readingSettings = SignReadingSettings()
+    /// `--reads <file>`: clips also writes, per clip, `clip_id<TAB>what was read` (words, ? for unclear), for
+    /// measuring against labels sign-eval can't compare itself (an English sentence for a continuous clip).
+    var readsOutputPath: String?
 }
 
 /// Sets one stretch-finding number by name, as `--stretch` gives it. Unknown names stop the run.
@@ -106,6 +109,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
     var seed: UInt64 = 1
     var usesSentenceModel = true
     var readingSettings = SignReadingSettings()
+    var readsOutputPath: String?
     var argumentIndex = 1
     func nextValue() -> String {
         argumentIndex += 1
@@ -131,6 +135,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
             guard let parsedSeed = UInt64(nextValue()) else { printUsageAndExit() }
             seed = parsedSeed
         case "--no-sentence-model": usesSentenceModel = false
+        case "--reads": readsOutputPath = nextValue()
         case "--least-sentence-confidence":
             guard let parsedConfidence = Float(nextValue()) else { printUsageAndExit() }
             readingSettings.leastSentenceWordConfidence = parsedConfidence
@@ -164,7 +169,8 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         streamCount: streamCount,
         seed: seed,
         usesSentenceModel: usesSentenceModel,
-        readingSettings: readingSettings
+        readingSettings: readingSettings,
+        readsOutputPath: readsOutputPath
     )
 }
 
@@ -351,6 +357,7 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
     var clipsMissing = 0
     var clipsReadAsMoreThanOneSign = 0
     var mixUpCounts: [String: Int] = [:]
+    var readLines: [String] = []
     let startTime = Date()
 
     for row in rows {
@@ -367,6 +374,7 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
             : readClipLikeTheCamera(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer, stretchSettings: options.stretchSettings, readingSettings: options.readingSettings)
 
         let line = SignedLine(tokens: entries.compactMap { $0.token })
+        readLines.append("\(row.clipID)\t\(entries.map { $0.displayText }.joined(separator: " "))")
         if entries.count > 1 { clipsReadAsMoreThanOneSign += 1 }
         if line.isEmpty {
             if entries.isEmpty {
@@ -385,6 +393,9 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
         }
     }
 
+    if let readsOutputPath = options.readsOutputPath {
+        try (readLines.joined(separator: "\n") + "\n").write(toFile: (readsOutputPath as NSString).expandingTildeInPath, atomically: true, encoding: .utf8)
+    }
     func share(_ count: Int, of total: Int) -> String {
         total > 0 ? String(format: "%.1f%%", 100 * Double(count) / Double(total)) : "-"
     }
