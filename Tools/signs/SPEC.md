@@ -94,7 +94,18 @@ The exact rules for the cases this leaves open (which joint is the middle knuckl
 body too small to measure, nothing seen at all) are in the notes at the top of `signs/features.py`, which Swift
 follows line by line.
 
-**Order.** A stretch of frames is first cut to run from the first frame with a hand to the last (on the
+**Frame rate.** The models read 30 frames a second. Landmarks that come slower than 27 or faster than 33 (a
+dataset filmed at 25 or 60, a camera that slows down in dim light) are brought to 30 before anything else. Frame
+`k` was taken at time `τk` (`k / fps` for a file, the camera's own time stamps in the app, where the rate is
+`(T − 1) / (τlast − τ0)` over the stretch). New frame `j` is at `τ0 + j / 30`, for every such time up to `τlast`
+(plus a millionth of a second, so rounding can't drop the last one). With `i` the last frame at or before that
+time and `f` how far the time is from frame `i` to frame `i + 1` (0 to 1): a point seen in both takes the place
+that far along the line between them and the smaller of the two confidences; any other point is copied as it is
+from the nearer frame (`i` when `f < 0.5`, else `i + 1`). `Tools/signs/tests/golden/frame_rate/` holds examples
+both sides are checked against.
+
+**Order.** A stretch of frames is first brought to 30 frames a second when it needs it, then cut to run from the
+first frame with a hand to the last (on the
 landmarks as seen, before gaps are filled), then its features are made over all its frames, and only then is it
 thinned or padded to the model's frame count: frame `k` of `N` kept from `T` is frame
 `floor(k × (T − 1) / (N − 1) + 0.5)`. The app does the same in the same order.
