@@ -297,4 +297,24 @@ struct FingerspellingTests {
         #expect(message.hasPrefix("helo wrld"))
         #expect(message.contains("Finger-spelled"))
     }
+
+    // MARK: Where spelled or signed text goes
+
+    @Test func onlyThePointerAssistantDestinationNeedsPointerAssistant() {
+        #expect(SpelledTextRouting.route(chosen: .vello, velloIsOn: true, pointerAssistantIsOn: false) == .send(.vello))
+        #expect(SpelledTextRouting.route(chosen: .frontApp, velloIsOn: false, pointerAssistantIsOn: false) == .send(.frontApp))
+        #expect(SpelledTextRouting.route(chosen: .pointerAssistant, velloIsOn: true, pointerAssistantIsOn: true) == .send(.pointerAssistant))
+        #expect(SpelledTextRouting.route(chosen: .pointerAssistant, velloIsOn: true, pointerAssistantIsOn: false)
+            == .refuse(SpelledTextRouting.pointerAssistantIsOffMessage))
+        // Vello off: on to Pointer Assistant when it's on, else typed into the app in front.
+        #expect(SpelledTextRouting.route(chosen: .vello, velloIsOn: false, pointerAssistantIsOn: true) == .send(.pointerAssistant))
+        #expect(SpelledTextRouting.route(chosen: .vello, velloIsOn: false, pointerAssistantIsOn: false) == .send(.frontApp))
+    }
+
+    @Test func spellAndSignsModesWorkWithoutPointerAssistant() {
+        #expect(HandSignMode.control.needsPointerAssistant)
+        #expect(HandSignMode.speakForMe.needsPointerAssistant)
+        #expect(!HandSignMode.spell.needsPointerAssistant)
+        #expect(!HandSignMode.signs.needsPointerAssistant)
+    }
 }

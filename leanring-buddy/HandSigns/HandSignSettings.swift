@@ -48,7 +48,7 @@ struct HandSignSettingsSection: View {
             RowDivider()
             SettingRow(title: "Spell to text: send to", detail: controller.destination.detail) {
                 Picker("Send to", selection: $controller.destination) {
-                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(destination.displayName).tag(destination) }
+                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(Self.destinationName(destination)).tag(destination) }
                 }
                 .labelsHidden().frame(width: 220)
             }
@@ -66,7 +66,7 @@ struct HandSignSettingsSection: View {
             RowDivider()
             SettingRow(title: "Sign to text: send to", detail: controller.signsDestination.detail) {
                 Picker("Send to", selection: $controller.signsDestination) {
-                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(destination.displayName).tag(destination) }
+                    ForEach(SpelledTextDestination.allCases, id: \.self) { destination in Text(Self.destinationName(destination)).tag(destination) }
                 }
                 .labelsHidden().frame(width: 220)
                 .pointerCursor()
@@ -96,6 +96,11 @@ struct HandSignSettingsSection: View {
     }
 
     /// What Sign to text can and can't do, said plainly.
+    /// "Pointer Assistant (off)" while that product is off: Spell to text and Sign to text can't send there then.
+    static func destinationName(_ destination: SpelledTextDestination) -> String {
+        destination == .pointerAssistant && !TheoProducts.isOn(.clicky) ? "\(destination.displayName) (off)" : destination.displayName
+    }
+
     private static let signsHonestLine = "Single signs and finger-spelled words from the lists it was trained on; it will show ? when it isn't sure. Rest your hands between signs."
 
     /// Which models Sign to text found for the chosen language, or what's missing.

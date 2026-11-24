@@ -591,6 +591,33 @@ public enum SpelledTextDestination: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// Where text from Spell to text or Sign to text actually goes, given which products are on. Only Pointer Assistant
+/// as the place to send needs the Pointer Assistant product: these two modes write text, which Vello's chat or the
+/// app in front can take without it.
+public enum SpelledTextRouting {
+    public enum Outcome: Equatable, Sendable {
+        case send(SpelledTextDestination)
+        /// Nothing is sent; the words stay on the line and this is shown instead.
+        case refuse(String)
+    }
+
+    public static let pointerAssistantIsOffMessage =
+        "Pointer Assistant is off, so nothing was sent. Turn it on in Settings › Products, or send to Vello or the app in front."
+
+    public static func route(chosen: SpelledTextDestination, velloIsOn: Bool, pointerAssistantIsOn: Bool) -> Outcome {
+        switch chosen {
+        case .vello:
+            // Vello's chat needs the Vello product; without it the words go to Pointer Assistant, else the app in front.
+            if velloIsOn { return .send(.vello) }
+            return .send(pointerAssistantIsOn ? .pointerAssistant : .frontApp)
+        case .pointerAssistant:
+            return pointerAssistantIsOn ? .send(.pointerAssistant) : .refuse(pointerAssistantIsOffMessage)
+        case .frontApp:
+            return .send(.frontApp)
+        }
+    }
+}
+
 /// What Vello is told around the spelled words, so it knows they came from the camera and may have a wrong letter.
 public enum SpelledTextMessage {
     public static func forVello(_ spelledText: String) -> String {

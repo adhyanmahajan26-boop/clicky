@@ -369,6 +369,17 @@ public enum HandSignAction: Equatable, Sendable {
     }
 }
 
+extension HandSignMode {
+    /// Control and Speak for me work through Pointer Assistant (it listens, answers and speaks the phrases); Spell to
+    /// text and Sign to text only write text, so they work whenever hand signs are on.
+    public var needsPointerAssistant: Bool {
+        switch self {
+        case .control, .speakForMe: return true
+        case .spell, .signs: return false
+        }
+    }
+}
+
 public enum HandSignActions {
     /// What Pointer Assistant is asked when one finger is held up in Control.
     public static let whatIsOnMyScreen = "What's on my screen right now? Tell me in a sentence or two."

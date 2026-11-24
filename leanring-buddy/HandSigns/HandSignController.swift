@@ -116,6 +116,11 @@ final class HandSignController: ObservableObject {
             guard mode != oldValue else { return }
             Self.savedMode = mode
             lastLine = Self.startingLine(for: mode)
+            if mode.needsPointerAssistant && !TheoProducts.isOn(.clicky) {
+                problem = Self.pointerAssistantIsOffProblem
+            } else if problem == Self.pointerAssistantIsOffProblem {
+                problem = nil
+            }
             holdTracker.reset()
             spellingSession.reset()
             seenSign = nil
@@ -235,8 +240,15 @@ final class HandSignController: ObservableObject {
     }
 
     func turnOn() async {
-        guard TheoProducts.isOn(.clicky) else {
-            problem = "Pointer Assistant is off. Turn it on in Settings › Products."
+        guard !mode.needsPointerAssistant || TheoProducts.isOn(.clicky) else {
+            problem = Self.pointerAssistantIsOffProblem
+            return
+        }
+        // The test profile never opens the real camera; `handSigns {action: sign | signsFeed}` drives it instead.
+        guard !TheoProfile.isTest else {
+            problem = nil
+            lastLine = Self.startingLine(for: mode)
+            if mode == .signs { prepareSignReading() }
             return
         }
         guard await HandSignCamera.requestAccess() else {
@@ -260,6 +272,8 @@ final class HandSignController: ObservableObject {
         if mode == .signs { prepareSignReading() }
         panelController.show()
     }
+
+    static let pointerAssistantIsOffProblem = "Pointer Assistant is off. Turn it on in Settings › Products (Spell to text and Sign to text work without it)."
 
     private static func startingLine(for mode: HandSignMode) -> String {
         switch mode {
@@ -342,11 +356,17 @@ final class HandSignController: ObservableObject {
             lastLine = "Nothing spelled yet."
             return
         }
+        let target: SpelledTextDestination
+        switch SpelledTextRouting.route(chosen: destination, velloIsOn: TheoProducts.isOn(.theo), pointerAssistantIsOn: TheoProducts.isOn(.clicky)) {
+        case .send(let routedDestination):
+            target = routedDestination
+        case .refuse(let message):
+            // Nothing is cleared: the spelled words stay for another place.
+            lastLine = message
+            return
+        }
         spelledText.clear()
         spellingSession.reset()
-        var target = destination
-        // Vello's chat needs the Vello product; without it the words go to Pointer Assistant.
-        if target == .vello && !TheoProducts.isOn(.theo) { target = .pointerAssistant }
         switch target {
         case .vello:
             BotsStore.shared.send(SpelledTextMessage.forVello(text), command: text, to: "theo")
@@ -495,6 +515,15 @@ final class HandSignController: ObservableObject {
     /// Sends the line to the chosen place and starts a new one. Vello and Pointer Assistant get the words with a note
     /// on how they were read (signing order, alternatives for unsure signs); the app in front gets the words only.
     func sendSignedLine() {
+        // Decided before the line is taken, so words that can't go anywhere stay on the line.
+        let target: SpelledTextDestination
+        switch SpelledTextRouting.route(chosen: signsDestination, velloIsOn: TheoProducts.isOn(.theo), pointerAssistantIsOn: TheoProducts.isOn(.clicky)) {
+        case .send(let routedDestination):
+            target = routedDestination
+        case .refuse(let message):
+            lastLine = message
+            return
+        }
         guard let signedLine = signReader.takeLineForSending() else {
             lastLine = "Nothing signed yet."
             publishSignState(at: signReader.lastFrameTime)
@@ -503,9 +532,6 @@ final class HandSignController: ObservableObject {
         publishSignState(at: signReader.lastFrameTime)
         let plainText = signedLine.plainText
         let messageForBrain = signedLine.messageForBrain(language: signLanguage)
-        var target = signsDestination
-        // Vello's chat needs the Vello product; without it the words go to Pointer Assistant.
-        if target == .vello && !TheoProducts.isOn(.theo) { target = .pointerAssistant }
         switch target {
         case .vello:
             BotsStore.shared.send(messageForBrain, command: plainText, to: "theo")
