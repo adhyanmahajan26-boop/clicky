@@ -177,13 +177,18 @@ def _manifest_row_values(clip_record: ClipRecord) -> list[str]:
 
 
 class ManifestWriter:
-    """Appends manifest rows one at a time, so a long conversion keeps what it has done if it stops."""
+    """Appends manifest rows one at a time, so a long conversion keeps what it has done if it stops.
 
-    def __init__(self, folder: str | os.PathLike):
+    By default it starts a new manifest.csv; with `append=True` it adds to an existing one (a conversion done in
+    pieces, such as one downloaded shard at a time)."""
+
+    def __init__(self, folder: str | os.PathLike, append: bool = False):
         self.manifest_path = Path(folder) / MANIFEST_FILE_NAME
-        self.manifest_file = open(self.manifest_path, "w", newline="", encoding="utf-8")
+        adds_to_existing_file = append and self.manifest_path.exists() and self.manifest_path.stat().st_size > 0
+        self.manifest_file = open(self.manifest_path, "a" if adds_to_existing_file else "w", newline="", encoding="utf-8")
         self.manifest_writer = csv.writer(self.manifest_file)
-        self.manifest_writer.writerow(MANIFEST_COLUMNS)
+        if not adds_to_existing_file:
+            self.manifest_writer.writerow(MANIFEST_COLUMNS)
 
     def add(self, clip_record: ClipRecord) -> None:
         self.manifest_writer.writerow(_manifest_row_values(clip_record))
