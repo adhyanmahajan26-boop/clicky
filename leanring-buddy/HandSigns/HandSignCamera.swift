@@ -4,7 +4,14 @@
 //
 //  The camera for hand signs: AVFoundation at 640×480, and Apple Vision's hand pose on each
 //  frame it keeps (about 12 a second), all on this Mac. Nothing is saved or sent anywhere: each
-//  frame becomes 21 joint positions, handed to HandSignController on the main thread, and is gone.
+//  frame becomes 21 joint positions per hand (up to two hands, since many Indian Sign Language
+//  letters use both), handed to HandSignController on the main thread, and is gone.
+//
+//  Sign to text reads more, more often: about 30 frames a second, each turned into the 61 landmarks of
+//  Tools/signs/SPEC.md (hands, body on the padded canvas, mouth and brows) by ClickyCore's SignVisionReader,
+//  with the camera's own time stamp. When Vision can't keep up, late frames are dropped (by AVFoundation, and
+//  here when the main thread hasn't taken the last few yet), never queued: the reader brings whatever rate
+//  arrives to 30 a second by the frames' times.
 //
 
 import AVFoundation
@@ -35,17 +42,35 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
     /// Vision's own confidence for a joint before it counts.
     static let leastJointConfidence: Float = 0.3
 
+    /// Sign to text: frames closer together than this are skipped, so a camera giving 60 a second is read at 30.
+    /// A little under 1/30 s, so a 30 a second camera keeps every frame despite jitter in its time stamps.
+    static let shortestGapBetweenSignFrames: Double = 0.8 / 30
+    /// Sign to text: frames handed to the main thread but not taken yet. Past this many, new frames are dropped
+    /// rather than piling up behind a busy main thread.
+    static let mostSignFramesWaitingForTheMainThread = 4
+
     let captureSession = AVCaptureSession()
-    /// Called on the main thread for every analysed frame: the hand, or nil when none was seen.
-    var onHandPose: ((HandPose?) -> Void)?
+    /// Called on the main thread for every analysed frame: the hands seen (none, one or two).
+    var onHandPoses: (([HandPose]) -> Void)?
+    /// Sign to text: called on the main thread for every frame read, with the camera's time stamp (seconds) and
+    /// the upright picture's size in pixels.
+    var onSignFrame: ((SignLandmarkFrame, Double, Int, Int) -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "vello.handsigns.session")
     private let videoQueue = DispatchQueue(label: "vello.handsigns.frames", qos: .userInitiated)
     private var lastAnalysedFrameTime: CFTimeInterval = 0
     private var isConfigured = false
+    /// Only read and written on `videoQueue`.
+    private var readsSignLanguage = false
+    private var lastSignFrameTime: Double = -.infinity
+    /// Made on `videoQueue` the first time Sign to text runs, and only used there (Vision requests keep state).
+    private var signVisionReader: SignVisionReader?
+    /// Guards `signFramesWaitingForTheMainThread`, which `videoQueue` raises and the main thread lowers.
+    private let signFramesWaitingLock = NSLock()
+    private var signFramesWaitingForTheMainThread = 0
     private let handPoseRequest: VNDetectHumanHandPoseRequest = {
         let request = VNDetectHumanHandPoseRequest()
-        request.maximumHandCount = 1
+        request.maximumHandCount = 2
         return request
     }()
 
@@ -69,6 +94,15 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
     func stop() {
         sessionQueue.async { [captureSession] in
             if captureSession.isRunning { captureSession.stopRunning() }
+        }
+    }
+
+    /// Sign to text on or off. Set on the frame queue, so a frame being read finishes the way it started.
+    func setReadsSignLanguage(_ isOn: Bool) {
+        videoQueue.async { [weak self] in
+            guard let self else { return }
+            self.readsSignLanguage = isOn
+            self.lastSignFrameTime = -.infinity
         }
     }
 
@@ -98,6 +132,10 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if readsSignLanguage {
+            readSignFrame(sampleBuffer)
+            return
+        }
         let now = CACurrentMediaTime()
         guard now - lastAnalysedFrameTime >= 1 / Self.analysedFramesPerSecond else { return }
         lastAnalysedFrameTime = now
@@ -105,12 +143,43 @@ nonisolated final class HandSignCamera: NSObject, AVCaptureVideoDataOutputSample
         let frameWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
         let frameHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
 
-        var handPose: HandPose?
+        var handPoses: [HandPose] = []
         let requestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        if (try? requestHandler.perform([handPoseRequest])) != nil, let observation = handPoseRequest.results?.first {
-            handPose = Self.handPose(from: observation, frameWidth: frameWidth, frameHeight: frameHeight)
+        if (try? requestHandler.perform([handPoseRequest])) != nil, let observations = handPoseRequest.results {
+            handPoses = observations.compactMap { Self.handPose(from: $0, frameWidth: frameWidth, frameHeight: frameHeight) }
         }
-        DispatchQueue.main.async { [weak self] in self?.onHandPose?(handPose) }
+        DispatchQueue.main.async { [weak self] in self?.onHandPoses?(handPoses) }
+    }
+
+    /// Sign to text: the frame's 61 landmarks, read on this queue and handed to the main thread with the camera's
+    /// own time stamp. The Mac camera's picture is upright and not mirrored (the panel mirrors only its preview).
+    private func readSignFrame(_ sampleBuffer: CMSampleBuffer) {
+        let frameTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        guard frameTime.isFinite, frameTime - lastSignFrameTime >= Self.shortestGapBetweenSignFrames else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        signFramesWaitingLock.lock()
+        let mainThreadIsBehind = signFramesWaitingForTheMainThread >= Self.mostSignFramesWaitingForTheMainThread
+        signFramesWaitingLock.unlock()
+        guard !mainThreadIsBehind else { return }
+        lastSignFrameTime = frameTime
+
+        let visionReader = signVisionReader ?? SignVisionReader(readsFace: SignVisionReader.cameraReadsFace)
+        signVisionReader = visionReader
+        guard let frame = try? visionReader.readLandmarks(pixelBuffer: pixelBuffer, orientation: .up) else { return }
+        let pictureWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let pictureHeight = CVPixelBufferGetHeight(pixelBuffer)
+
+        signFramesWaitingLock.lock()
+        signFramesWaitingForTheMainThread += 1
+        signFramesWaitingLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.signFramesWaitingLock.lock()
+            self.signFramesWaitingForTheMainThread -= 1
+            self.signFramesWaitingLock.unlock()
+            self.onSignFrame?(frame, frameTime, pictureWidth, pictureHeight)
+        }
     }
 
     /// Vision's joints in pixels (so x and y are the same size), y up as Vision gives them.

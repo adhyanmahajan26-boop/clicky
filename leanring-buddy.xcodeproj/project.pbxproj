@@ -121,6 +121,7 @@
 				28F22CBD2F56440300A0FC59 /* Resources */,
 				8A9D38ADB0EBB70F34029216 /* Stamp Git SHA */,
 				C0EC70A5B1D24E6F8A9B0C11 /* Connector helper */,
+				5A1C0DE5B1D24E6F8A9B0C12 /* Sign models */,
 			);
 			buildRules = (
 			);
@@ -294,6 +295,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# Builds theo-connectors (crossplatform/crates/theo-connectors) into Contents/Helpers and signs it before Xcode signs the app.\n# Without Rust it only warns: Theo then reaches apps through Claude Code, as before the hub.\n/bin/bash \"$SRCROOT/Tools/build-connectors-helper.sh\"\n";
+		};
+		5A1C0DE5B1D24E6F8A9B0C12 /* Sign models */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Sign models";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Copies the bundled sign language models (Resources/SignModels: compiled Core ML models with their labels and reading files) into Contents/Resources/SignModels, where SignModelFolders looks after the data folder. Before Xcode signs the app.\nSRC=\"$SRCROOT/Resources/SignModels\"\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/SignModels\"\nif [ ! -d \"$SRC\" ]; then echo \"warning: no $SRC; Sign to text ships without models\"; exit 0; fi\nrm -rf \"$DEST\"\nmkdir -p \"$DEST\"\n/usr/bin/ditto \"$SRC\" \"$DEST\"\nrm -f \"$DEST/README.md\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

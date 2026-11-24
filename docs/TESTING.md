@@ -17,7 +17,7 @@ python3 Tools/theoui.py stop
 
 Commands for `cmd`:
 - `uiState`, `uiWindows`, `uiMenus`, `uiHitMap`, `uiFirstMouse {step}`
-- `uiGo {pane}`: home, notes, connectors, routines, clicky, `bot:<id>`, `group:<id>`, `category:<id>`, `settings:<look|clicky|coding|keys|voice|screen|permissions|updates|about>`
+- `uiGo {pane}`: home, notes, connectors, routines, clicky, `bot:<id>`, `group:<id>`, `category:<id>`, `settings:<look|clicky|accessibility|coding|keys|voice|screen|permissions|updates|about>` (every `SettingsTab.Section` raw value)
 - `uiClick {x, y}` in window points from the top left; `uiHover`, `uiScroll {x, y, dy}`, `uiType {text}`, `uiKey {key, modifiers}`
 - `uiMenuChoose {x, y, item}`: clicks a picker or menu and picks an item (omit `item` to list them). `uiRightClickChoose` for context menus.
 - `uiResponderAction {action}`: e.g. `paste:`; `uiPasteboard {text}` sets the profile's private pasteboard.

@@ -7,7 +7,10 @@ let package = Package(
     products: [
         .library(name: "ClickyCore", targets: ["ClickyCore"]),
         .executable(name: "cwb-check", targets: ["cwb-check"]),
-        .executable(name: "code-agent-args", targets: ["code-agent-args"])
+        .executable(name: "code-agent-args", targets: ["code-agent-args"]),
+        .executable(name: "fingerspell-eval", targets: ["fingerspell-eval"]),
+        .executable(name: "sign-extract", targets: ["sign-extract"]),
+        .executable(name: "sign-eval", targets: ["sign-eval"])
     ],
     dependencies: [
         // Whiteboard math rendering (MTMathImage). Pinned; see docs/v2/PENDING_LIVE_TESTS.md (P4).
@@ -19,6 +22,14 @@ let package = Package(
         .executableTarget(name: "cwb-check", dependencies: ["ClickyCore"]),
         // The Code-mode agent's exact argv/settings as JSON, for Tools/codeprobe.sh.
         .executableTarget(name: "code-agent-args", dependencies: ["ClickyCore"]),
+        // How well Spell to text reads photos of real hands, through Apple Vision: `swift run fingerspell-eval asl <folder>`.
+        .executableTarget(name: "fingerspell-eval", dependencies: ["ClickyCore"]),
+        // Sign to text training data: videos and photos to Apple Vision landmarks (Tools/signs/SPEC.md):
+        // `swift run -c release sign-extract videos --list clips.tsv --out <folder>`.
+        .executableTarget(name: "sign-extract", dependencies: ["ClickyCore"]),
+        // Sign to text accuracy the way the app reads: landmark clips (or a video) through the live reader and the
+        // Core ML models: `swift run -c release sign-eval clips --manifest m.csv --clips <folder> --models <folder> --language asl`.
+        .executableTarget(name: "sign-eval", dependencies: ["ClickyCore"]),
         .testTarget(name: "ClickyCoreTests", dependencies: ["ClickyCore"], exclude: ["Fixtures", "Goldens"])
     ],
     swiftLanguageModes: [.v5]

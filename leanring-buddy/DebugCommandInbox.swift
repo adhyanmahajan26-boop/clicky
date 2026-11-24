@@ -463,6 +463,13 @@ final class DebugCommandInbox {
 
         case "handSigns":
             // Hand signs: state, on / off, a mode, or a sign as if the camera had seen it held ({action: sign, sign: "thumbsUp"}).
+            // Spell to text: {action: spell, text, send?} sets the spelled text (and sends it), {action: alphabet, alphabet: asl|isl},
+            // {action: destination, destination: vello|pointerAssistant|frontApp}, {action: teach, label} (camera on), {action: forget, label}.
+            // Sign to text: {action: mode, mode: signs}, {action: language, language: asl|isl}, {action: signsDestination,
+            // destination}, {action: signsState} (the line, each token and its alternatives, the models found or missing,
+            // frames a second seen), in a test profile only {action: spellFeed, path, width?, height?, seconds?} (ISL Spell to
+            // text with SignSpellISL: a landmark clip's first frame held to the letter model), and, in a test profile only, {action: signsFeed, path, fps?, width?, height?}: a
+            // landmark .npy clip or a video fed through the live reader as if from the camera, answered with what was read.
             let handSignController = companionManager.handSignController
             switch commandObject["action"] as? String ?? "state" {
             case "on":
@@ -471,7 +478,8 @@ final class DebugCommandInbox {
                 handSignController.setEnabled(false)
             case "mode":
                 guard let modeName = commandObject["mode"] as? String, let mode = HandSignMode(rawValue: modeName) else {
-                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns mode needs \"mode\": control | speakForMe")
+                    let modeNames = HandSignMode.allCases.map(\.rawValue).joined(separator: " | ")
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns mode needs \"mode\": \(modeNames)")
                     return
                 }
                 handSignController.mode = mode
@@ -482,6 +490,79 @@ final class DebugCommandInbox {
                     return
                 }
                 handSignController.perform(sign)
+            case "spell":
+                handSignController.replaceSpelledText(with: commandObject["text"] as? String ?? "")
+                if commandObject["send"] as? Bool == true { handSignController.sendSpelledText() }
+            case "alphabet":
+                guard let alphabetName = commandObject["alphabet"] as? String, let alphabet = FingerspellingAlphabet(rawValue: alphabetName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns alphabet needs \"alphabet\": asl | isl")
+                    return
+                }
+                handSignController.alphabet = alphabet
+            case "destination":
+                guard let destinationName = commandObject["destination"] as? String, let destination = SpelledTextDestination(rawValue: destinationName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns destination needs \"destination\": vello | pointerAssistant | frontApp")
+                    return
+                }
+                handSignController.destination = destination
+            case "teach":
+                handSignController.startTeaching(label: commandObject["label"] as? String ?? "")
+            case "forget":
+                handSignController.forgetTaughtSign(label: commandObject["label"] as? String ?? "")
+            case "language":
+                guard let languageName = commandObject["language"] as? String, let language = SignLanguage(rawValue: languageName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns language needs \"language\": asl | isl")
+                    return
+                }
+                handSignController.signLanguage = language
+            case "signsDestination":
+                guard let destinationName = commandObject["destination"] as? String, let destination = SpelledTextDestination(rawValue: destinationName) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns signsDestination needs \"destination\": vello | pointerAssistant | frontApp")
+                    return
+                }
+                handSignController.signsDestination = destination
+            case "signsState":
+                // Loads the models first when they haven't been, so the answer says what was found.
+                handSignController.prepareSignReading()
+                reply(commandIdentifier: commandIdentifier, isSuccess: true, result: handSignController.signsStatusSnapshot(), errorMessage: nil)
+                return
+            case "spellFeed":
+                // Test profile only: a photo's landmarks held to ISL Spell to text's letter model, as the camera would.
+                guard TheoProfile.isTest else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns spellFeed only runs in a test profile (--profile test)")
+                    return
+                }
+                guard let feedPath = commandObject["path"] as? String, !feedPath.isEmpty else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns spellFeed needs \"path\": a landmark .npy clip")
+                    return
+                }
+                let (feedResult, feedProblem) = handSignController.feedSpellingFrame(
+                    path: feedPath,
+                    pictureWidth: (commandObject["width"] as? NSNumber)?.doubleValue ?? 0,
+                    pictureHeight: (commandObject["height"] as? NSNumber)?.doubleValue ?? 0,
+                    seconds: (commandObject["seconds"] as? NSNumber)?.doubleValue ?? 1.0
+                )
+                reply(commandIdentifier: commandIdentifier, isSuccess: feedProblem == nil, result: feedResult, errorMessage: feedProblem)
+                return
+            case "signsFeed":
+                // Test profile only: it drives the live reader the camera drives, and the owner's line must never get made-up signs.
+                guard TheoProfile.isTest else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns signsFeed only runs in a test profile (--profile test)")
+                    return
+                }
+                guard let feedPath = commandObject["path"] as? String, !feedPath.isEmpty else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "handSigns signsFeed needs \"path\": a landmark .npy clip or a video file")
+                    return
+                }
+                handSignController.feedSignClip(
+                    path: feedPath,
+                    framesPerSecond: (commandObject["fps"] as? NSNumber)?.doubleValue ?? 30,
+                    pictureWidth: (commandObject["width"] as? NSNumber)?.doubleValue ?? 0,
+                    pictureHeight: (commandObject["height"] as? NSNumber)?.doubleValue ?? 0
+                ) { [weak self] feedResult, feedProblem in
+                    self?.reply(commandIdentifier: commandIdentifier, isSuccess: feedProblem == nil, result: feedResult, errorMessage: feedProblem)
+                }
+                return
             default:
                 break
             }
