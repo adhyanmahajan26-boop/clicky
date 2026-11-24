@@ -17,6 +17,11 @@ enum VelloHands {
         TheoProducts.isOn(.clicky) && ClickySettings.isActionsEnabled && TheoLink.shared.clickyRunsHere
     }
 
+    /// Pointer Assistant is Vello's hands now: with Vello on, push-to-talk, a double tap, the panel's hands-free button and
+    /// every wake name ("hey pointer" too) start or join a call with Vello, so one brain hears, sees and acts. With Vello
+    /// switched off (Settings › Products) they reach the old screen turn as before.
+    static var answersEveryVoice: Bool { TheoProducts.isOn(.theo) }
+
     /// Badge numbers belong to the screen they were drawn on: after this long, steps that name them look again first.
     static let badgeNumbersLastSeconds: TimeInterval = 45
 
