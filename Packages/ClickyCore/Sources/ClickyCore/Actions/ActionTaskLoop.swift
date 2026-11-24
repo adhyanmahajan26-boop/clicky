@@ -234,6 +234,16 @@ public enum ActionConfirmReply: Equatable, Sendable {
         return .notAReply
     }
 
+    /// A yes passed on by someone else, in a longer sentence ("Yes, Addy confirmed. Click #88 to open Displays."):
+    /// the first clause decides when it is a yes. A no still has to be the whole reply, since "No, open Safari
+    /// instead" is a new request rather than only a no.
+    public static func parseRelayed(_ text: String) -> ActionConfirmReply {
+        let wholeReply = parse(text)
+        if wholeReply != .notAReply { return wholeReply }
+        let firstClause = text.components(separatedBy: CharacterSet(charactersIn: ",.!;:\u{2014}-")).first ?? ""
+        return parse(firstClause) == .yes ? .yes : .notAReply
+    }
+
     static func normalizedWords(_ transcript: String) -> [String] {
         ActionWordMatch.normalized(transcript)
             .replacingOccurrences(of: "'", with: "")
