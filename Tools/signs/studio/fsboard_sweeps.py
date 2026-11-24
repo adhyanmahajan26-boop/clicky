@@ -231,6 +231,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--max-sweeps", type=int, help="how many sweeps to run (required to download)")
     parser.add_argument("--max-download-gb", type=float, help="stop before a batch would pass this many GB this run (required to download)")
+    parser.add_argument("--plan-only", action="store_true", help="print and write the planned download, then stop (no download)")
     parser.add_argument("--finish-batch", help="close a batch left on disk (a folder name in downloads/fsboard-videos, or all) without downloading")
     arguments = parser.parse_args()
     if not arguments.finish_batch and (not arguments.max_sweeps or not arguments.max_download_gb):
@@ -263,6 +264,9 @@ def main():
                                   arguments.max_download_gb, exact=False))
         sweep_guard.write_plan(STATE, "fsboard", {"sweeps": arguments.max_sweeps, "planned_gb": round(planned_gb, 1),
                                                   "budget_gb": arguments.max_download_gb, "average_mb": round(each_mb, 2)})
+        if arguments.plan_only:
+            log("plan only: nothing downloaded")
+            return
         for sweep, jobs in plan.items():
             batches = sweep_guard.cut_into_batches(jobs, [average_mb()] * len(jobs), most_items=MOST_CLIPS_PER_BATCH, exact_sizes=False)
             log(f"sweep {sweep}: {len(jobs)} clips not read yet, {len(batches)} batches")

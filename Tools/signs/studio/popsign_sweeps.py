@@ -191,6 +191,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--max-sweeps", type=int, help="how many sweeps to run (required to download)")
     parser.add_argument("--max-download-gb", type=float, help="stop before a batch would pass this many GB this run (required to download)")
+    parser.add_argument("--plan-only", action="store_true", help="print and write the planned download, then stop (no download)")
     parser.add_argument("--finish-batch", help="close a batch left on disk (a folder name in downloads/popsign, or all) without downloading")
     arguments = parser.parse_args()
     if not arguments.finish_batch and (not arguments.max_sweeps or not arguments.max_download_gb):
@@ -214,6 +215,9 @@ def main():
         log(sweep_guard.plan_line("popsign", arguments.max_sweeps, sum(len(jobs) for jobs in plan.values()), planned_gb, arguments.max_download_gb, exact=False))
         sweep_guard.write_plan(STATE, "popsign", {"sweeps": arguments.max_sweeps, "planned_gb": round(planned_gb, 1),
                                                   "budget_gb": arguments.max_download_gb, "signs": len(signs)})
+        if arguments.plan_only:
+            log("plan only: nothing downloaded")
+            return
         for sweep, jobs in plan.items():
             batches = sweep_guard.cut_into_batches(jobs, [size * 1000 for *_, size in jobs], exact_sizes=False)
             log(f"sweep {sweep}: {len(jobs)} videos not read yet, {len(batches)} batches")
