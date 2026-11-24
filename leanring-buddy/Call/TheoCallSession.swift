@@ -325,6 +325,10 @@ final class TheoCallSession: ObservableObject {
     private var turnHasSounded = false
     /// Times the answer being written now was dropped and started over with more words (`CallCutIn`).
     private var restartsOfThisAnswer = 0
+    /// What thinks for this call as the owner knows it ("Claude Sonnet 5.5", "LM Studio"), for the words said when it fails.
+    private var brainNameForWords = "the brain"
+    /// Turns on this call the brain gave no answer to: the first says why, later ones are short (ClickyCore `CallBrainFailure`).
+    private var brainFailures = 0
     /// When the ears last gave words in a partial: the owner is still going, so the turn isn't let go yet.
     private var lastPartialWordsAt: Date?
     /// Only the voice near the Mac counts (Settings › Voice, on by default): someone talking across the room opens the
@@ -393,6 +397,7 @@ final class TheoCallSession: ObservableObject {
                 return
             }
         }
+        brainNameForWords = BrainAvailability.name(of: brainSetting)
         // The call starts with as much of the chat as its brain has room for.
         let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
                                        carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
@@ -765,7 +770,12 @@ final class TheoCallSession: ObservableObject {
         print("📞 Call: the owner spoke during the answer (answer heard yet: \(answerWasHeard), still writing: \(wasAnsweringATurn))")
         // The turn is asked again below with all the owner's words, so its first try leaves the conversation's memory.
         // Kept, the model saw the same question twice with an answer the owner never heard, and lost the thread.
-        if wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, lastReleasedTurn != nil { brain?.forgetTheTurnBeingAnswered() }
+        if wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, lastReleasedTurn != nil {
+            brain?.forgetTheTurnBeingAnswered()
+            // That already interrupted the brain: `bargeIn` mustn't send Claude Code a second interrupt, which could land
+            // on the turn asked again next and leave it with no answer (Air, 24 Nov: two restarts, then silence).
+            replyInProgress = false
+        }
         bargeIn()
         guard wasAnsweringATurn, !answerWasHeard, heldTurnWords.isEmpty, let lastReleasedTurn else { return }
         self.lastReleasedTurn = nil
@@ -1042,7 +1052,20 @@ final class TheoCallSession: ObservableObject {
         case .failure(let error):
             problem = error.localizedDescription
             if state == .thinking { state = .listening }
+            sayTheBrainFailed(error.localizedDescription)
         }
+    }
+
+    /// The brain gave no answer: say so out loud, with the reason, rather than go quiet. A call that only set its window's
+    /// problem line sounded on the phone like the bot had gone mute.
+    private func sayTheBrainFailed(_ detail: String) {
+        guard state != .ended, !CallBrainFailure.isTheCallsOwnDoing(detail) else { return }
+        print("📞 Call: \(brainNameForWords) gave no answer: \(CallBrainFailure.shortReason(detail))")
+        let speaksHindi = language == .hindi || language.meansHinglish
+        let words = CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
+                                                 speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
+        brainFailures += 1
+        sayWithoutThinking(words)
     }
 
     /// Theo gave Clicky an order on the call. What Clicky says comes back to him as his next turn, once nobody's talking.
