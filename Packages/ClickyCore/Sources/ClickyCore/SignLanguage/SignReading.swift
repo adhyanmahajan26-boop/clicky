@@ -86,6 +86,11 @@ public struct SignReadingSettings: Equatable, Sendable {
     /// …and it lasts at least this long (a short one-handed stretch is more likely a sign).
     public var shortestSpellingSeconds: Double
 
+    /// An unclear sign keeps this many of the model's guesses, and mentions them to Vello's brain only when the top
+    /// one is at least this likely (under it the guesses say nothing useful).
+    public static let unclearGuessesKept = 2
+    public static let leastUnclearGuessProbabilityToMention: Float = 0.3
+
     public init(
         leastWordProbability: Float = 0.25,
         leastSpellingConfidence: Float = 0.5,
@@ -191,13 +196,19 @@ public struct SignStretchFacts: Equatable, Sendable {
 
 // MARK: - Tokens
 
-/// One read stretch: a signed word (with the other words it may have been) or a finger-spelled word.
+/// One read stretch: a signed word (with the other words it may have been), a finger-spelled word, or a sign that
+/// wasn't clear enough to be a word (with the model's best guesses, which are only guesses).
 public enum SignToken: Equatable, Sendable {
     /// Most likely first; never empty when made by `SignStretchReading`.
     case word(guesses: [SignWordGuess])
     case spelled(text: String, confidence: Float)
+    /// Most likely first, at most `unclearGuessesKept`; may be empty.
+    case unclear(guesses: [SignWordGuess])
 
-    /// What the line shows: the top word's readable text, or the spelled text.
+    /// What an unclear sign shows as on the panel.
+    public static let unclearText = "?"
+
+    /// What the line shows: the top word's readable text, the spelled text, or "?".
     public var text: String {
         switch self {
         case .word(guesses: let guesses):
@@ -205,17 +216,35 @@ public enum SignToken: Equatable, Sendable {
             return SignWordNames.displayText(for: topGuess.label)
         case .spelled(text: let spelledText, confidence: _):
             return spelledText
+        case .unclear:
+            return Self.unclearText
         }
     }
 
-    /// The other words a signed word may have been, readable; none for finger-spelling.
+    public var isUnclear: Bool {
+        if case .unclear = self { return true }
+        return false
+    }
+
+    /// The other words a signed word may have been, readable; none for finger-spelling or an unclear sign.
     public var alternativeTexts: [String] {
         switch self {
         case .word(guesses: let guesses):
             return guesses.dropFirst().map { guess in SignWordNames.displayText(for: guess.label) }
-        case .spelled:
+        case .spelled, .unclear:
             return []
         }
+    }
+
+    /// How Vello's brain is told about an unclear sign: in words, with the model's best one or two guesses when the
+    /// top one is at least `leastGuessProbabilityToMention` likely.
+    public func unclearDescription(leastGuessProbabilityToMention: Float = SignReadingSettings.leastUnclearGuessProbabilityToMention) -> String? {
+        guard case .unclear(guesses: let guesses) = self else { return nil }
+        guard let topGuess = guesses.first, topGuess.probability >= leastGuessProbabilityToMention else {
+            return "(a sign I couldn't read)"
+        }
+        let guessTexts = guesses.prefix(2).map { "'\(SignWordNames.displayText(for: $0.label))'" }
+        return "(a sign I couldn't read, possibly \(guessTexts.joined(separator: " or ")))"
     }
 }
 
@@ -253,8 +282,11 @@ public enum SignStretchReading {
             }
         }
 
-        guard let topGuess = orderedGuesses.first, topGuess.probability >= settings.leastWordProbability else {
-            return nil
+        guard let topGuess = orderedGuesses.first else {
+            return spelling == nil ? nil : .unclear(guesses: [])
+        }
+        guard topGuess.probability >= settings.leastWordProbability else {
+            return .unclear(guesses: Array(orderedGuesses.prefix(SignReadingSettings.unclearGuessesKept)))
         }
         let guessesToKeep = max(settings.alternativesKept, 1)
         var keptGuesses: [SignWordGuess] = [topGuess]
@@ -278,7 +310,8 @@ public struct SignedLine: Equatable, Sendable {
         self.tokens = tokens
     }
 
-    public var isEmpty: Bool { tokens.isEmpty }
+    /// True when there is no word to send: unclear signs alone don't make a line worth sending.
+    public var isEmpty: Bool { !tokens.contains { !$0.isUnclear } }
 
     public mutating func add(_ token: SignToken) {
         tokens.append(token)
@@ -294,9 +327,10 @@ public struct SignedLine: Equatable, Sendable {
         tokens = []
     }
 
-    /// The words as shown: each token's text, joined by single spaces.
+    /// The words as typed into the app in front: each read token's text, joined by single spaces; unclear signs are
+    /// left out.
     public var plainText: String {
-        tokens.map { $0.text }.filter { !$0.isEmpty }.joined(separator: " ")
+        tokens.filter { !$0.isUnclear }.map { $0.text }.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// What Vello is sent: the words, a blank line, then a note saying how they were read, so it reads them
@@ -307,13 +341,17 @@ public struct SignedLine: Equatable, Sendable {
         var noteSentences: [String] = [
             "Signed to the camera in \(language.fullName) and read sign by sign, so the words follow signing order rather than English grammar and a sign may have been misread."
         ]
+        if tokens.contains(where: { $0.isUnclear }) {
+            noteSentences.append("A part in brackets is a sign that couldn't be read; any words given there are only the reader's guesses, not what was signed.")
+        }
         for (tokenIndex, token) in tokens.enumerated() {
             let alternativeTexts = token.alternativeTexts
             guard !alternativeTexts.isEmpty else { continue }
             noteSentences.append("Word \(tokenIndex + 1) may also be: \(alternativeTexts.joined(separator: ", ")).")
         }
         noteSentences.append("Read it as the most sensible meaning.")
-        return "\(plainText)\n\n(\(noteSentences.joined(separator: " ")))"
+        let wordsWithUnclearSigns = tokens.map { token in token.unclearDescription() ?? token.text }.filter { !$0.isEmpty }.joined(separator: " ")
+        return "\(wordsWithUnclearSigns)\n\n(\(noteSentences.joined(separator: " ")))"
     }
 }
 

@@ -212,6 +212,9 @@ def write_reading_file(model_output_path: str | Path, calibration: dict) -> Path
         "answeredOnValidation": calibration["answeredOnValidation"],
         "temperature": calibration["temperature"],
     }
+    if "leastWordProbabilityChosenFrom" in calibration:
+        # the threshold came from held-out words (signs.unknown_signs apply): say so, with its numbers
+        reading["leastWordProbabilityChosenFrom"] = calibration["leastWordProbabilityChosenFrom"]
     reading_path.write_text(json.dumps(reading, indent=1) + "\n", encoding="utf-8")
     return reading_path
 

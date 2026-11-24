@@ -218,10 +218,34 @@ struct SignReadingTests {
     @Test func aWordNeedsEnoughProbabilityToBeRead() {
         let atTheLeast = SignStretchReading.token(wordGuesses: Self.guesses([("hello", 0.25)]), spelling: nil, facts: Self.spellingFacts)
         #expect(atTheLeast == .word(guesses: Self.guesses([("hello", 0.25)])))
-        let underIt = SignStretchReading.token(wordGuesses: Self.guesses([("hello", 0.24)]), spelling: nil, facts: Self.spellingFacts)
-        #expect(underIt == nil)
+        // Under it the sign is unclear, keeping the two best guesses for Vello's brain.
+        let underIt = SignStretchReading.token(wordGuesses: Self.guesses([("hello", 0.24), ("help", 0.2), ("home", 0.1)]), spelling: nil, facts: Self.spellingFacts)
+        #expect(underIt == .unclear(guesses: Self.guesses([("hello", 0.24), ("help", 0.2)])))
+        #expect(underIt?.text == "?")
         let noGuesses = SignStretchReading.token(wordGuesses: [], spelling: SignSpelledGuess(text: "b", confidence: 0.9), facts: Self.spellingFacts)
-        #expect(noGuesses == nil)
+        #expect(noGuesses == .unclear(guesses: []))
+        #expect(SignStretchReading.token(wordGuesses: [], spelling: nil, facts: Self.spellingFacts) == nil)
+    }
+
+    @Test func anUnclearSignIsToldToTheBrainButNotTypedOrSentAlone() {
+        let likelyGuesses = SignToken.unclear(guesses: Self.guesses([("table", 0.31), ("paper", 0.2)]))
+        let unlikelyGuesses = SignToken.unclear(guesses: Self.guesses([("table", 0.29), ("paper", 0.2)]))
+        #expect(likelyGuesses.unclearDescription() == "(a sign I couldn't read, possibly 'table' or 'paper')")
+        #expect(unlikelyGuesses.unclearDescription() == "(a sign I couldn't read)")
+        #expect(SignToken.unclear(guesses: []).unclearDescription() == "(a sign I couldn't read)")
+
+        let line = SignedLine(tokens: [.word(guesses: Self.guesses([("i", 0.9)])), likelyGuesses, .word(guesses: Self.guesses([("go", 0.8)]))])
+        #expect(line.plainText == "i go")
+        #expect(!line.isEmpty)
+        let message = line.messageForBrain(language: .isl)
+        #expect(message.hasPrefix("i (a sign I couldn't read, possibly 'table' or 'paper') go\n\n("))
+        #expect(message.contains("only the reader's guesses"))
+
+        // A line of unclear signs alone isn't worth sending.
+        let unclearOnly = SignedLine(tokens: [likelyGuesses, unlikelyGuesses])
+        #expect(unclearOnly.isEmpty)
+        #expect(unclearOnly.messageForBrain(language: .asl) == "")
+        #expect(unclearOnly.plainText == "")
     }
 
     @Test func alternativesAreCappedAndMustBeLikelyEnough() {

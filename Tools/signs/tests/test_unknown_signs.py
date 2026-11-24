@@ -95,3 +95,25 @@ def test_not_a_sign_clips_are_spread_over_signs_and_never_in_test(tmp_path):
     assert {row["split"] for row in written} <= {"train", "val"}
     hello_signers = {row["signer"] for row in written if "-hello-" in row["clip_id"]}
     assert len(hello_signers) == 3  # one clip of each signer before a second of any
+
+
+def test_word_folds_are_disjoint_tenths():
+    words = [f"w{number}" for number in range(40)]
+    folds = unknown_signs.held_out_word_folds(words, 3, 0.1, seed=5)
+    assert [len(fold) for fold in folds] == [4, 4, 4]
+    assert len(set(folds[0]) | set(folds[1]) | set(folds[2])) == 12
+    assert folds == unknown_signs.held_out_word_folds(words, 3, 0.1, seed=5)
+
+
+def test_the_threshold_is_the_lowest_with_few_never_taught_answers():
+    fold_results = [
+        {"top_probability": [0.9, 0.8, 0.3, 0.6], "right": [True, True, False, False], "taught": [True, True, False, False]},
+        {"top_probability": [0.95, 0.4], "right": [True, False], "taught": [True, False]},
+    ]
+    rows = unknown_signs.pooled_threshold_table(fold_results, [0.0, 0.35, 0.5, 0.7])
+    assert [row["never_taught_wrongly_answered"] for row in rows] == [1.0, 2 / 3, 1 / 3, 0.0]
+    chosen = unknown_signs.lowest_threshold_with_few_wrong_answers(rows, 0.10)
+    assert chosen["threshold"] == 0.7 and chosen["reached"]
+    assert chosen["taught_answered"] == 1.0
+    never = unknown_signs.lowest_threshold_with_few_wrong_answers(rows[:2], 0.10)
+    assert not never["reached"] and never["threshold"] == 0.35

@@ -155,7 +155,7 @@ public struct SignLiveLineEntry: Equatable, Sendable {
         switch token {
         case .word?: return .word
         case .spelled?: return .spelled
-        case nil: return .unclear
+        case .unclear?, nil: return .unclear
         }
     }
 
@@ -230,7 +230,8 @@ public struct SignLiveReader {
 
     // MARK: State
 
-    /// The words that will be sent (unclear signs left out).
+    /// The line that will be sent: unclear signs are in it (Vello's brain hears them as unclear, with guesses), but
+    /// left out of the plain text typed into the app in front.
     public var line: SignedLine {
         SignedLine(tokens: entries.compactMap { $0.token })
     }

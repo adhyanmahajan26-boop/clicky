@@ -425,7 +425,7 @@ func describe(_ entry: SignLiveLineEntry) -> String {
     case .spelled(text: let spelledText, confidence: let confidence)?:
         let letterWords = spelledText.uppercased().map(String.init).joined(separator: "-")
         return "\(timeWords)  spelled  \(letterWords)   (\(String(format: "%.2f", confidence)))"
-    case nil:
+    case .unclear?, nil:
         let bestGuess = entry.wordGuesses.first.map { String(format: "best word %@ %.2f", SignWordNames.displayText(for: $0.label), $0.probability) } ?? "no word"
         return "\(timeWords)  unclear  ?   (\(bestGuess))"
     }

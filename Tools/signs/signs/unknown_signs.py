@@ -21,6 +21,17 @@ knows. Three rules are compared on held-out words (never in training, so the tes
 
 Thresholds are chosen on the taught validation clips (to answer 90% of them); the test clips, taught and never
 taught, are only read to print the numbers.
+
+**How a word model's "not sure" threshold is chosen** (the rule since round 6: top probability, threshold from
+held-out words). `folds` holds out three different seeded tenths of the words, trains and calibrates one model per
+fold, pools the three folds' test clips and picks the lowest threshold at which never-taught signs are wrongly
+answered at most `--most-wrongly-answered` of the time (default 0.10); `apply` writes it, with the numbers it was
+chosen from, into the full model's calibration file, which `export_coreml` turns into `.reading.json`:
+
+    python -m signs.unknown_signs folds --data /data/include --language isl --output runs/include-folds
+    python -m signs.calibrate --checkpoint runs/words-isl/checkpoint-best.pt --source apple
+    python -m signs.unknown_signs apply --checkpoint runs/words-isl/checkpoint-best.pt --folds runs/include-folds/folds.json
+    python -m signs.export_coreml --checkpoint runs/words-isl/checkpoint-best.pt --output out/SignWordsISL.mlpackage
 """
 
 from __future__ import annotations
@@ -295,6 +306,135 @@ def unknown_sign_tables(checkpoint_path: str, held_out_words: list[str], not_a_s
     return tables
 
 
+# ---- the threshold from held-out words ---------------------------------------------------------------------------
+
+
+def held_out_word_folds(words: list[str], fold_count: int, fraction: float, seed: int) -> list[list[str]]:
+    """`fold_count` disjoint sets of `fraction` of the words each, seeded."""
+    shuffled = sorted(words)
+    random.Random(seed).shuffle(shuffled)
+    per_fold = max(1, round(len(shuffled) * fraction))
+    if per_fold * fold_count > len(shuffled):
+        raise ValueError(f"{fold_count} folds of {per_fold} words need more than {len(shuffled)} words")
+    return [sorted(shuffled[fold * per_fold : (fold + 1) * per_fold]) for fold in range(fold_count)]
+
+
+def pooled_threshold_table(fold_results: list[dict], thresholds: list[float]) -> list[dict]:
+    """Each fold's test clips carry `top_probability`, `right` and `taught`; the rows are over all folds pooled."""
+    top = np.concatenate([np.asarray(result["top_probability"], dtype=np.float64) for result in fold_results])
+    right = np.concatenate([np.asarray(result["right"], dtype=bool) for result in fold_results])
+    taught = np.concatenate([np.asarray(result["taught"], dtype=bool) for result in fold_results])
+    return [{"threshold": threshold, **answer_table_row(top >= threshold, right, taught)} for threshold in thresholds]
+
+
+def lowest_threshold_with_few_wrong_answers(rows: list[dict], most_wrongly_answered: float) -> dict:
+    """The first row (rows are in rising threshold order) whose never-taught share answered is at most the limit; the
+    last row when none gets there."""
+    for row in rows:
+        if row["never_taught_wrongly_answered"] <= most_wrongly_answered:
+            return {**row, "reached": True}
+    return {**rows[-1], "reached": False}
+
+
+def fold_test_results(checkpoint_path: str, held_out_words: list[str], device_choice: str = "auto") -> dict:
+    """For one fold's calibrated model: each test clip's calibrated top probability, whether that top word is right,
+    and whether its word was taught."""
+    from .calibrate import CALIBRATION_FILE_SUFFIX, softmax_with_temperature
+    from .data import WordClipDataset, assign_splits, load_sources, references_in_split
+    from .evaluate import load_evaluation_model
+    from .splits import TEST_SPLIT
+    from .training import load_checkpoint, pick_device
+
+    checkpoint = load_checkpoint(checkpoint_path)
+    labels = list(checkpoint["labels"])
+    calibration_path = Path(str(checkpoint_path).removesuffix(".pt") + CALIBRATION_FILE_SUFFIX)
+    temperature = json.loads(calibration_path.read_text())["temperature"]
+    device = pick_device(device_choice)
+    model = load_evaluation_model(checkpoint).to(device)
+    sources = load_sources(checkpoint["data_folders"])
+    references, _ = assign_splits(sources, checkpoint["seed"], saved_signer_splits=checkpoint["signer_splits"], language=checkpoint["language"])
+    held_out_set = set(held_out_words)
+    feature_labels = labels + sorted(held_out_set - set(labels))
+    chosen = [reference for reference in references_in_split(references, TEST_SPLIT) if reference.label in labels or reference.label in held_out_set]
+    dataset = WordClipDataset(sources, chosen, feature_labels, None, checkpoint["seed"], checkpoint["frame_count"])
+    scores, _ = _scores_and_descriptions(model, dataset, device)
+    probabilities = softmax_with_temperature(scores, temperature)
+    true_numbers = np.array([feature_labels.index(reference.label) for reference in dataset.sample_references])
+    return {
+        "checkpoint": str(checkpoint_path),
+        "temperature": temperature,
+        "held_out_words": sorted(held_out_set),
+        "top_probability": probabilities.max(axis=1).tolist(),
+        "right": (probabilities.argmax(axis=1) == true_numbers).tolist(),
+        "taught": (true_numbers < len(labels)).tolist(),
+    }
+
+
+def run_folds(data_folder, language: str, output_folder, fold_count: int = 3, fraction: float = 0.1, seed: int = 0,
+              epochs: int = 120, most_wrongly_answered: float = 0.10, device_choice: str = "auto") -> dict:
+    """Builds the held-out datasets, trains and calibrates one model per fold (skipping any already trained), pools the
+    folds and picks the threshold. Writes and returns `<output>/folds.json`."""
+    from . import calibrate, train_words
+    from .landmarks import pack
+
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+    words = sorted({row["label"] for row in _read_manifest_rows(Path(data_folder)) if row["language"] == language})
+    folds = held_out_word_folds(words, fold_count, fraction, seed)
+    fold_results = []
+    for fold_number, held_out in enumerate(folds):
+        fold_data = output_folder / f"fold{fold_number}-data"
+        fold_run = output_folder / f"fold{fold_number}-run"
+        if not (fold_data / "manifest.csv").exists():
+            source_rows = _read_manifest_rows(Path(data_folder))
+            held_out_set = set(held_out)
+            fold_data.mkdir(parents=True, exist_ok=True)
+            kept_rows = [row for row in source_rows if row["label"] not in held_out_set or row["split"] == "test"]
+            for row in kept_rows:
+                _link_clip(Path(data_folder), fold_data, row["clip_id"])
+            _write_manifest_rows(fold_data, kept_rows)
+            pack(fold_data)
+        if not (fold_run / "checkpoint-best.pt").exists():
+            train_words.main(["--data", str(fold_data), "--language", language, "--output", str(fold_run), "--epochs", str(epochs)])
+        calibrate.main(["--checkpoint", str(fold_run / "checkpoint-best.pt"), "--source", "apple"])
+        fold_results.append(fold_test_results(str(fold_run / "checkpoint-best.pt"), held_out, device_choice))
+    thresholds = [round(step * 0.01, 2) for step in range(100)]
+    rows = pooled_threshold_table(fold_results, thresholds)
+    chosen = lowest_threshold_with_few_wrong_answers(rows, most_wrongly_answered)
+    result = {
+        "data": str(data_folder), "language": language, "folds": fold_count, "fraction_held_out": fraction, "seed": seed,
+        "held_out_words": folds, "most_wrongly_answered": most_wrongly_answered,
+        "test_taught_clips": int(sum(sum(result["taught"]) for result in fold_results)),
+        "test_never_taught_clips": int(sum(len(result["taught"]) - sum(result["taught"]) for result in fold_results)),
+        "chosen": chosen, "rows": rows,
+    }
+    (output_folder / "folds.json").write_text(json.dumps(result, indent=1) + "\n")
+    return result
+
+
+def apply_threshold(checkpoint_path: str, folds_path: str) -> dict:
+    """Puts the held-out-words threshold into the full model's calibration file (made by `signs.calibrate`, whose
+    temperature stays), with the numbers it was chosen from; `export_coreml` copies them into `.reading.json`."""
+    from .calibrate import CALIBRATION_FILE_SUFFIX
+
+    calibration_path = Path(str(checkpoint_path).removesuffix(".pt") + CALIBRATION_FILE_SUFFIX)
+    calibration = json.loads(calibration_path.read_text())
+    folds = json.loads(Path(folds_path).read_text())
+    chosen = folds["chosen"]
+    calibration["leastWordProbabilityFromValidation"] = calibration["leastWordProbability"]
+    calibration["leastWordProbability"] = chosen["threshold"]
+    calibration["leastWordProbabilityChosenFrom"] = {
+        "rule": f"lowest top-probability threshold where never-taught signs are wrongly answered at most {folds['most_wrongly_answered']:.0%} of the time",
+        "folds": folds["folds"], "fractionHeldOut": folds["fraction_held_out"], "seed": folds["seed"],
+        "testTaughtClips": folds["test_taught_clips"], "testNeverTaughtClips": folds["test_never_taught_clips"],
+        "neverTaughtWronglyAnswered": chosen["never_taught_wrongly_answered"],
+        "taughtAnswered": chosen["taught_answered"], "taughtRightWhenAnswered": chosen["taught_right_when_answered"],
+        "reached": chosen["reached"],
+    }
+    calibration_path.write_text(json.dumps(calibration, indent=1) + "\n", encoding="utf-8")
+    return calibration
+
+
 def main(argument_list=None) -> None:
     parser = argparse.ArgumentParser(description="The never-taught-signs experiment (see the module notes).")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -316,10 +456,37 @@ def main(argument_list=None) -> None:
     table.add_argument("--heldout", required=True, help="heldout.json from the holdout command")
     table.add_argument("--not-a-sign-label", default=None)
     table.add_argument("--device", default="auto")
+    folds = commands.add_parser("folds", help="the threshold from held-out words")
+    folds.add_argument("--data", required=True)
+    folds.add_argument("--language", required=True)
+    folds.add_argument("--output", required=True)
+    folds.add_argument("--folds", type=int, default=3)
+    folds.add_argument("--fraction", type=float, default=0.1)
+    folds.add_argument("--seed", type=int, default=0)
+    folds.add_argument("--epochs", type=int, default=120)
+    folds.add_argument("--most-wrongly-answered", type=float, default=0.10)
+    folds.add_argument("--device", default="auto")
+    apply = commands.add_parser("apply", help="write the folds' threshold into a full model's calibration file")
+    apply.add_argument("--checkpoint", required=True)
+    apply.add_argument("--folds", required=True, help="folds.json from the folds command")
     arguments = parser.parse_args(argument_list)
     if arguments.command == "holdout":
         held_out = make_holdout_dataset(arguments.data, arguments.output, arguments.count, arguments.seed)
         print(f"held out {len(held_out)} words: {', '.join(held_out)}")
+    elif arguments.command == "folds":
+        result = run_folds(arguments.data, arguments.language, arguments.output, arguments.folds, arguments.fraction,
+                           arguments.seed, arguments.epochs, arguments.most_wrongly_answered, arguments.device)
+        print(f"{'threshold':>9}  {'taught answered':>15}  {'right when answered':>19}  {'never-taught answered':>21}")
+        for row in result["rows"][::5]:
+            print(f"{row['threshold']:9.2f}  {row['taught_answered']:15.1%}  {row['taught_right_when_answered']:19.1%}  {row['never_taught_wrongly_answered']:21.1%}")
+        chosen = result["chosen"]
+        print(f"chosen: {chosen['threshold']:.2f} ({'reached' if chosen['reached'] else 'NOT reached'} at most "
+              f"{arguments.most_wrongly_answered:.0%} never-taught answered): taught answered {chosen['taught_answered']:.1%}, "
+              f"right when answered {chosen['taught_right_when_answered']:.1%}, never-taught answered {chosen['never_taught_wrongly_answered']:.1%} "
+              f"(pooled over {result['folds']} folds: {result['test_taught_clips']} taught, {result['test_never_taught_clips']} never-taught test clips)")
+    elif arguments.command == "apply":
+        calibration = apply_threshold(arguments.checkpoint, arguments.folds)
+        print(f"leastWordProbability {calibration['leastWordProbabilityFromValidation']} -> {calibration['leastWordProbability']}")
     elif arguments.command == "not-a-sign":
         print(make_not_a_sign_dataset(arguments.output, arguments.language, arguments.label, arguments.popsign,
                                       arguments.nonsigning, arguments.per_sign, seed=arguments.seed))
