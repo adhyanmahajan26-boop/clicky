@@ -299,17 +299,40 @@ public struct HandSignHoldTracker: Sendable {
 
 // MARK: - What a sign does
 
-/// What the signs are for, picked in Settings › Pointer Assistant › Hand signs.
+/// What the signs are for, picked in Settings › Accessibility. Declared in the order Settings and the panel show them:
+/// Sign to text first. The raw values are what's saved, so the order can change without losing anyone's choice.
 public enum HandSignMode: String, CaseIterable, Codable, Sendable {
-    /// Signs drive Pointer Assistant.
-    case control
+    /// Signed words and finger-spelling on the move (ASL or ISL) become a line of text, read by small Core ML models
+    /// from the hands, body and face (ClickyCore SignLanguage/, Tools/signs/SPEC.md), sent on to the same places as
+    /// Spell to text. The signs below don't act in this mode either.
+    case signs
+    /// Finger-spelled letters (and taught signs) become text, sent on to Vello, Pointer Assistant or the app in
+    /// front. Fingerspelling.swift reads them; the signs below don't act in this mode.
+    case spell
     /// Every sign is said out loud as its phrase, for someone who signs.
     case speakForMe
+    /// Signs drive Pointer Assistant.
+    case control
+
+    /// Shown with the word "Experimental" beside its name: it has only been shown to work for the signers it learned from.
+    public var isExperimental: Bool { self == .signs }
 
     public var displayName: String {
         switch self {
         case .control: return "Control Pointer Assistant"
         case .speakForMe: return "Speak for me"
+        case .spell: return "Spell to text"
+        case .signs: return "Sign to text"
+        }
+    }
+
+    /// The short name on the camera panel's buttons.
+    public var shortName: String {
+        switch self {
+        case .control: return "Control"
+        case .speakForMe: return "Speak"
+        case .spell: return "Spell"
+        case .signs: return "Signs"
         }
     }
 
@@ -317,6 +340,8 @@ public enum HandSignMode: String, CaseIterable, Codable, Sendable {
         switch self {
         case .control: return "Open palm: it listens and talks. Fist: stop. Thumbs up or down: yes or no to what it's asking. One finger up: tell me what's on my screen."
         case .speakForMe: return "Each sign is said out loud as its phrase and shown in big letters, so you can talk to someone with your hands."
+        case .spell: return "Finger-spell letters and they become text. Hand out of the picture ends a word, thumbs down deletes a letter, an open hand with the fingers spread sends it."
+        case .signs: return "Sign words, or finger-spell a word, and they become a line of text. Rest your hands between signs; the line is sent once they've rested a little longer."
         }
     }
 }
@@ -348,12 +373,27 @@ public enum HandSignAction: Equatable, Sendable {
     }
 }
 
+extension HandSignMode {
+    /// Control and Speak for me work through Pointer Assistant (it listens, answers and speaks the phrases); Spell to
+    /// text and Sign to text only write text, so they work whenever hand signs are on.
+    public var needsPointerAssistant: Bool {
+        switch self {
+        case .control, .speakForMe: return true
+        case .spell, .signs: return false
+        }
+    }
+}
+
 public enum HandSignActions {
     /// What Pointer Assistant is asked when one finger is held up in Control.
     public static let whatIsOnMyScreen = "What's on my screen right now? Tell me in a sentence or two."
 
     public static func action(for sign: HandSign, mode: HandSignMode, phrases: [HandSign: String]) -> HandSignAction {
         switch mode {
+        case .spell, .signs:
+            // Spelling reads letters and Sign to text reads signed words, not these signs (FingerspellingReader,
+            // SignLiveReader).
+            return .nothing
         case .speakForMe:
             let phrase = HandSignPhrases.phrase(for: sign, in: phrases)
             return phrase.isEmpty ? .nothing : .speak(phrase)
