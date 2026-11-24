@@ -84,6 +84,10 @@ public struct ActionTaskLoop: Equatable, Sendable {
 
     public let goal: String
     public let ownerTranscript: String
+    /// Steps one task may run: 12 for Pointer Assistant's turns, more for Vello's own work on a call (`CallHands.stepLimit`).
+    public let stepLimit: Int
+    /// Observe turns one task may take.
+    public let observeTurnLimit: Int
     public private(set) var records: [ActionStepRecord] = []
     /// Steps that actually ran (done or failed), counted against the 12.
     public private(set) var executedStepCount = 0
@@ -98,28 +102,37 @@ public struct ActionTaskLoop: Equatable, Sendable {
     public private(set) var unreadableStepRetries = 0
     public static let maximumUnreadableStepRetries = 1
 
-    public init(goal: String, ownerTranscript: String) {
+    public init(goal: String, ownerTranscript: String, stepLimit: Int = ActionTaskLoop.maximumStepsPerTask,
+                observeTurnLimit: Int = ActionTaskLoop.maximumObserveTurns) {
         self.goal = goal
         self.ownerTranscript = ownerTranscript
+        self.stepLimit = stepLimit
+        self.observeTurnLimit = observeTurnLimit
     }
 
-    public var remainingStepBudget: Int { max(0, Self.maximumStepsPerTask - executedStepCount) }
+    public var remainingStepBudget: Int { max(0, stepLimit - executedStepCount) }
     public var isStepBudgetExhausted: Bool { remainingStepBudget == 0 }
     public var nextStepNumber: Int { records.count + 1 }
 
     /// Whether the step at this point of a batch runs. `screenChangedEarlierInBatch`
     /// is true once a screen-changing step of this same block ran.
-    public func gate(_ step: ActionStep, screenChangedEarlierInBatch: Bool) -> ActionBatchGate {
+    /// `previousStepInBatch`: the step just before it in the same block. Typing into the field the step before clicked
+    /// still runs: the click only put the caret there (a field known only from the screenshot can't be told apart from a
+    /// button, and "click #65, type into #65" lost its typing as stale).
+    public func gate(_ step: ActionStep, screenChangedEarlierInBatch: Bool, previousStepInBatch: ActionStep? = nil) -> ActionBatchGate {
         if isStepBudgetExhausted { return .skipStepLimit }
-        if screenChangedEarlierInBatch && !step.referencedElementIDs.isEmpty { return .skipStaleIDs }
+        if screenChangedEarlierInBatch && !step.referencedElementIDs.isEmpty {
+            if case .type(let typedID?, _, _) = step, case .click(let clickedID)? = previousStepInBatch, typedID == clickedID { return .run }
+            return .skipStaleIDs
+        }
         return .run
     }
 
-    public static func skipReason(for gate: ActionBatchGate) -> String {
+    public static func skipReason(for gate: ActionBatchGate, stepLimit: Int = maximumStepsPerTask) -> String {
         switch gate {
         case .run: return ""
         case .skipStaleIDs: return "the screen changed earlier in this batch; use the fresh ids"
-        case .skipStepLimit: return "the \(maximumStepsPerTask)-step limit for one task was reached"
+        case .skipStepLimit: return "the \(stepLimit)-step limit for one task was reached"
         }
     }
 
@@ -143,7 +156,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
     /// After a batch: is there another observe turn?
     public func needsObserveTurn(planWasDone: Bool, wasCancelled: Bool) -> Bool {
         if wasCancelled { return false }
-        if observeTurnCount >= Self.maximumObserveTurns { return false }
+        if observeTurnCount >= observeTurnLimit { return false }
         // A summarize step read the page: Claude still has to write the summary.
         if (pendingPageText != nil || pendingArticleText != nil) && !isStepBudgetExhausted { return true }
         if planWasDone {
@@ -162,7 +175,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
         var lines: [String] = []
         lines.append("ACTION TASK IN PROGRESS — continue it.")
         lines.append("goal: \(goal.isEmpty ? ownerTranscript : goal)")
-        lines.append("steps used: \(executedStepCount) of \(Self.maximumStepsPerTask) (\(remainingStepBudget) left)")
+        lines.append("steps used: \(executedStepCount) of \(stepLimit) (\(remainingStepBudget) left)")
         lines.append("results so far:")
         if records.isEmpty { lines.append("(none)") }
         lines += records.map(\.resultLine)
@@ -196,7 +209,7 @@ public struct ActionTaskLoop: Equatable, Sendable {
 
     /// The final spoken line when the loop stops on its own.
     public var limitReachedLine: String {
-        "i've used all \(Self.maximumStepsPerTask) steps for this task, so i'm stopping here."
+        "i've used all \(stepLimit) steps for this task, so i'm stopping here."
     }
 }
 

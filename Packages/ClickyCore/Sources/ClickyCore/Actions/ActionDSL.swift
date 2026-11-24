@@ -203,6 +203,8 @@ public enum ActionStep: Equatable, Sendable {
     case readArticle
     /// P8: show the notes panel beside the article.
     case notes(ArticleNotes)
+    /// Flies the spark to an element and leaves it there: pointing, with nothing pressed.
+    case point(elementID: Int)
 
     /// The DSL verb ("open_app").
     public var verb: String {
@@ -222,13 +224,14 @@ public enum ActionStep: Equatable, Sendable {
         case .codeTask: return "code_task"
         case .readArticle: return "read_article"
         case .notes: return "notes"
+        case .point: return "point"
         }
     }
 
     /// Element ids of the current screen the step depends on.
     public var referencedElementIDs: [Int] {
         switch self {
-        case .click(let elementID): return [elementID]
+        case .click(let elementID), .point(let elementID): return [elementID]
         case .type(let elementID, _, _), .scroll(let elementID, _, _), .selectCopy(let elementID, _): return elementID.map { [$0] } ?? []
         case .highlight(let targets, _):
             return targets.compactMap { target in
@@ -245,7 +248,7 @@ public enum ActionStep: Equatable, Sendable {
         case .openApp, .openURL, .search, .click, .key, .switchWindow, .codeTask: return true
         case .type(_, _, let pressesReturn): return pressesReturn
         case .scroll: return true
-        case .selectCopy, .wait, .highlight, .summarize, .readArticle, .notes: return false
+        case .selectCopy, .wait, .highlight, .summarize, .readArticle, .notes, .point: return false
         }
     }
 
@@ -277,7 +280,7 @@ public enum ActionStep: Equatable, Sendable {
     /// Steps that read or mark the screen only (they never send an event to an app).
     public var isReadOnly: Bool {
         switch self {
-        case .highlight, .summarize, .selectCopy, .wait, .readArticle, .notes: return true
+        case .highlight, .summarize, .selectCopy, .wait, .readArticle, .notes, .point: return true
         default: return false
         }
     }
@@ -305,6 +308,7 @@ public enum ActionStep: Equatable, Sendable {
         case .codeTask(let project, _): return "code task" + (project.map { " in \($0)" } ?? "")
         case .readArticle: return "read the article"
         case .notes(let notes): return "show \(notes.items.count) note\(notes.items.count == 1 ? "" : "s")"
+        case .point(let elementID): return "point at #\(elementID)"
         }
     }
 }
@@ -459,6 +463,10 @@ public enum ActionDSL {
                 return reject("click needs an element id")
             }
             return .success(.click(elementID: elementID))
+
+        case "point", "point_at":
+            guard let elementID = elementIdentifier(object["id"]) else { return reject("point needs the element's number from the list") }
+            return .success(.point(elementID: elementID))
 
         case "type":
             guard let text = object["text"] as? String, !text.isEmpty else { return reject("type needs text") }

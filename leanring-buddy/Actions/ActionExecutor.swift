@@ -93,7 +93,10 @@ final class ActionExecutor {
                  previousTargetProcessIdentifier: pid_t? = nil, previousStepBroughtAppForward: Bool = false) -> ResolvedActionTarget {
         switch step {
         case .openApp(let name, let bundleIdentifier):
-            guard let candidate = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier) else {
+            // An app that lives inside another one here ("Codex" in ChatGPT) opens the one it lives in (ClickyCore `ActionAppHomes`).
+            let homeName = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier) == nil ? name.flatMap(ActionAppHomes.home(of:)) : nil
+            guard let candidate = Self.findApplication(name: name, bundleIdentifier: bundleIdentifier)
+                    ?? homeName.flatMap({ Self.findApplication(name: $0, bundleIdentifier: nil) }) else {
                 return ResolvedActionTarget(failure: "no app called \(name ?? bundleIdentifier ?? "that") on this Mac")
             }
             let runningApplication = candidate.bundleIdentifier.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }
@@ -108,7 +111,7 @@ final class ActionExecutor {
             guard let url = engine.resultsURL(for: query) else { return ResolvedActionTarget(failure: "couldn't build the search link") }
             return resolveBrowser(for: url, ownerTranscript: ownerTranscript)
 
-        case .click(let elementID):
+        case .click(let elementID), .point(let elementID):
             return resolveElement(elementID, in: groundedTurn)
 
         case .type(let elementID, _, _):
@@ -407,6 +410,11 @@ final class ActionExecutor {
             guard result.document.utf16Length > 0 else { return ActionPerformResult(.failed(reason: "couldn't read any text in the article window")) }
             let detail = "read \(result.document.utf16Length) characters via \(result.document.source.rawValue)" + (result.document.isTruncated ? ", cut at the limit" : "")
             return ActionPerformResult(.done(detail: detail), articleText: ArticleModelText.text(for: result.document))
+        case .point:
+            // Vello points: the spark flies beside the element and stays there; nothing is pressed.
+            guard let frame = target.frameCG, frame.width > 0, frame.height > 0 else { return ActionPerformResult(.failed(reason: "couldn't find where that is on screen")) }
+            companionManager.flyCompanion(toScreenRectCG: frame)
+            return ActionPerformResult(.done(detail: "pointing at it" + (target.facts?.label.map { " (\(String($0.prefix(40))))" } ?? "")))
         case .notes(let notes):
             companionManager.articleController.showNotes(notes, target: target.articleWindow)
             // The model normally says the summary as its spoken line; say it here only if it didn't.
@@ -669,7 +677,7 @@ final class ActionExecutor {
             }
             return (.failed(reason: "nothing to switch to"), nil)
 
-        case .highlight, .readArticle, .notes:
+        case .highlight, .readArticle, .notes, .point:
             // Handled in perform.
             return (.failed(reason: "internal: handled elsewhere"), nil)
 
@@ -767,12 +775,22 @@ final class ActionExecutor {
 
     private func type(_ text: String, into target: ResolvedActionTarget, focusesFirst: Bool, pressesReturn: Bool,
                       isCancelled: @escaping () -> Bool) async -> ActionStepOutcome {
-        guard var element = target.axElement else { return .failed(reason: "no text field to type into") }
-        let background = BackgroundInput.staysInBackground(targetFrameCG: target.frameCG ?? TypeForMeAccessibility.frameCG(of: element))
-        let targetProcessIdentifier = target.processIdentifier ?? BackgroundInput.processIdentifier(of: element)
+        // A field that's only known from the screenshot (OCR: ChatGPT, Codex and other apps that show Accessibility almost
+        // nothing) has no AX element. A real click on it puts the caret there, then the keys go in (Air, 25 Nov: "type into
+        // the Project name box" failed with "no text field" three times while the box sat empty).
+        let isScreenOnlyField = target.axElement == nil && focusesFirst
+        guard target.axElement != nil || (isScreenOnlyField && (target.frameCG.map { $0.width > 0 && $0.height > 0 } ?? false)) else {
+            return .failed(reason: "no text field to type into")
+        }
+        var element: AXUIElement? = target.axElement
+        let background = BackgroundInput.staysInBackground(targetFrameCG: target.frameCG ?? element.flatMap { TypeForMeAccessibility.frameCG(of: $0) })
+        let targetProcessIdentifier = target.processIdentifier ?? element.flatMap { BackgroundInput.processIdentifier(of: $0) }
+        // Electron and web-app fields (React and the like) take an Accessibility value write and then quietly put their own
+        // value back, so the words looked typed and vanished. Those get real key presses, after a real click.
+        let typesWithKeysOnly = isScreenOnlyField || Self.isWebAppProcess(targetProcessIdentifier)
         if background {
             // Theo's own cursor goes to the field and shows it is typing; the owner's pointer and focus stay put.
-            if let frame = target.frameCG ?? TypeForMeAccessibility.frameCG(of: element), frame.width > 0 {
+            if let frame = target.frameCG ?? element.flatMap({ TypeForMeAccessibility.frameCG(of: $0) }), frame.width > 0 {
                 await VirtualCursor.shared.move(toCG: CGPoint(x: frame.midX, y: frame.midY))
             }
             VirtualCursor.shared.setTyping(true)
@@ -782,7 +800,8 @@ final class ActionExecutor {
         // them (Safari behind the Claude app got the search and never showed it), and typed keys go to the right app.
         if !background { await bringTargetForward(target) }
         if focusesFirst {
-            let didFocus = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+            // An Electron field says yes to an AX focus write without taking the caret, so it gets a real click instead.
+            let didFocus = !typesWithKeysOnly && element.map { AXUIElementSetAttributeValue($0, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success } == true
             if !didFocus, let frame = target.frameCG, frame.width > 0 {
                 let focusPoint = CGPoint(x: frame.midX, y: frame.midY)
                 if !background {
@@ -798,30 +817,31 @@ final class ActionExecutor {
             }
         }
         // Re-check right before typing: the field may have turned into a password prompt.
-        if IsSecureEventInputEnabled() || TypeForMeAccessibility.stringAttribute(kAXSubroleAttribute, of: element) == TypeForMePolicy.secureTextFieldSubrole {
+        if IsSecureEventInputEnabled() || element.map({ TypeForMeAccessibility.stringAttribute(kAXSubroleAttribute, of: $0) }) == TypeForMePolicy.secureTextFieldSubrole {
             return .refused(reason: "that's a password field")
         }
         if isCancelled() { return .cancelled }
 
         var method = "ax"
-        let valueBefore = TypeForMeAccessibility.value(of: element)
+        func currentValue() -> String? { element.flatMap { TypeForMeAccessibility.value(of: $0) } }
+        let valueBefore = currentValue()
         var verification = InsertionVerification.unchanged
         // Web fields update their AX value asynchronously: an immediate read-back looked "unchanged",
         // the fallback inserted the text again, and a live search got "weather in delhiweather in delhi".
         // So re-read for up to ~250 ms before trying the next method.
         func settledVerification() async -> InsertionVerification {
             for attempt in 0..<4 {
-                let current = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: TypeForMeAccessibility.value(of: element), insertedText: text)
+                let current = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: currentValue(), insertedText: text)
                 if current != .unchanged || attempt == 3 { return current }
                 try? await Task.sleep(nanoseconds: 80_000_000)
             }
             return .unchanged
         }
-        if valueBefore?.isEmpty ?? true,
+        if !typesWithKeysOnly, let element, valueBefore?.isEmpty ?? true,
            AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString) == .success {
             verification = await settledVerification()
         }
-        if verification == .unchanged, TypeForMeAccessibility.setSelectedText(text, of: element) {
+        if !typesWithKeysOnly, verification == .unchanged, let element, TypeForMeAccessibility.setSelectedText(text, of: element) {
             verification = await settledVerification()
         }
         if verification == .unchanged {
@@ -840,7 +860,7 @@ final class ActionExecutor {
                 try? await Task.sleep(nanoseconds: Self.delayBetweenUnicodeChunks)
             }
             try? await Task.sleep(nanoseconds: Self.delayBetweenUnicodeChunks * 4)
-            verification = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: TypeForMeAccessibility.value(of: element), insertedText: text)
+            verification = InsertionVerification.evaluate(valueBefore: valueBefore, valueAfter: currentValue(), insertedText: text)
             if verification == .unchanged { return .failed(reason: "the text didn't land in the field") }
         }
         if pressesReturn {
@@ -858,6 +878,12 @@ final class ActionExecutor {
         }
         let detail = (verification == .verified ? "typed" : "typed, unverified") + " (\(method))" + (pressesReturn ? " + return" : "")
         return .done(detail: detail)
+    }
+
+    /// An Electron app (Codex, Slack, Discord, VS Code…): its fields are web pages that take keys, not AX value writes.
+    static func isWebAppProcess(_ processIdentifier: pid_t?) -> Bool {
+        guard let processIdentifier, processIdentifier != getpid(), let application = NSRunningApplication(processIdentifier: processIdentifier) else { return false }
+        return ElectronDetection.isElectron(application)
     }
 
     // MARK: Keys and scrolling

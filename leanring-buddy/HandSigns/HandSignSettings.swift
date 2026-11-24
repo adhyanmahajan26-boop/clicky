@@ -202,7 +202,7 @@ struct HandSignSettingsSection: View {
     /// What the sign does in Control, beside its phrase.
     private func controlModeWords(for sign: HandSign) -> String {
         switch HandSignActions.action(for: sign, mode: .control, phrases: phrases) {
-        case .startListening: return "Control: Pointer Assistant listens, talk to it"
+        case .startListening: return "Control: starts a call with Vello, talk to it"
         case .stopEverything: return "Control: stop, like Esc"
         case .answer(let yes): return yes ? "Control: yes to what it's asking" : "Control: no to what it's asking"
         case .ask: return "Control: asks what's on your screen"

@@ -411,17 +411,20 @@ public enum ClickyTeamPrompts {
     }
 
     /// In Theo's instructions on a call. `ownChatApps`: the apps Vello has in its own text chat (Notion, Gmail, …), by name.
-    public static func callHowTo(owner: String, ownChatApps: [String] = []) -> String {
+    /// `hasHands`: Vello may look at and act on the screen itself (`CallHands`); off, it says how to turn that on.
+    public static func callHowTo(owner: String, ownChatApps: [String] = [], hasHands: Bool = true, leavesSafariAlone: Bool = false) -> String {
         let apps = ownChatApps.isEmpty
             ? "It has no apps yet, so for \(owner)'s Notion, mail or calendar say they can give you the app in your settings."
             : "Its apps: \(ownChatApps.joined(separator: ", ")). If \(owner) asks for one that isn't there, say they can give it to you in your settings."
-        return "You can't do things yourself on this call, but everything gets done through these lines, so never say you can't do it. Say a few words first, like \"I'll get Pointer Assistant on that\", and put the line at the very end of your reply. Lines are never read aloud. " +
-            "Pointer Assistant works for you: it sees \(owner)'s screens, points at things, acts on screen, opens apps, files and folders, researches and remembers. To have it do something, put [CLICKY: what to do, in plain words]. " +
-            "To turn Pointer Assistant on or off when \(owner) asks, put [POINTER: on] or [POINTER: off]. " +
+        let screen = hasHands
+            ? CallHands.howTo(owner: owner, leavesSafariAlone: leavesSafariAlone) + "\nIf \(owner) asks you to stop using the screen, put [POINTER: off]; [POINTER: on] turns it back on.\n"
+            : "Using the screen is switched off right now, so you can't see or click anything. When \(owner) wants something done on screen, offer to switch it on, and once they say yes put [POINTER: on], then [LOOK].\n"
+        return screen +
+            "Lines in brackets and blocks go at the very end of your reply and are never read aloud. " +
             "To run one of \(owner)'s routines now, put [ROUTINE: its name]. " +
             "For anything that needs your apps, files, routines or team, such as reading \(owner)'s Notion, checking mail, setting up a routine, making a bot or saving a file, hand it to yourself in your own text chat with [TELL: Vello: what to do]. \(apps) " +
             "To give work to another bot or a group chat, put [TELL: its exact name: what to do]. " +
-            "When \(owner) says to open or send something to a coding agent (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), even to just prompt it in a project or folder, use [TELL: that harness: the full instructions], with the folder as the projects note below says. It runs in a terminal in that folder, on a card in your chat, and the word cancel there stops the run going on. " +
+            "When \(owner) says to send something to a coding agent to run in a terminal (Codex, Claude Code, Cursor, OpenCode, Grok, Gemini, T3 Code), use [TELL: that harness: the full instructions], with the folder as the projects note below says. It runs in a terminal in that folder, on a card in your chat, and the word cancel there stops the run going on. When they want it done in the app on screen instead (\"open Codex and type this\"), do it yourself with your hands. " +
             "An idea or build for a team goes to their group chat: they critique it among themselves and the run starts by itself after that. " +
             "When something you handed out is done you'll get a note with what came back; tell \(owner) in a sentence. You know who everyone is from the list you have, so never ask \(owner) how to reach them, and saying @Name out loud reaches nobody."
     }
