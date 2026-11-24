@@ -91,6 +91,10 @@ public struct SignReadingSettings: Equatable, Sendable {
     public static let unclearGuessesKept = 2
     public static let leastUnclearGuessProbabilityToMention: Float = 0.3
 
+    /// A word the sentence model reads in a run of signs counts only at this confidence (the highest probability its
+    /// rows reached); under it the word becomes an unclear sign. Chosen on INCLUDE's validation streams.
+    public var leastSentenceWordConfidence: Float = 0.5
+
     public init(
         leastWordProbability: Float = 0.25,
         leastSpellingConfidence: Float = 0.5,
@@ -297,6 +301,18 @@ public enum SignStretchReading {
             }
         }
         return .word(guesses: keptGuesses)
+    }
+}
+
+extension SignStretchReading {
+    /// The sentence model's reading of a stretch, when it found a run of two or more signs: each word with its own
+    /// confidence, an unclear sign under `leastSentenceWordConfidence`. Empty when it found one sign or none: then
+    /// the word model's answer stands (it reads a lone sign better, and has the "not sure" threshold).
+    public static func sentenceTokens(sentenceWords: [SignWordGuess], settings: SignReadingSettings = SignReadingSettings()) -> [SignToken] {
+        guard sentenceWords.count >= 2 else { return [] }
+        return sentenceWords.map { word in
+            word.probability >= settings.leastSentenceWordConfidence ? .word(guesses: [word]) : .unclear(guesses: [word])
+        }
     }
 }
 

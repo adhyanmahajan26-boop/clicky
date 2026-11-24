@@ -110,7 +110,8 @@ struct HandSignSettingsSection: View {
             return "Its models load when Sign to text is turned on."
         }
         let modelWords = [signModelsLoad.wordModelSummary, signModelsLoad.spellingModelSummary].compactMap { $0 }
-        return "Ready: \(modelWords.joined(separator: "; "))."
+        let sentenceWords = signModelsLoad.sentenceModelSummary.map { " Runs of signs without a rest are read by \($0)." } ?? ""
+        return "Ready: \(modelWords.joined(separator: "; ")).\(sentenceWords)"
     }
 
     /// Teach a letter or word: write it, press Teach, and hold the sign to the camera for two seconds.

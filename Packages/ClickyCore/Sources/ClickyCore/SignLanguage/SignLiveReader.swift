@@ -52,6 +52,20 @@ public protocol SignStretchScoring: AnyObject {
     func wordScores(features: [Float], mask: [Float]) throws -> [Float]
     /// Moving letters: `rows × (characters + 1)` scores, row-major. Still letter: one score per character.
     func spellingScores(features: [Float], mask: [Float]) throws -> [Float]
+
+    /// How many frames the sentence model reads (384), or nil when there is none (then stretches read as today).
+    var sentenceModelFrameCount: Int? { get }
+    /// The sentence model's words: score column i + 1 is word i, column 0 the blank.
+    var sentenceLabels: [String] { get }
+    /// `rows × (sentence labels + 1)` scores, row-major (CTC, a row per 2 frames).
+    func sentenceScores(features: [Float], mask: [Float]) throws -> [Float]
+}
+
+/// Scorers without a sentence model read every stretch as one sign.
+public extension SignStretchScoring {
+    var sentenceModelFrameCount: Int? { nil }
+    var sentenceLabels: [String] { [] }
+    func sentenceScores(features: [Float], mask: [Float]) throws -> [Float] { [] }
 }
 
 // MARK: - Jobs and outcomes
@@ -102,6 +116,11 @@ public struct SignStretchOutcome: Equatable, Sendable {
     public let framesRead: Int
     /// Set when the stretch couldn't be read at all (no model, a model failed); then nothing goes on the line.
     public let couldNotRead: String?
+    /// The sentence model's words when it read a run of two or more signs (they go on the line instead of `token`);
+    /// empty otherwise. `sentenceWords` is what it read, kept for the debug state even when the word model's answer
+    /// stood.
+    public let sentenceTokens: [SignToken]
+    public let sentenceWords: [SignWordGuess]
 
     public init(
         readerIdentifier: UUID,
@@ -112,7 +131,9 @@ public struct SignStretchOutcome: Equatable, Sendable {
         wordGuesses: [SignWordGuess],
         spelling: SignSpelledGuess?,
         framesRead: Int,
-        couldNotRead: String?
+        couldNotRead: String?,
+        sentenceTokens: [SignToken] = [],
+        sentenceWords: [SignWordGuess] = []
     ) {
         self.readerIdentifier = readerIdentifier
         self.sequenceNumber = sequenceNumber
@@ -123,7 +144,12 @@ public struct SignStretchOutcome: Equatable, Sendable {
         self.spelling = spelling
         self.framesRead = framesRead
         self.couldNotRead = couldNotRead
+        self.sentenceTokens = sentenceTokens
+        self.sentenceWords = sentenceWords
     }
+
+    /// True when the sentence model's words went on the line.
+    public var isReadAsARunOfSigns: Bool { !sentenceTokens.isEmpty }
 }
 
 // MARK: - The line as shown
@@ -310,6 +336,16 @@ public struct SignLiveReader {
                 events.append(.couldNotRead(reason))
                 continue
             }
+            if nextOutcome.isReadAsARunOfSigns {
+                // A run of signs read by the sentence model: one entry per word, in order.
+                for sentenceToken in nextOutcome.sentenceTokens {
+                    let entry = SignLiveLineEntry(token: sentenceToken, startTime: nextOutcome.startTime, endTime: nextOutcome.endTime,
+                                                  wordGuesses: [], spelling: nil)
+                    entries.append(entry)
+                    events.append(.read(entry))
+                }
+                continue
+            }
             let entry = SignLiveLineEntry(
                 token: nextOutcome.token,
                 startTime: nextOutcome.startTime,
@@ -368,7 +404,8 @@ public struct SignLiveReader {
     /// thinned or padded to each model's frame count and scored. Finger-spelling is only scored when the stretch
     /// looks like it (it can't win otherwise, so the slower model isn't run for nothing).
     public static func read(_ job: SignStretchJob, scoring: SignStretchScoring?, settings: SignReadingSettings) -> SignStretchOutcome {
-        func outcome(token: SignToken?, wordGuesses: [SignWordGuess] = [], spelling: SignSpelledGuess? = nil, framesRead: Int, couldNotRead: String? = nil) -> SignStretchOutcome {
+        func outcome(token: SignToken?, wordGuesses: [SignWordGuess] = [], spelling: SignSpelledGuess? = nil, framesRead: Int, couldNotRead: String? = nil,
+                     sentenceTokens: [SignToken] = [], sentenceWords: [SignWordGuess] = []) -> SignStretchOutcome {
             SignStretchOutcome(
                 readerIdentifier: job.readerIdentifier,
                 sequenceNumber: job.sequenceNumber,
@@ -378,7 +415,9 @@ public struct SignLiveReader {
                 wordGuesses: wordGuesses,
                 spelling: spelling,
                 framesRead: framesRead,
-                couldNotRead: couldNotRead
+                couldNotRead: couldNotRead,
+                sentenceTokens: sentenceTokens,
+                sentenceWords: sentenceWords
             )
         }
 
@@ -427,7 +466,33 @@ public struct SignLiveReader {
         }
 
         let token = SignStretchReading.token(wordGuesses: wordGuesses, spelling: spelling, facts: facts, settings: effectiveSettings)
-        return outcome(token: token, wordGuesses: wordGuesses, spelling: spelling, framesRead: keptFrames.count)
+
+        // A stretch that isn't finger-spelling is also read by the sentence model, when there is one: two or more
+        // signs found, and its words go on the line instead; one or none, and the word model's answer stands.
+        var sentenceWords: [SignWordGuess] = []
+        var sentenceTokens: [SignToken] = []
+        if let sentenceModelFrameCount = scoring.sentenceModelFrameCount, !scoring.sentenceLabels.isEmpty {
+            if case .spelled? = token {} else {
+                do {
+                    let fitted = SignFeatures.fitted(featureClip, toFrameCount: sentenceModelFrameCount)
+                    let sentenceScores = try scoring.sentenceScores(features: fitted.values, mask: fitted.mask)
+                    let columnCount = scoring.sentenceLabels.count + 1
+                    if sentenceScores.count % columnCount == 0 {
+                        sentenceWords = SignSentenceDecoder.words(
+                            scores: sentenceScores,
+                            rowCount: sentenceScores.count / columnCount,
+                            usedRowCount: SignSpellingDecoder.usedRowCount(forRealFrameCount: min(featureClip.frameCount, sentenceModelFrameCount)),
+                            labels: scoring.sentenceLabels
+                        )
+                        sentenceTokens = SignStretchReading.sentenceTokens(sentenceWords: sentenceWords, settings: effectiveSettings)
+                    }
+                } catch {
+                    // The sentence model failing leaves the word model's answer, as with no sentence model.
+                }
+            }
+        }
+        return outcome(token: token, wordGuesses: wordGuesses, spelling: spelling, framesRead: keptFrames.count,
+                       sentenceTokens: sentenceTokens, sentenceWords: sentenceWords)
     }
 
     private static func readMovingLetters(featureClip: SignFeatureClip, frameCount: Int, scoring: SignStretchScoring) throws -> SignSpelledGuess {

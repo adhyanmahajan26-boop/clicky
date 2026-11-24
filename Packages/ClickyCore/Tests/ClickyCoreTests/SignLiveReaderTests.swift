@@ -28,6 +28,34 @@ struct SignLiveReaderTests {
         private(set) var realFrameCountsShownToTheWordModel: [Int] = []
         private(set) var spellingModelRuns = 0
 
+        /// When set, there is a sentence model, and it reads these words with these confidences (in order).
+        var sentenceWordsRead: [(word: String, confidence: Float)]?
+        var sentenceVocabulary = ["i", "go", "school", "home", "eat"]
+        private(set) var sentenceModelRuns = 0
+
+        var sentenceModelFrameCount: Int? { sentenceWordsRead == nil ? nil : 384 }
+        var sentenceLabels: [String] { sentenceWordsRead == nil ? [] : sentenceVocabulary }
+
+        func sentenceScores(features: [Float], mask: [Float]) throws -> [Float] {
+            sentenceModelRuns += 1
+            let rowCount = mask.count / 2
+            let columnCount = sentenceVocabulary.count + 1
+            var scores = [Float](repeating: 0, count: rowCount * columnCount)
+            for rowIndex in 0..<rowCount { scores[rowIndex * columnCount] = 10 }  // blank everywhere at first
+            var rowIndex = 0
+            for (word, confidence) in sentenceWordsRead ?? [] {
+                guard let wordIndex = sentenceVocabulary.firstIndex(of: word), rowIndex + 1 < rowCount else { continue }
+                // the word's column gets exactly `confidence` of the row's probability
+                let wordScore = Float(log(Double(confidence) * Double(columnCount - 1) / (1 - Double(confidence))))
+                for row in [rowIndex, rowIndex + 1] {
+                    scores[row * columnCount] = 0
+                    scores[row * columnCount + wordIndex + 1] = wordScore
+                }
+                rowIndex += 3
+            }
+            return scores
+        }
+
         func wordScores(features: [Float], mask: [Float]) throws -> [Float] {
             let realFrameCount = Int(mask.reduce(0, +))
             realFrameCountsShownToTheWordModel.append(realFrameCount)
@@ -144,6 +172,67 @@ struct SignLiveReaderTests {
         #expect(reader.line.plainText == "hello")
         #expect(!reader.isSigning)
         #expect(reader.readingsInProgress == 0)
+    }
+
+    // MARK: The sentence model
+
+    @Test func aRunOfTwoOrMoreSignsIsReadByTheSentenceModelWordByWord() {
+        var reader = Self.newReader()
+        let scorer = FakeSignScorer()
+        scorer.sentenceWordsRead = [("i", 0.9), ("go", 0.8), ("school", 0.3)]
+        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)], into: &reader, scoring: scorer)
+
+        let entries = Self.readEntries(fed.events)
+        #expect(entries.map(\.displayText) == ["i", "go", "?"])
+        #expect(entries.map(\.kind) == [.word, .word, .unclear])
+        // the word under the sentence confidence keeps its guess for Vello's brain
+        guard case .unclear(guesses: let unclearGuesses)? = entries.last?.token else {
+            Issue.record("expected the last word to be unclear")
+            return
+        }
+        #expect(unclearGuesses.map(\.label) == ["school"])
+        #expect(abs((unclearGuesses.first?.probability ?? 0) - 0.3) < 1e-3)
+        #expect(reader.line.plainText == "i go")
+        #expect(scorer.sentenceModelRuns == 1)
+    }
+
+    @Test func oneSignOrNoneFromTheSentenceModelLeavesTheWordModelsAnswer() {
+        for sentenceWords in [[("go", Float(0.95))], []] {
+            var reader = Self.newReader()
+            let scorer = FakeSignScorer()
+            scorer.sentenceWordsRead = sentenceWords
+            let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)], into: &reader, scoring: scorer)
+            let entries = Self.readEntries(fed.events)
+            #expect(entries.map(\.displayText) == ["hello"])
+            #expect(scorer.sentenceModelRuns == 1)
+        }
+    }
+
+    @Test func fingerSpellingIsNeverGivenToTheSentenceModel() {
+        var reader = Self.newReader()
+        let scorer = FakeSignScorer()
+        scorer.wordWhenWristIsLeftOfMiddle = nil
+        scorer.spelledLetters = "hi"
+        scorer.sentenceWordsRead = [("i", 0.9), ("go", 0.9)]
+        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)], into: &reader, scoring: scorer)
+        #expect(Self.readEntries(fed.events).map(\.displayText) == ["hi"])
+        #expect(scorer.sentenceModelRuns == 0)
+    }
+
+    @Test func theSentenceDecoderGivesEachWordTheBestConfidenceOfItsRows() {
+        let labels = ["a", "b"]
+        // rows: blank, a(0.7), a(0.9), blank, b(0.6), b(0.6)… as softmax of raw scores
+        func row(_ column: Int, _ probability: Double) -> [Float] {
+            var scores = [Float](repeating: 0, count: 3)
+            scores[column] = Float(log(probability * 2 / (1 - probability)))
+            return scores
+        }
+        let scores = row(0, 0.9) + row(1, 0.7) + row(1, 0.9) + row(0, 0.8) + row(2, 0.6) + row(2, 0.6) + row(1, 0.99)
+        let words = SignSentenceDecoder.words(scores: scores, rowCount: 7, usedRowCount: 6, labels: labels)
+        #expect(words.map(\.label) == ["a", "b"])
+        #expect(abs(words[0].probability - 0.9) < 1e-4)
+        #expect(abs(words[1].probability - 0.6) < 1e-4)
+        #expect(SignSentenceDecoder.words(scores: [1, 2], rowCount: 1, usedRowCount: 1, labels: labels).isEmpty)
     }
 
     @Test func aStillOneHandedStretchWithNoSureWordIsReadAsASpelledWord() {

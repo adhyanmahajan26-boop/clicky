@@ -10,8 +10,7 @@
 //  rest between signs. (Python's built sentences trim only frames with no hand at all, which in INCLUDE leaves the
 //  hands resting at the sides at both ends of every clip.) Numbers here are on built streams, not real fluent signing.
 //
-//  Read two ways: today's pipeline (stretches, the word model on each), and, with --sentence-model, the sentence
-//  model on each stretch (CTC over the word list, greedy). Word error rate = word edits / words signed.
+//  Read the way the app reads (sign-eval's header): word error rate = word edits / words signed.
 //
 
 import ClickyCore
@@ -115,28 +114,6 @@ private func glide(from last: SignLandmarkFrame, to first: SignLandmarkFrame, co
     }
 }
 
-/// Greedy CTC over a row-major `[rows × (words + 1)]` score array, blank first: the best class per row, repeats
-/// joined, blanks dropped.
-func greedyCTCWords(scores: [Float], rowCount: Int, usedRowCount: Int, labels: [String]) -> [String] {
-    let classCount = labels.count + 1
-    var words: [String] = []
-    var previousClass = -1
-    for row in 0..<min(usedRowCount, rowCount) {
-        let rowStart = row * classCount
-        var bestClass = 0
-        var bestScore = -Float.greatestFiniteMagnitude
-        for classNumber in 0..<classCount where scores[rowStart + classNumber] > bestScore {
-            bestScore = scores[rowStart + classNumber]
-            bestClass = classNumber
-        }
-        if bestClass != previousClass && bestClass != 0 {
-            words.append(labels[bestClass - 1])
-        }
-        previousClass = bestClass
-    }
-    return words
-}
-
 func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throws {
     let allRows = try readManifest(path: options.manifestPath!)
     let wordSet = Set(scorer.wordLabels)
@@ -146,18 +123,10 @@ func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throw
     guard rows.count >= 5 else { throw EvaluationError("fewer than 5 clips to build streams from") }
     let clipsFolderURL = URL(fileURLWithPath: (options.clipsFolderPath! as NSString).expandingTildeInPath, isDirectory: true)
 
-    var sentenceModel: SignModelRunner?
-    if let sentenceModelPath = options.sentenceModelPath {
-        let cacheFolderURL = FileManager.default.temporaryDirectory.appendingPathComponent("sign-eval-compiled-models", isDirectory: true)
-        sentenceModel = try SignModelRunner(modelURL: URL(fileURLWithPath: (sentenceModelPath as NSString).expandingTildeInPath), compiledModelCacheFolder: cacheFolderURL)
-        print("sentence model: \(sentenceModel!.name), \(sentenceModel!.labels.count) words, \(sentenceModel!.frameCount) frames")
-    }
-
     var random = SeededRandomSource(seed: options.seed)
     var signedWordTotal = 0
     var wordPipelineEdits = 0
-    var sentencePipelineEdits = 0
-    var editsBySignCount: [Int: (words: Int, wordPipeline: Int, sentencePipeline: Int, streams: Int)] = [:]
+    var editsBySignCount: [Int: (words: Int, wordPipeline: Int, streams: Int)] = [:]
     var examples: [String] = []
     let glideFrameCount = 6
 
@@ -188,63 +157,31 @@ func evaluateStreams(options: EvaluationOptions, scorer: SignCoreMLScorer) throw
         }
         let signedWords = chosenRows.map { comparableText(SignWordNames.displayText(for: $0.label)) }
 
-        // Today's pipeline: stretches, the word model on each.
+        // The app's reading: stretches; the sentence model's words for a run of signs, else the word model's.
         let entries = readClipLikeTheCamera(frames: stream, framesPerSecond: framesPerSecond, pictureWidth: pictureWidth, pictureHeight: pictureHeight,
-                                            language: options.language, scorer: scorer, stretchSettings: options.stretchSettings)
+                                            language: options.language, scorer: scorer, stretchSettings: options.stretchSettings,
+                                            readingSettings: options.readingSettings)
         let wordPipelineWords = entries.compactMap { $0.token }.map { comparableText($0.text) }.filter { !$0.isEmpty }
         let wordPipelineEditCount = wordEditDistance(wordPipelineWords, signedWords)
 
-        // The sentence model on each stretch the same finder finds.
-        var sentencePipelineWords: [String] = []
-        if let sentenceModel {
-            var finder = SignStretchFinder(settings: options.stretchSettings, pictureWidth: pictureWidth, pictureHeight: pictureHeight)
-            var stretches: [SignStretch] = []
-            let restFrames = [SignLandmarkFrame](repeating: SignLandmarkFrame(), count: Int(framesPerSecond.rounded(.up)))
-            for (frameIndex, frame) in (stream + restFrames).enumerated() {
-                if case .ended(let stretch)? = finder.observe(frame, at: Double(frameIndex) / framesPerSecond) {
-                    stretches.append(stretch)
-                }
-            }
-            for stretch in stretches {
-                let atModelRate = SignFrameRate.broughtTo30(frames: stretch.frames, times: stretch.frameTimes)
-                let keptFrames = SignFeatures.trimmingFramesWithoutHands(atModelRate.frames)
-                let featureClip = SignFeatures.featureClip(of: keptFrames, pictureWidth: pictureWidth, pictureHeight: pictureHeight)
-                let fitted = SignFeatures.fitted(featureClip, toFrameCount: sentenceModel.frameCount)
-                let usedFrameCount = Int(fitted.mask.reduce(0, +))
-                let scores = try sentenceModel.scores(features: fitted.values, mask: fitted.mask)
-                let rowCount = scores.shape.count >= 2 ? scores.shape[scores.shape.count - 2] : sentenceModel.frameCount / 2
-                let usedRowCount = (usedFrameCount + 1) / 2
-                sentencePipelineWords += greedyCTCWords(scores: scores.values, rowCount: rowCount, usedRowCount: usedRowCount, labels: sentenceModel.labels)
-                    .map { comparableText(SignWordNames.displayText(for: $0)) }
-            }
-        }
-        let sentencePipelineEditCount = wordEditDistance(sentencePipelineWords, signedWords)
-
         signedWordTotal += signedWords.count
         wordPipelineEdits += wordPipelineEditCount
-        sentencePipelineEdits += sentencePipelineEditCount
-        var bySignCount = editsBySignCount[signCount] ?? (0, 0, 0, 0)
+        var bySignCount = editsBySignCount[signCount] ?? (0, 0, 0)
         bySignCount.words += signedWords.count
         bySignCount.wordPipeline += wordPipelineEditCount
-        bySignCount.sentencePipeline += sentencePipelineEditCount
         bySignCount.streams += 1
         editsBySignCount[signCount] = bySignCount
         if streamNumber < 8 {
-            examples.append("signed: \(signedWords.joined(separator: " "))\n  words model: \(wordPipelineWords.joined(separator: " "))"
-                + (sentenceModel != nil ? "\n  sentence model: \(sentencePipelineWords.joined(separator: " "))" : ""))
+            examples.append("signed: \(signedWords.joined(separator: " "))\n  read:   \(wordPipelineWords.joined(separator: " "))")
         }
     }
 
     func rate(_ edits: Int, _ words: Int) -> String { words > 0 ? String(format: "%.1f%%", 100 * Double(edits) / Double(words)) : "-" }
     print("streams: \(options.streamCount) of 2–5 \(options.split ?? "") clips each (seed \(options.seed)), \(signedWordTotal) signed words")
-    print("word error rate, word model on each stretch:     \(rate(wordPipelineEdits, signedWordTotal))")
-    if sentenceModel != nil {
-        print("word error rate, sentence model on each stretch: \(rate(sentencePipelineEdits, signedWordTotal))")
-    }
+    print("word error rate (\(scorer.sentenceModel != nil ? "sentence model for runs, word model for lone signs" : "word model on each stretch")): \(rate(wordPipelineEdits, signedWordTotal))")
     for signCount in editsBySignCount.keys.sorted() {
         let counts = editsBySignCount[signCount]!
-        print("  \(signCount) signs (\(counts.streams) streams): word model \(rate(counts.wordPipeline, counts.words))"
-            + (sentenceModel != nil ? ", sentence model \(rate(counts.sentencePipeline, counts.words))" : ""))
+        print("  \(signCount) signs (\(counts.streams) streams): \(rate(counts.wordPipeline, counts.words))")
     }
     print("")
     for example in examples { print(example) }

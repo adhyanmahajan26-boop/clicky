@@ -412,6 +412,9 @@ final class HandSignController: ObservableObject {
                     return
                 }
                 self.signModelsLoad = loadResult
+                if loadResult.sentenceModelSummary != nil, self.mode == .signs, self.lastLine == Self.startingLine(for: .signs) {
+                    self.lastLine = "Sign, one sign or several in a row, then rest your hands. I'll write it down."
+                }
                 // Said where it can be read in full; the camera chip only has room for a few words.
                 if !loadResult.hasAnyModel, self.mode == .signs, let modelsProblem = self.signModelsProblem {
                     self.lastLine = modelsProblem
@@ -634,6 +637,10 @@ final class HandSignController: ObservableObject {
             "start": entry.startTime,
             "end": entry.endTime,
             "alternatives": entry.token?.alternativeTexts ?? [],
+            "unclearGuesses": { () -> [[String: Any]] in
+                guard case .unclear(guesses: let guesses)? = entry.token else { return [] }
+                return guesses.map { ["label": $0.label, "probability": Double($0.probability)] as [String: Any] }
+            }(),
             "wordGuesses": entry.wordGuesses.map { ["label": $0.label, "probability": Double($0.probability)] as [String: Any] }
         ]
         if let spelling = entry.spelling {
@@ -653,6 +660,9 @@ final class HandSignController: ObservableObject {
         if let signModelsLoad {
             models["wordModel"] = signModelsLoad.wordModelSummary.map { $0 as Any } ?? NSNull()
             models["spellingModel"] = signModelsLoad.spellingModelSummary.map { $0 as Any } ?? NSNull()
+            // The sentence model reads a stretch of two or more signs; without it every stretch is one word.
+            models["sentenceModel"] = signModelsLoad.sentenceModelSummary.map { $0 as Any } ?? NSNull()
+            models["sentenceModelPath"] = signModelsLoad.found.sentenceModelURL.map { $0.path as Any } ?? NSNull()
             models["wordModelPath"] = signModelsLoad.found.wordModelURL.map { $0.path as Any } ?? NSNull()
             models["spellingModelPath"] = signModelsLoad.found.spellingModelURL.map { $0.path as Any } ?? NSNull()
             models["missing"] = signModelsLoad.problems.map { $0 as Any } ?? NSNull()

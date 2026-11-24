@@ -219,7 +219,8 @@ struct HandSignPanelView: View {
             }
             if controller.isMakingASign { return "Signing…" }
             if controller.signReadingsInProgress > 0 { return "Reading the sign…" }
-            return controller.handIsVisible ? "Sign, then rest your hands" : "Show me your hands"
+            let readsRunsOfSigns = controller.signModelsLoad?.sentenceModelSummary != nil
+            return controller.handIsVisible ? (readsRunsOfSigns ? "Sign, in a row if you like, then rest" : "Sign, then rest your hands") : "Show me your hands"
         }
         if controller.mode == .spell {
             switch controller.seenSpellingLabel {

@@ -49,6 +49,9 @@ nonisolated struct SignModelLoadResult {
     /// "SignWordsASL, 2,000 words, 96 frames"; nil when there is no word model.
     let wordModelSummary: String?
     let spellingModelSummary: String?
+    /// "SignSentencesISL, 261 words, 384 frames"; nil when there is no sentence model (runs of signs are then read
+    /// one stretch, one word, as before).
+    let sentenceModelSummary: String?
     /// What's missing or failed, in plain words; nil when both models are ready.
     let problems: String?
     let hasAnyModel: Bool
@@ -74,6 +77,7 @@ nonisolated final class SignScoringWorker: @unchecked Sendable {
                 found: found,
                 wordModelSummary: loadedScorer?.wordModel.map { "\($0.name), \($0.labels.count) words, \($0.frameCount) frames" },
                 spellingModelSummary: loadedScorer?.spellingModel.map { "\($0.name), \($0.labels.count) letters, \($0.frameCount) frames" },
+                sentenceModelSummary: loadedScorer?.sentenceModel.map { "\($0.name), \($0.labels.count) words, \($0.frameCount) frames" },
                 problems: loadedScorer?.problems ?? found.missingDescription,
                 hasAnyModel: loadedScorer?.hasAnyModel ?? false
             )

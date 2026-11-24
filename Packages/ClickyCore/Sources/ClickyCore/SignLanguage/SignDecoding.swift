@@ -169,3 +169,36 @@ public enum SignSpellingDecoder {
         return SignSpelledGuess(text: keptCharacters.joined(), confidence: Float(meanProbability))
     }
 }
+
+// MARK: - Runs of signs (the sentence model)
+
+/// The sentence model's rows (CTC over the word list, Tools/signs/SPEC.md section 4) read greedily into words.
+public enum SignSentenceDecoder {
+    /// - Parameters:
+    ///   - scores: `rowCount × (labels.count + 1)` numbers, row-major; column 0 the blank, column i + 1 `labels[i]`.
+    ///     Raw scores or log-probabilities both work (each row's softmax gives its probabilities).
+    ///   - usedRowCount: only the first this many rows are read (`SignSpellingDecoder.usedRowCount`).
+    /// - Returns: the words in order, each with its own confidence: the highest probability its run of rows reached.
+    ///   Wrong-sized scores read as no words.
+    public static func words(scores: [Float], rowCount: Int, usedRowCount: Int, labels: [String]) -> [SignWordGuess] {
+        let columnCount = labels.count + 1
+        guard rowCount > 0, labels.count > 0, scores.count == rowCount * columnCount else { return [] }
+        var words: [SignWordGuess] = []
+        var previousBestColumn: Int? = nil
+        for rowIndex in 0..<min(max(usedRowCount, 0), rowCount) {
+            let rowStart = rowIndex * columnCount
+            let rowScores = Array(scores[rowStart..<(rowStart + columnCount)])
+            guard let bestIndex = SignScoreMath.indexOfLargestScore(rowScores[...]) else { continue }
+            let bestColumn = bestIndex
+            let bestProbability = SignScoreMath.softmax(rowScores)[bestColumn]
+            defer { previousBestColumn = bestColumn }
+            if bestColumn == SignSpellingDecoder.blankColumn { continue }
+            if bestColumn == previousBestColumn, let lastIndex = words.indices.last {
+                words[lastIndex] = SignWordGuess(label: words[lastIndex].label, probability: max(words[lastIndex].probability, Float(bestProbability)))
+                continue
+            }
+            words.append(SignWordGuess(label: labels[bestColumn - 1], probability: Float(bestProbability)))
+        }
+        return words
+    }
+}

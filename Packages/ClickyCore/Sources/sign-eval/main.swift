@@ -11,9 +11,12 @@
 //      letting the reader find where signs start and end (how training measures), to see what the finder costs.
 //
 //  sign-eval stream --manifest … --clips … --models … --language asl|isl [--split test] [--streams 200] [--seed 1]
-//                   [--sentence-model <file>]
 //      2 to 5 clips joined end to end with a short glide and no rest, read as one stream (Streams.swift): word error
-//      rate with the word model on each stretch, and with the sentence model on each stretch when one is given.
+//      rate of the reading the app does.
+//
+//  Both clips and stream read as the app does: when the models folder has a sentence model (SignSentencesASL|ISL), a
+//  stretch it reads as two or more signs takes its words, else the word model's answer stands. --no-sentence-model
+//  reads with the word model alone; --least-sentence-confidence sets when a sentence-model word counts.
 //
 //  sign-eval video <file> --models <folder> --language asl|isl
 //      Reads a video through Apple Vision (`SignVisionReader`, the app's reader) and prints the line the app would
@@ -37,7 +40,9 @@ func printUsageAndExit() -> Never {
     usage: sign-eval clips --manifest <manifest.csv> --clips <folder of .npy> --models <folder> --language asl|isl [--split test] [--whole-clip] [--limit N]
            sign-eval video <file> --models <folder> --language asl|isl
            sign-eval stream --manifest <manifest.csv> --clips <folder> --models <folder> --language asl|isl [--split test]
-                            [--streams 200] [--seed 1] [--sentence-model <SignSentences….mlpackage>]
+                            [--streams 200] [--seed 1]
+           (clips and stream use the sentence model when the folder has one: --no-sentence-model leaves it out,
+            --least-sentence-confidence 0.5 sets when its words count)
     """)
     exit(2)
 }
@@ -57,7 +62,10 @@ struct EvaluationOptions {
     /// `stream`: how many streams to build, from which seed, and a sentence model to read them with too.
     var streamCount = 200
     var seed: UInt64 = 1
-    var sentenceModelPath: String?
+    /// The sentence model is used when the models folder has one, unless `--no-sentence-model`.
+    var usesSentenceModel = true
+    /// `--least-sentence-confidence x`: a sentence-model word under this becomes an unclear sign.
+    var readingSettings = SignReadingSettings()
 }
 
 /// Sets one stretch-finding number by name, as `--stretch` gives it. Unknown names stop the run.
@@ -96,7 +104,8 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
     var stretchSettings = SignStretchSettings()
     var streamCount = 200
     var seed: UInt64 = 1
-    var sentenceModelPath: String?
+    var usesSentenceModel = true
+    var readingSettings = SignReadingSettings()
     var argumentIndex = 1
     func nextValue() -> String {
         argumentIndex += 1
@@ -121,7 +130,10 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         case "--seed":
             guard let parsedSeed = UInt64(nextValue()) else { printUsageAndExit() }
             seed = parsedSeed
-        case "--sentence-model": sentenceModelPath = nextValue()
+        case "--no-sentence-model": usesSentenceModel = false
+        case "--least-sentence-confidence":
+            guard let parsedConfidence = Float(nextValue()) else { printUsageAndExit() }
+            readingSettings.leastSentenceWordConfidence = parsedConfidence
         case "--limit":
             guard let parsedLimit = Int(nextValue()), parsedLimit > 0 else { printUsageAndExit() }
             clipLimit = parsedLimit
@@ -151,7 +163,8 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         stretchSettings: stretchSettings,
         streamCount: streamCount,
         seed: seed,
-        sentenceModelPath: sentenceModelPath
+        usesSentenceModel: usesSentenceModel,
+        readingSettings: readingSettings
     )
 }
 
@@ -161,12 +174,14 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
 /// folder) and says what was found.
 func loadScorer(options: EvaluationOptions) -> SignCoreMLScorer {
     let modelsFolderURL = URL(fileURLWithPath: (options.modelsFolderPath as NSString).expandingTildeInPath, isDirectory: true)
-    let files = SignModelFiles.find(in: [modelsFolderURL], language: options.language)
+    var files = SignModelFiles.find(in: [modelsFolderURL], language: options.language)
+    if !options.usesSentenceModel { files.sentenceModelURL = nil }
     let cacheFolderURL = FileManager.default.temporaryDirectory.appendingPathComponent("sign-eval-compiled-models", isDirectory: true)
     let scorer = SignCoreMLScorer(files: files, compiledModelCacheFolder: cacheFolderURL)
     let wordModelWords = scorer.wordModel.map { "\($0.name), \($0.labels.count) words, \($0.frameCount) frames" } ?? "none"
     let spellingModelWords = scorer.spellingModel.map { "\($0.name), \($0.labels.count) characters, \($0.frameCount) frames" } ?? "none"
-    print("models: words \(wordModelWords); spelling \(spellingModelWords)")
+    let sentenceModelWords = scorer.sentenceModel.map { "\($0.name), \($0.labels.count) words, \($0.frameCount) frames (runs of 2+ signs)" } ?? "none"
+    print("models: words \(wordModelWords); spelling \(spellingModelWords); sentences \(sentenceModelWords)")
     if let problems = scorer.problems {
         print("  missing or failed: \(problems)")
     }
@@ -276,9 +291,11 @@ func readClipLikeTheCamera(
     pictureHeight: Double,
     language: SignLanguage,
     scorer: SignCoreMLScorer,
-    stretchSettings: SignStretchSettings = SignStretchSettings()
+    stretchSettings: SignStretchSettings = SignStretchSettings(),
+    readingSettings: SignReadingSettings = SignReadingSettings()
 ) -> [SignLiveLineEntry] {
-    var reader = SignLiveReader(language: language, pictureWidth: pictureWidth, pictureHeight: pictureHeight, autoSendSeconds: 0, stretchSettings: stretchSettings)
+    var reader = SignLiveReader(language: language, pictureWidth: pictureWidth, pictureHeight: pictureHeight, autoSendSeconds: 0,
+                                stretchSettings: stretchSettings, readingSettings: readingSettings)
     var frameNumber = 0
     for frame in frames {
         _ = reader.observeAndReadNow(frame, at: Double(frameNumber) / framesPerSecond, scoring: scorer)
@@ -347,7 +364,7 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
         let framesPerSecond = row.framesPerSecond > 0 ? row.framesPerSecond : SignFrameRate.modelFramesPerSecond
         let entries = options.readsWholeClip
             ? readWholeClip(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer)
-            : readClipLikeTheCamera(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer, stretchSettings: options.stretchSettings)
+            : readClipLikeTheCamera(frames: frames, framesPerSecond: framesPerSecond, pictureWidth: row.width, pictureHeight: row.height, language: options.language, scorer: scorer, stretchSettings: options.stretchSettings, readingSettings: options.readingSettings)
 
         let line = SignedLine(tokens: entries.compactMap { $0.token })
         if entries.count > 1 { clipsReadAsMoreThanOneSign += 1 }

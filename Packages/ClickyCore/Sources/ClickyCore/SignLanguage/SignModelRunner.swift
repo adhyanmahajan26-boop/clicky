@@ -30,6 +30,11 @@ public enum SignModelFiles {
         language == .asl ? "SignSpellASL" : "SignSpellISL"
     }
 
+    /// The sentence model (runs of signs without rests). Optional: without it every stretch is read as one sign.
+    public static func sentenceModelName(for language: SignLanguage) -> String {
+        language == .asl ? "SignSentencesASL" : "SignSentencesISL"
+    }
+
     /// The labels file beside a model: `SignWordsASL.mlpackage` → `SignWordsASL.labels.json`.
     public static func labelsFileURL(forModelAt modelURL: URL) -> URL {
         modelURL.deletingLastPathComponent().appendingPathComponent(modelBaseName(of: modelURL) + ".labels.json")
@@ -49,6 +54,8 @@ public enum SignModelFiles {
         public var language: SignLanguage
         public var wordModelURL: URL?
         public var spellingModelURL: URL?
+        /// Optional, so never one of the missing pieces.
+        public var sentenceModelURL: URL? = nil
         /// One plain line per missing piece ("the word model SignWordsASL.mlpackage").
         public var missingPieces: [String]
 
@@ -95,7 +102,12 @@ public enum SignModelFiles {
                 ? "the finger-spelling model has no \(spellingModelName).labels.json"
                 : "no finger-spelling model (\(spellingModelName).mlpackage)")
         }
-        return Found(language: language, wordModelURL: wordModel.modelURL, spellingModelURL: spellingModel.modelURL, missingPieces: missingPieces)
+        var found = Found(language: language, wordModelURL: wordModel.modelURL, spellingModelURL: spellingModel.modelURL, missingPieces: missingPieces)
+        // Only used alongside a word model: a lone sign is the word model's to read.
+        if found.wordModelURL != nil {
+            found.sentenceModelURL = firstModel(named: sentenceModelName(for: language)).modelURL
+        }
+        return found
     }
 }
 
@@ -300,6 +312,7 @@ public final class SignCoreMLScorer: SignStretchScoring {
     public let language: SignLanguage
     public let wordModel: SignModelRunner?
     public let spellingModel: SignModelRunner?
+    public let sentenceModel: SignModelRunner?
     /// What's missing or failed to load, in plain words (nil when both models are ready).
     public let problems: String?
 
@@ -324,8 +337,17 @@ public final class SignCoreMLScorer: SignStretchScoring {
                 problemLines.append(String(describing: error))
             }
         }
+        var loadedSentenceModel: SignModelRunner?
+        if let sentenceModelURL = files.sentenceModelURL {
+            do {
+                loadedSentenceModel = try SignModelRunner(modelURL: sentenceModelURL, compiledModelCacheFolder: compiledModelCacheFolder)
+            } catch {
+                problemLines.append(String(describing: error))
+            }
+        }
         wordModel = loadedWordModel
         spellingModel = loadedSpellingModel
+        sentenceModel = loadedSentenceModel
         problems = problemLines.isEmpty ? nil : problemLines.joined(separator: "; ")
     }
 
@@ -352,5 +374,13 @@ public final class SignCoreMLScorer: SignStretchScoring {
     public func spellingScores(features: [Float], mask: [Float]) throws -> [Float] {
         guard let spellingModel else { throw SignModelError("no finger-spelling model") }
         return try spellingModel.scores(features: features, mask: mask).values
+    }
+
+    public var sentenceModelFrameCount: Int? { sentenceModel?.frameCount }
+    public var sentenceLabels: [String] { sentenceModel?.labels ?? [] }
+
+    public func sentenceScores(features: [Float], mask: [Float]) throws -> [Float] {
+        guard let sentenceModel else { throw SignModelError("no sentence model") }
+        return try sentenceModel.scores(features: features, mask: mask).values
     }
 }
