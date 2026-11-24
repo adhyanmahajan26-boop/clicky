@@ -461,6 +461,19 @@ final class AppleCallEars: CallEars {
     }
 }
 
+/// A call's line in the log (~/Library/Logs/Clicky/theo.log), with the time it happened, so a call can be read back turn
+/// by turn: the log's lines had no times, and how long an answer took could only be guessed (Air, 24 Nov). Called from
+/// the audio thread too, so it keeps no shared state.
+nonisolated func callLog(_ text: String) {
+    var now = timeval()
+    gettimeofday(&now, nil)
+    var secondsSince1970 = now.tv_sec
+    var localTime = tm()
+    localtime_r(&secondsSince1970, &localTime)
+    let stamp = String(format: "%02d:%02d:%02d.%03d", localTime.tm_hour, localTime.tm_min, localTime.tm_sec, Int(now.tv_usec) / 1000)
+    print("\(stamp) \(text)")
+}
+
 /// Sarvam's sockets: realtime first (partial words), the standard one if realtime refuses.
 @MainActor
 final class SarvamCallEars: CallEars {
@@ -479,6 +492,12 @@ final class SarvamCallEars: CallEars {
     /// Words came in before the gate said the voice stopped.
     private var waitingFinal: Task<Void, Never>?
     private var latestPartial = ""
+    /// The last partial was handed over as a final because the server's own final didn't come in time. When the server's
+    /// final for that same stretch comes after all, often in another script (Devanagari, then "college", "football" in
+    /// Latin), it's left out: handed over too, every stretch reached the turn twice (Air, 24 Nov).
+    private var partialHandedOverAsFinalAt: Date?
+    private var wordsInPartialHandedOver = 0
+    private static let lateFinalSeconds = 8.0
     private var isStopped = false
     private static let sendBytes = 3200
 
@@ -520,7 +539,7 @@ final class SarvamCallEars: CallEars {
         guard !isStopped else { return }
         // Realtime refused or never began: the standard socket has no beta to be let into.
         if usingRealtime && !hasBegun {
-            print("📞 Sarvam realtime didn't open (\(reason ?? "closed")), trying the standard socket")
+            callLog("📞 Sarvam realtime didn't open (\(reason ?? "closed")), trying the standard socket")
             connectStandard()
             return
         }
@@ -533,14 +552,26 @@ final class SarvamCallEars: CallEars {
             hasBegun = true
         case .partial(let text):
             latestPartial = text
-            if !text.isEmpty { onPartial?(text) }
+            if !text.isEmpty {
+                // New speech: a final from here on is for it.
+                partialHandedOverAsFinalAt = nil
+                onPartial?(text)
+            }
         case .final(let text, _):
             waitingFinal?.cancel()
             waitingFinal = nil
             latestPartial = ""
+            // A final with clearly more words than the partial had is kept: the partial was cut short.
+            if let handedOverAt = partialHandedOverAsFinalAt, Date().timeIntervalSince(handedOverAt) < Self.lateFinalSeconds,
+               text.split(separator: " ").count <= wordsInPartialHandedOver + 2 {
+                partialHandedOverAsFinalAt = nil
+                callLog("📞 Sarvam's late final for a stretch already handed over, left out (\(text.split(separator: " ").count) words)")
+                return
+            }
+            partialHandedOverAsFinalAt = nil
             onFinal?(text.trimmingCharacters(in: .whitespacesAndNewlines))
         case .error(let message, let fatal):
-            print("📞 Sarvam listening: \(message)")
+            callLog("📞 Sarvam listening: \(message)")
             if fatal {
                 if usingRealtime && !hasBegun {
                     socket?.close()
@@ -571,6 +602,10 @@ final class SarvamCallEars: CallEars {
             guard !Task.isCancelled, let self else { return }
             let words = self.latestPartial
             self.latestPartial = ""
+            if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.partialHandedOverAsFinalAt = Date()
+                self.wordsInPartialHandedOver = words.split(separator: " ").count
+            }
             self.onFinal?(words.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
@@ -743,7 +778,7 @@ final class SarvamCallVoice: CallVoice {
     }
 
     private func fail(_ message: String) {
-        print("📞 Sarvam voice: \(message)")
+        callLog("📞 Sarvam voice: \(message)")
         let pieces = unspoken
         socket?.close()
         socket = nil

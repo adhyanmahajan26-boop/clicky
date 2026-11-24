@@ -99,3 +99,16 @@ struct CallGroupModeTests {
         #expect(CallEarsReconnect.reconnects(earlierReconnects: old, now: now))
     }
 }
+
+struct CallHeardWordsTests {
+    @Test func aWordWrittenOverAndOverIsKeptOnce() {
+        #expect(CallHeardWords.withoutRunawayRepeats("Oh, yeah, meaning, meaning, meaning, meaning, meaning, meaning") == "Oh, yeah, meaning,")
+        #expect(CallHeardWords.withoutRunawayRepeats("haan bhai sun na sun na sun na sun na theek hai") == "haan bhai sun na theek hai")
+    }
+
+    @Test func whatPeopleRepeatThemselvesStays() {
+        #expect(CallHeardWords.withoutRunawayRepeats("no no no, that's not it") == "no no no, that's not it")
+        #expect(CallHeardWords.withoutRunawayRepeats("very very good") == "very very good")
+        #expect(CallHeardWords.withoutRunawayRepeats("  hello  ") == "hello")
+    }
+}

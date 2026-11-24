@@ -441,3 +441,46 @@ public enum CallQuietLimit {
         return lines[abs(turnNumber) % lines.count]
     }
 }
+
+/// What the ears wrote down, cleaned before it becomes a turn.
+public enum CallHeardWords {
+    /// Repeats a recognizer makes up on its own: a word or a short phrase written over and over ("meaning, meaning,
+    /// meaning, meaning…", Air, 24 Nov). A run of `leastRunawayRepeats` or more is kept once; fewer ("no no no",
+    /// "very very") are what people say and stay as they are.
+    public static let leastRunawayRepeats = 4
+    static let longestRepeatedPhraseWords = 3
+
+    public static func withoutRunawayRepeats(_ text: String) -> String {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard words.count >= leastRunawayRepeats else { return words.joined(separator: " ") }
+        let keys = words.map { word in
+            word.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.symbols))
+        }
+        var keptWords: [String] = []
+        var index = 0
+        while index < words.count {
+            var skippedTo: Int?
+            for phraseLength in 1...longestRepeatedPhraseWords where index + phraseLength * leastRunawayRepeats <= words.count {
+                let phrase = Array(keys[index..<(index + phraseLength)])
+                guard !phrase.contains(where: \.isEmpty) else { continue }
+                var repeats = 1
+                while index + (repeats + 1) * phraseLength <= words.count,
+                      Array(keys[(index + repeats * phraseLength)..<(index + (repeats + 1) * phraseLength)]) == phrase {
+                    repeats += 1
+                }
+                if repeats >= leastRunawayRepeats {
+                    keptWords.append(contentsOf: words[index..<(index + phraseLength)])
+                    skippedTo = index + repeats * phraseLength
+                    break
+                }
+            }
+            if let skippedTo {
+                index = skippedTo
+            } else {
+                keptWords.append(words[index])
+                index += 1
+            }
+        }
+        return keptWords.joined(separator: " ")
+    }
+}
