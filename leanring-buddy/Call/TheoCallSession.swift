@@ -306,6 +306,8 @@ final class TheoCallSession: ObservableObject {
     /// Someone talked over the bot in a Space: it finishes what's already playing and says no more this turn
     /// (ClickyCore `SpaceInterruption`).
     private var speaksNoMoreThisTurn = false
+    /// Someone talked over the bot in a Space: it says the rest of the sentence it's on, then no more this turn.
+    private var stopsAfterThisSentence = false
     /// The last turn's reply wasn't heard in the Space: the brain is told with the next turn, so it doesn't count it as said.
     private var lastReplyWasNotHeard = false
     /// The turn being answered had a line from the boss, who may switch the stance ([STANCE: …]).
@@ -773,9 +775,11 @@ final class TheoCallSession: ObservableObject {
                 callLog("📞 Space: stopped mid-sentence for \(byBoss ? "the boss" : "someone calling it")")
                 bargeIn()
             case .finishTheSentence:
-                if !speaksNoMoreThisTurn { callLog("📞 Space: someone talked over it, finishing the sentence") }
-                speaksNoMoreThisTurn = true
-                voice?.endOfTurn()
+                // Chatter as it starts is the room carrying on, not someone talking over it: in a public Space this
+                // stopped it after its first phrase nearly every turn (25 Nov), so it only counts once it's been heard.
+                guard turnHasSounded, !stopsAfterThisSentence, !speaksNoMoreThisTurn else { break }
+                callLog("📞 Space: someone talked over it, finishing the sentence")
+                stopsAfterThisSentence = true
             case .carryOn:
                 break
             }
@@ -883,7 +887,7 @@ final class TheoCallSession: ObservableObject {
                 guard let self, !Task.isCancelled, self.state != .ended else { return }
                 if self.gate.isSpeaking || self.replyInProgress { continue }
                 guard let speechEndedAt = self.speechEndedAt,
-                      Date().timeIntervalSince(speechEndedAt) >= CallGroupMode.addressedWaitSeconds else { continue }
+                      Date().timeIntervalSince(speechEndedAt) >= CallOwnAccount.pauseBeforeAnswering else { continue }
                 self.earlyPartialTask = nil
                 callLog("📞 Space: took the words before the ears' final (\(words.split(separator: " ").count) words)")
                 self.heardFinal(words)
@@ -1070,7 +1074,8 @@ final class TheoCallSession: ObservableObject {
                 let releases: Bool
                 if self.isGroupMode {
                     // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
-                    wait = CallGroupMode.waitSeconds(ownWait: wait, isAddressed: self.isAddressedInTheGroup(self.heldTurnWords))
+                    wait = self.isOwnAccount ? CallOwnAccount.pauseBeforeAnswering
+                        : CallGroupMode.waitSeconds(ownWait: wait, isAddressed: self.isAddressedInTheGroup(self.heldTurnWords))
                     releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
                                                           secondsHeld: now.timeIntervalSince(self.heldTurnStartedAt ?? now))
@@ -1196,6 +1201,7 @@ final class TheoCallSession: ObservableObject {
                                                  bossNames: ownAccount?.bossNames ?? [], owner: BotPrompts.ownerName)
             if let spaceNote, !spaceNote.isEmpty { message += "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName) }
             if let stance = XAccountSettings.stance.instruction(target: XAccountSettings.stanceTarget) { message += "\n" + stance }
+            if let tone = XAccountSettings.tone.instruction(custom: XAccountSettings.toneCustom) { message += "\n" + tone }
             if lastReplyWasNotHeard {
                 message = "(Your last reply wasn't heard in the Space: the voice couldn't play it. It doesn't count as said.)\n" + message
                 lastReplyWasNotHeard = false
@@ -1294,6 +1300,7 @@ final class TheoCallSession: ObservableObject {
         replyInProgress = true
         turnHasSounded = false
         speaksNoMoreThisTurn = false
+        stopsAfterThisSentence = false
         audio.resetLoudness()
         turnActedOnTheCall = false
         turnPassed = false
@@ -1368,6 +1375,11 @@ final class TheoCallSession: ObservableObject {
         if isOwnAccount { text = SpeakableText.speakable(text) }
         guard !text.isEmpty else { return }
         voice?.speak(text)
+        // The rest of the sentence is said; at its end the bot stops for whoever talked over it.
+        if isOwnAccount, stopsAfterThisSentence, let last = text.trimmingCharacters(in: .whitespaces).last, ".?!।…".contains(last) {
+            speaksNoMoreThisTurn = true
+            voice?.endOfTurn()
+        }
     }
 
     private func replyFinished(_ result: Result<String, Error>) {
@@ -1449,6 +1461,10 @@ final class TheoCallSession: ObservableObject {
                 if turnHadTheBoss, let command = SpaceStance.command(in: rawAnswerOfThisTurn) {
                     XAccountSettings.setStance(command.stance, target: command.target)
                     callLog("📞 Space: the boss switched the stance to \(command.stance.rawValue)\(command.target.isEmpty ? "" : " for \(command.target)")")
+                }
+                if turnHadTheBoss, let command = SpaceTone.command(in: rawAnswerOfThisTurn) {
+                    XAccountSettings.setTone(command.tone, custom: command.custom)
+                    callLog("📞 Space: the boss switched the tone to \(command.tone.rawValue)")
                 }
                 if let emptyLineID, !answerText.isEmpty { checkTheReplyWasHeard(lineID: emptyLineID, text: answerText, turn: turnNumber, isRetry: false) }
             }

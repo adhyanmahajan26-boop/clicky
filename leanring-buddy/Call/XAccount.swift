@@ -35,6 +35,17 @@ enum XAccountSettings {
     static var stance: SpaceStance { UserDefaults.standard.string(forKey: stanceKey).flatMap(SpaceStance.init(rawValue:)) ?? .normal }
     static var stanceTarget: String { UserDefaults.standard.string(forKey: stanceTargetKey) ?? "" }
 
+    /// How the bot sounds (ClickyCore `SpaceTone`), and the owner's own line for Custom.
+    static let toneKey = "v5.xAccount.tone"
+    static let toneCustomKey = "v5.xAccount.toneCustom"
+    static var tone: SpaceTone { UserDefaults.standard.string(forKey: toneKey).flatMap(SpaceTone.init(rawValue:)) ?? .normal }
+    static var toneCustom: String { UserDefaults.standard.string(forKey: toneCustomKey) ?? "" }
+
+    static func setTone(_ tone: SpaceTone, custom: String) {
+        UserDefaults.standard.set(tone.rawValue, forKey: toneKey)
+        if tone == .custom { UserDefaults.standard.set(custom, forKey: toneCustomKey) }
+    }
+
     static func setStance(_ stance: SpaceStance, target: String) {
         UserDefaults.standard.set(stance.rawValue, forKey: stanceKey)
         UserDefaults.standard.set(target, forKey: stanceTargetKey)

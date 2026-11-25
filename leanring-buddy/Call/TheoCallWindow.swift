@@ -296,6 +296,8 @@ private struct OwnAccountStrip: View {
     @ObservedObject var session: TheoCallSession
     @AppStorage(XAccountSettings.stanceKey) private var stance = SpaceStance.normal.rawValue
     @AppStorage(XAccountSettings.stanceTargetKey) private var stanceTarget = ""
+    @AppStorage(XAccountSettings.toneKey) private var tone = SpaceTone.normal.rawValue
+    @AppStorage(XAccountSettings.toneCustomKey) private var toneCustom = ""
 
     var body: some View {
         VStack(spacing: 4) {
@@ -322,8 +324,15 @@ private struct OwnAccountStrip: View {
                 .labelsHidden().frame(width: 110)
                 TextField("with everyone", text: $stanceTarget).textFieldStyle(.roundedBorder).frame(width: 120)
                     .disabled(stance == SpaceStance.normal.rawValue)
+                Picker("Tone", selection: $tone) {
+                    ForEach(SpaceTone.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 110)
             }
-            .font(.system(size: 11)).help("How the bot takes part: Debate takes the other side, Arguing pushes back harder, Agreeing backs people up. Name one speaker, or leave it empty for everyone.")
+            .font(.system(size: 11)).help("How the bot takes part: Debate takes the other side, Arguing pushes back harder, Agreeing backs people up. Name one speaker, or leave it empty for everyone. Tone is how it sounds.")
+            if tone == SpaceTone.custom.rawValue {
+                TextField("The tone, in your words", text: $toneCustom).textFieldStyle(.roundedBorder).frame(width: 340)
+            }
         }
         .padding(.top, 2)
     }

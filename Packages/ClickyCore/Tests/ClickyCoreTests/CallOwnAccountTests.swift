@@ -329,6 +329,11 @@ struct CallOwnAccountTests {
         #expect(SpaceSpeakingBars.nameLine(above: bars, among: lines, frameAspect: 2400.0 / 1917)?.text == "PEW")
     }
 
+    @Test func theBotWaitsForAClearPause() {
+        #expect(CallOwnAccount.pauseBeforeAnswering >= 1.2 && CallOwnAccount.pauseBeforeAnswering <= 1.5)
+        #expect(CallOwnAccount.pauseBeforeAnswering > CallGroupMode.longestWaitSeconds)
+    }
+
     @Test func theSpaceBotNeverHosts() {
         let prompt = CallOwnAccount.systemPrompt(personaHead: "You are Chotta Tirri.", handle: "@KPKPKP9828", owner: "Addy", botName: "Chotta Tirri", languageRule: "")
         #expect(prompt.contains("You only ever join Spaces"))
@@ -534,5 +539,24 @@ struct SpaceSpeechTests {
                                              onStage: ["token-t", "sam_garfield"], bossNames: ["token-tirri"], owner: "Addy")
         #expect(message.contains("Token Tirri [BOSS]: go on"))
         #expect(message.contains("On stage so far: Token Tirri, Sam Garfield."))
+    }
+
+    @Test func eachToneTellsTheBrainHowToSound() {
+        #expect(SpaceTone.normal.instruction(custom: "") == nil)
+        #expect(SpaceTone.witty.instruction(custom: "")?.contains("witty and funny") == true)
+        #expect(SpaceTone.witty.instruction(custom: "")?.contains("never of people") == true)
+        #expect(SpaceTone.serious.instruction(custom: "")?.contains("no jokes") == true)
+        #expect(SpaceTone.chill.instruction(custom: "")?.contains("Relaxed") == true)
+        #expect(SpaceTone.custom.instruction(custom: "like a cricket commentator")?.contains("like a cricket commentator") == true)
+        #expect(SpaceTone.custom.instruction(custom: "  ") == nil)
+        #expect(SpaceTone.allCases.map(\.title) == ["Normal", "Witty/funny", "Serious", "Chill", "Custom"])
+    }
+
+    @Test func theBossCanSwitchTheTone() {
+        #expect(SpaceTone.command(in: "Okay!\n[TONE: witty]")! == (.witty, ""))
+        #expect(SpaceTone.command(in: "[TONE: Funny]")! == (.witty, ""))
+        #expect(SpaceTone.command(in: "[TONE: custom like a cricket commentator]")! == (.custom, "like a cricket commentator"))
+        #expect(SpaceTone.command(in: "[TONE: angry]") == nil)
+        #expect(CallBracketLineStream.strip("Done. [TONE: chill]").trimmingCharacters(in: .whitespacesAndNewlines) == "Done.")
     }
 }

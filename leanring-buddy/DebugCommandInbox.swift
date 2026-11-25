@@ -304,6 +304,9 @@ final class DebugCommandInbox {
             if let handle = commandObject["handle"] as? String { defaults.set(handle, forKey: XAccountSettings.handleKey) }
             if let displayName = commandObject["displayName"] as? String { defaults.set(displayName, forKey: XAccountSettings.displayNameKey) }
             if let boss = commandObject["boss"] as? String { defaults.set(boss, forKey: XAccountSettings.bossKey) }
+            if let tone = commandObject["tone"] as? String, let picked = SpaceTone(rawValue: tone) {
+                XAccountSettings.setTone(picked, custom: commandObject["toneCustom"] as? String ?? "")
+            }
             if let stance = commandObject["stance"] as? String, let picked = SpaceStance(rawValue: stance) {
                 XAccountSettings.setStance(picked, target: commandObject["stanceTarget"] as? String ?? "")
             }

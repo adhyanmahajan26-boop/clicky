@@ -129,3 +129,46 @@ public enum SpaceInterruption {
         return newWords >= CallGroupMode.partialWordsToCutIn ? .finishTheSentence : .carryOn
     }
 }
+
+/// How the X Space bot sounds, next to its stance: picked in its settings or call window, or switched by its boss.
+public enum SpaceTone: String, CaseIterable, Sendable {
+    case normal, witty, serious, chill, custom
+
+    public var title: String {
+        switch self {
+        case .normal: return "Normal"
+        case .witty: return "Witty/funny"
+        case .serious: return "Serious"
+        case .chill: return "Chill"
+        case .custom: return "Custom"
+        }
+    }
+
+    /// What the brain is told each turn. `custom`: the owner's own line, for `.custom`.
+    public func instruction(custom: String) -> String? {
+        switch self {
+        case .normal:
+            return nil
+        case .witty:
+            return "(Tone: witty and funny. Quick jokes, playful lines and light teasing of ideas, never of people, with every claim still true.)"
+        case .serious:
+            return "(Tone: serious. Calm, precise and thoughtful, no jokes, facts first.)"
+        case .chill:
+            return "(Tone: chill. Relaxed and easy-going, friendly, never heated, short and warm.)"
+        case .custom:
+            let line = custom.trimmingCharacters(in: .whitespacesAndNewlines)
+            return line.isEmpty ? nil : "(Tone, as the person who runs you put it: \(line) Your other rules still hold.)"
+        }
+    }
+
+    /// A tone switch the bot wrote for its boss: "[TONE: witty]", "[TONE: custom like a sports commentator]".
+    public static func command(in reply: String) -> (tone: SpaceTone, custom: String)? {
+        guard let match = reply.range(of: #"\[\s*TONE\s*:\s*([A-Za-z/]+)\s*([^\]]*)\]"#, options: .regularExpression) else { return nil }
+        let inside = String(reply[match]).dropFirst().dropLast().split(separator: ":", maxSplits: 1).last.map(String.init) ?? ""
+        let parts = inside.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1).map(String.init)
+        guard let first = parts.first?.lowercased() else { return nil }
+        let name = first.hasPrefix("witty") || first == "funny" ? "witty" : first
+        guard let tone = SpaceTone(rawValue: name) else { return nil }
+        return (tone, parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "")
+    }
+}

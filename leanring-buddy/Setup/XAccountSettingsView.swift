@@ -20,6 +20,8 @@ struct XAccountSettingsSection: View {
     @AppStorage(XAccountSettings.bossKey) private var boss = ""
     @AppStorage(XAccountSettings.stanceKey) private var stance = SpaceStance.normal.rawValue
     @AppStorage(XAccountSettings.stanceTargetKey) private var stanceTarget = ""
+    @AppStorage(XAccountSettings.toneKey) private var tone = SpaceTone.normal.rawValue
+    @AppStorage(XAccountSettings.toneCustomKey) private var toneCustom = ""
     @AppStorage(XAccountSettings.browserKey) private var browserBundleID = ""
     @AppStorage(XAccountSettings.outputDeviceKey) private var outputDeviceUID = ""
     @AppStorage(XAccountSettings.monitorKey) private var monitors = false
@@ -52,6 +54,18 @@ struct XAccountSettingsSection: View {
                     }
                     .labelsHidden().frame(width: 110)
                     TextField("everyone", text: $stanceTarget).textFieldStyle(.roundedBorder).frame(width: 110)
+                }
+            }
+            RowDivider()
+            SettingRow(title: "Tone", detail: "Witty/funny, Serious, Chill, or Custom in your own words. Your boss name in a Space can switch it too.") {
+                HStack(spacing: 6) {
+                    Picker("Tone", selection: $tone) {
+                        ForEach(SpaceTone.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().frame(width: 120)
+                    if tone == SpaceTone.custom.rawValue {
+                        TextField("e.g. like a cricket commentator", text: $toneCustom).textFieldStyle(.roundedBorder).frame(width: 200)
+                    }
                 }
             }
             RowDivider()
