@@ -431,7 +431,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "doctor" => {
             let f = h.doctor_findings();
-            ok(json!({"findings": f.iter().map(|x| json!({"level": x.0, "check": x.1, "detail": x.2})).collect::<Vec<_>>(), "text": crate::harness::doctor_markdown(&f)}))
+            ok(json!({"findings": f.iter().map(crate::harness::doctor_finding_json).collect::<Vec<_>>(), "text": crate::harness::doctor_markdown(&f)}))
         }
         "gateway" => {
             match s(cmd, "action").as_deref().unwrap_or("state") {

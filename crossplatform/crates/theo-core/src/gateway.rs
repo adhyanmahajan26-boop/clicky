@@ -205,7 +205,7 @@ async fn respond(h: &Arc<Harness>, req: Request, port: u16) -> (u16, Value) {
             let days = req.query.get("days").and_then(|d| d.parse().ok()).unwrap_or(7i64).clamp(1, 400);
             (200, json!({"days": days, "bots": h.usage_report(days)}))
         }
-        ["doctor"] if only("GET") => (200, json!({"findings": h.doctor_findings().iter().map(|f| json!({"level": f.0, "check": f.1, "detail": f.2})).collect::<Vec<_>>()})),
+        ["doctor"] if only("GET") => (200, json!({"findings": h.doctor_findings().iter().map(crate::harness::doctor_finding_json).collect::<Vec<_>>()})),
         ["routines", id, "run"] if is_id(id) && only("POST") => {
             if !h.gateway.allow() { return (429, json!({"error": "Too many requests: 30 a minute"})); }
             let Some(r) = h.with(|s| s.routines.iter().find(|r| r.id == *id).cloned()) else { return (404, json!({"error": "No such routine"})) };

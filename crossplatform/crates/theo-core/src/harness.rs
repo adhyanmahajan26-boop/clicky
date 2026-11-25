@@ -2289,9 +2289,16 @@ impl Harness {
 
     pub fn doctor_findings(&self) -> Vec<(String, String, String)> {
         let mut f: Vec<(String, String, String)> = vec![];
+        if self.settings.string("owner.name").map(|name| name.trim().is_empty()).unwrap_or(true) {
+            f.push(("warn".into(), "Your name".into(), "Your bots call you \u{201C}the owner\u{201D}. Tell Vello your name in Settings › About.".into()));
+        }
+        // Claude Code is one brain among several: it only matters when a bot that's on runs on it.
+        let claude_users: Vec<String> = self.with(|s| s.bots.iter().filter(|b| b.is_on() && b.provider == "claude").map(|b| b.name.clone()).collect());
         match self.executable("claude") {
             Some(p) => f.push(("ok".into(), "Claude Code".into(), format!("Found at {}.", p.display()))),
-            None => f.push(("fail".into(), "Claude Code".into(), "Not found. Install it (https://claude.com/claude-code) and sign in with `claude auth login`.".into())),
+            None if claude_users.is_empty() => f.push(("ok".into(), "Claude Code".into(), "Not installed, and no bot runs on it.".into())),
+            None => f.push(("fail".into(), "Claude Code".into(), format!("Not found, and {} run{} on it. Install it (https://claude.com/claude-code) and sign in, or move {} to another brain in Settings › Brains.",
+                claude_users.join(", "), if claude_users.len() == 1 { "s" } else { "" }, if claude_users.len() == 1 { "it" } else { "them" }))),
         }
         let problems = self.problems.problems.lock().unwrap().clone();
         if problems.is_empty() {
@@ -2449,6 +2456,23 @@ fn lateness(seconds: i64) -> String {
     if hours < 48 { format!("{hours} hours") } else { format!("{} days", hours / 24) }
 }
 
+/// The button beside a problem in Settings › Health (the Mac's `TheoDoctorFix` wire words): "settings:<section>" jumps
+/// to that Settings section, "connectors" opens the Connectors page. Nil for a finding that's fine or has nothing to press.
+pub fn doctor_fix(level: &str, check: &str) -> Option<&'static str> {
+    if level == "ok" { return None; }
+    match check {
+        "Your name" => Some("settings:about"),
+        "Claude Code" => Some("settings:brains"),
+        "Local API" => Some("settings:api"),
+        _ => None,
+    }
+}
+
+/// A finding as JSON, with its fix.
+pub fn doctor_finding_json(finding: &(String, String, String)) -> Value {
+    json!({"level": finding.0, "check": finding.1, "detail": finding.2, "fix": doctor_fix(&finding.0, &finding.1)})
+}
+
 pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
     let rank = |l: &str| match l { "fail" => 0, "warn" => 1, _ => 2 };
     let mut sorted: Vec<&(String, String, String)> = findings.iter().collect();
@@ -2493,6 +2517,16 @@ pub(crate) fn rename_starter_theo_to_vello(bots: &mut [Bot]) {
 
 #[cfg(test)]
 mod rename_tests {
+    #[test]
+    fn doctor_fixes_are_only_on_problems_and_go_to_the_right_place() {
+        assert_eq!(super::doctor_fix("warn", "Your name"), Some("settings:about"));
+        assert_eq!(super::doctor_fix("fail", "Claude Code"), Some("settings:brains"));
+        assert_eq!(super::doctor_fix("ok", "Claude Code"), None);
+        assert_eq!(super::doctor_fix("warn", "Skills"), None);
+        let finding = ("fail".to_string(), "Local API".to_string(), "Port taken.".to_string());
+        assert_eq!(super::doctor_finding_json(&finding)["fix"], "settings:api");
+    }
+
     use super::*;
 
     #[test]

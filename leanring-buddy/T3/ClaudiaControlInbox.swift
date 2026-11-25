@@ -153,8 +153,15 @@ final class ClaudiaControlInbox {
             reply(identifier, ok: true, result: ["id": id], error: nil)
         case "doctor":
             let findings = BotsStore.shared.doctorFindings()
-            reply(identifier, ok: true, result: ["findings": findings.map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail] },
+            reply(identifier, ok: true, result: ["findings": findings.map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail, "fix": ($0.fix?.wire as Any?) ?? NSNull()] as [String: Any] },
+                                                 "left": TheoDoctor.leftToSetUp(findings).map(\.check),
                                                  "text": TheoDoctor.markdown(findings)], error: nil)
+        case "healthFix":
+            // Presses one fix, as Settings › Health's button does: {fix: "settings:keys" | "permission:microphone" | "app:<id>" | "connectors" | "update"}.
+            // A test profile records it (TheoOpen) rather than asking macOS or opening a browser.
+            guard let fix = (command["fix"] as? String).flatMap(TheoDoctorFix.init(wire:)) else { reply(identifier, ok: false, result: nil, error: "Needs fix, such as \"settings:keys\"."); return }
+            TheoHealth.shared.perform(fix)
+            reply(identifier, ok: true, result: ["pressed": fix.wire, "opened": TheoOpen.recorded], error: nil)
         case "gateway":
             // Theo's local API: {action: state | on | off | token}. The token is only handed out in a test profile; the owner copies it in Settings › Devices.
             let gateway = TheoGateway.shared
