@@ -12,6 +12,9 @@ PY=~/sign-data/venv/bin/python
 RUN=~/sign-data/runs/$NAME
 SNAPSHOTS=~/sign-data/snapshots/$NAME
 echo $$ > ~/sign-data/logs/run-$NAME.pid
+# zsh doesn't split ${X:+a $X} into words: an array keeps the flag and its value apart.
+person_change_arguments=()
+[[ -n ${PERSON_CHANGES:-} ]] && person_change_arguments=(--person-changes $PERSON_CHANGES)
 cd $REPO
 data_folders=()
 for folder in "$@"; do
@@ -24,14 +27,14 @@ echo "$(date '+%F %T') training"
 if [[ -e $RUN/checkpoint-last.pt ]]; then
   $PY -m signs.train_words --data ignored --output $RUN --resume $RUN --epochs $EPOCHS
 else
-  $PY -m signs.train_words --data $data_folders --language $LANGUAGE --output $RUN --epochs $EPOCHS ${PERSON_CHANGES:+--person-changes $PERSON_CHANGES}
+  $PY -m signs.train_words --data $data_folders --language $LANGUAGE --output $RUN --epochs $EPOCHS $person_change_arguments
 fi
 echo "$(date '+%F %T') calibrating"
 $PY -m signs.calibrate --checkpoint $RUN/checkpoint-best.pt --source apple
 # The "not sure" threshold comes from held-out words (signs.unknown_signs folds, README): three models with a
 # tenth of the words held out each, then the full model's calibration file gets that threshold.
 echo "$(date '+%F %T') threshold from held-out words"
-$PY -m signs.unknown_signs folds --data ${data_folders[1]} --language $LANGUAGE --output $RUN-folds --epochs $EPOCHS ${PERSON_CHANGES:+--person-changes $PERSON_CHANGES}
+$PY -m signs.unknown_signs folds --data ${data_folders[1]} --language $LANGUAGE --output $RUN-folds --epochs $EPOCHS $person_change_arguments
 $PY -m signs.unknown_signs apply --checkpoint $RUN/checkpoint-best.pt --folds $RUN-folds/folds.json
 echo "$(date '+%F %T') evaluating on test"
 $PY -m signs.evaluate --checkpoint $RUN/checkpoint-best.pt --split test > $RUN/test.json
