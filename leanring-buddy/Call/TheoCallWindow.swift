@@ -25,7 +25,7 @@ enum TheoCallController {
         if let window, isActive {
             if activates { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             window.orderFrontRegardless()
-            session?.takeWordsSaidBeforeTheCall(openingWords)
+            session?.takeOwnerWordsFromOutside(openingWords)
             return
         }
         guard let manager = CompanionManager.current else { return }
@@ -87,7 +87,10 @@ struct TheoCallView: View {
             CallAvatar(session: session, theo: session.bot ?? store.primary).frame(height: 214)
             Text(stateLine).font(.system(size: 14, weight: .medium)).foregroundColor(DS.Colors.textSecondary).animation(nil, value: session.state)
                 .lineLimit(1)
-            if session.isListenMode {
+            if session.isGroupMode {
+                Text("Group mode: everyone counts, and \(session.botName) joins in when it fits")
+                    .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).padding(.top, 2)
+            } else if session.isListenMode {
                 Text("Say “\(session.botName), what do you think?” when you want an answer")
                     .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).padding(.top, 2)
             }
@@ -220,6 +223,20 @@ struct TheoCallView: View {
                       : "Listen mode: \(session.botName) only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
                 .keyboardShortcut("l", modifiers: .command)
                 .pointerCursor()
+                Button { session.setGroupMode(!session.isGroupMode) } label: {
+                    Image(systemName: "person.3").font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(session.isGroupMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
+                        .frame(width: 58, height: 58)
+                        .background(Circle().fill(session.isGroupMode ? Color.white : DS.Colors.hover))
+                        .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(session.isGroupMode
+                      ? "Group mode is on: \(session.botName) hears everyone and joins in when it fits. Click for just the two of you."
+                      : "Group mode, for an X Space or a room with other people: \(session.botName) hears everyone and joins in when it fits. You can also say “group mode”.")
+                .keyboardShortcut("g", modifiers: .command)
+                .pointerCursor()
                 Button(action: onEnd) {
                     Image(systemName: "phone.down.fill").font(.system(size: 20, weight: .semibold)).foregroundColor(.white)
                         .frame(width: 58, height: 58)
@@ -249,7 +266,7 @@ private struct CallLineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : "You") : botName).font(.system(size: 10.5, weight: .semibold))
+            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : (line.isGroupTalk ? "The group" : "You")) : botName).font(.system(size: 10.5, weight: .semibold))
                 .foregroundColor(line.who == .addy ? DS.Colors.textTertiary : DS.Colors.accentText)
             if line.text.isEmpty && line.isLive {
                 TypingDots()

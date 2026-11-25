@@ -616,15 +616,15 @@ public enum SpelledTextDestination: String, CaseIterable, Codable, Sendable {
     public var displayName: String {
         switch self {
         case .vello: return "Vello"
-        case .pointerAssistant: return "Pointer Assistant"
+        case .pointerAssistant: return "Vello on a call (uses your screen)"
         case .frontApp: return "Type in the app in front"
         }
     }
 
     public var detail: String {
         switch self {
-        case .vello: return "Goes to Vello's chat as your message. Vello answers, and passes it on to Pointer Assistant or Cursor when you ask it to."
-        case .pointerAssistant: return "Pointer Assistant takes it as a question about your screen and answers out loud."
+        case .vello: return "Goes to Vello's chat as your message. Vello answers, and passes it on to a coding agent such as Cursor when you ask it to."
+        case .pointerAssistant: return "Starts or joins a call with Vello, which sees your screen and does it, as if you'd said it."
         case .frontApp: return "Typed where the cursor is, such as Cursor's chat box."
         }
     }
@@ -641,7 +641,14 @@ public enum SpelledTextRouting {
     }
 
     public static let pointerAssistantIsOffMessage =
-        "Pointer Assistant is off, so nothing was sent. Turn it on in Settings › Products, or send to Vello or the app in front."
+        "Vello's hands are off, so nothing was sent. Turn them on in Settings › Products, or send to Vello's chat or the app in front."
+
+    /// Pointer Assistant is Vello's hands now (Nov 2026): with Vello on, words for the screen go to a call with Vello, the
+    /// one brain that sees the screen and acts, just as push-to-talk and "hey pointer" do. With Vello off they still reach
+    /// the old screen turn.
+    public static func goesToVelloCall(_ routed: SpelledTextDestination, velloIsOn: Bool) -> Bool {
+        routed == .pointerAssistant && velloIsOn
+    }
 
     public static func route(chosen: SpelledTextDestination, velloIsOn: Bool, pointerAssistantIsOn: Bool) -> Outcome {
         switch chosen {

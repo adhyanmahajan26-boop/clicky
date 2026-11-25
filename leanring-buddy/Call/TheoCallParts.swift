@@ -29,14 +29,22 @@ protocol ConversationBrain: AnyObject {
     var isRunning: Bool { get }
     /// Gets ready now, so the first turn is quick. Throws when the brain isn't there, with words naming it and its fix.
     func start() throws
-    /// Sends one message; the reply streams in. Turns stay in order.
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
+    /// Sends one message; the reply streams in. Turns stay in order. `images`: screenshots that go with it (Vello's eyes on
+    /// a call), JPEG or PNG blocks; text blocks among them go along as text.
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void)
     /// Stops the reply in progress; the conversation stays, with what was said so far.
     func interrupt()
     /// Stops the reply in progress and takes the turn out of the conversation altogether: the owner kept talking before
     /// any of the answer was heard, and the turn is about to be asked again with all their words (`CallCutIn`).
     func forgetTheTurnBeingAnswered()
     func stop()
+}
+
+extension ConversationBrain {
+    /// Words only.
+    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+        send(text, images: [], onDelta: onDelta, onDone: onDone)
+    }
 }
 
 /// Which conversation a model setting gets.
@@ -59,6 +67,7 @@ enum ConversationBrains {
 final class OneTurnConversation: ConversationBrain {
     private struct WaitingTurn {
         let text: String
+        let images: [ClaudeContentBlock]
         let onDelta: (String) -> Void
         let onDone: (Result<String, Error>) -> Void
     }
@@ -97,12 +106,12 @@ final class OneTurnConversation: ConversationBrain {
         isStarted = true
     }
 
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
         do { try start() } catch {
             onDone(.failure(error))
             return
         }
-        waiting.append(WaitingTurn(text: text, onDelta: onDelta, onDone: onDone))
+        waiting.append(WaitingTurn(text: text, images: images, onDelta: onDelta, onDone: onDone))
         if currentTask == nil { runNextTurn() }
     }
 
@@ -119,7 +128,7 @@ final class OneTurnConversation: ConversationBrain {
             let result: Result<String, Error>
             do {
                 // Room for a thinking model to think before it answers (an OpenAI-style server's own default can stop it first).
-                let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)],
+                let finished = try await BrainCLIRunner.runTurn(model: model, systemPrompt: systemPrompt, contentBlocks: [.text(turn.text)] + turn.images,
                                                                 persistentSessionIdentifier: sessionIdentifier,
                                                                 maxOutputTokens: APIChat.roomForThinkingTokens,
                                                                 onTextChunk: { rawSoFar in
@@ -253,12 +262,23 @@ final class ClaudeConversation: ConversationBrain {
     }
 
     /// Sends one message; the reply streams in. Turns stay in order if one is still finishing.
-    func send(_ text: String, onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+    func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
         do { try start() } catch {
             onDone(.failure(error))
             return
         }
-        let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": text]]] as [String: Any]]
+        var content: [[String: Any]] = [["type": "text", "text": text]]
+        for block in images {
+            switch block {
+            case .text(let blockText):
+                content.append(["type": "text", "text": blockText])
+            case .jpegImage(let data):
+                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": data.base64EncodedString()]])
+            case .pngImage(let data):
+                content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": data.base64EncodedString()]])
+            }
+        }
+        let message: [String: Any] = ["type": "user", "message": ["role": "user", "content": content] as [String: Any]]
         guard let process, let data = try? JSONSerialization.data(withJSONObject: message) else {
             onDone(.failure(Failure.ended("Couldn't write the message.")))
             return
@@ -461,6 +481,19 @@ final class AppleCallEars: CallEars {
     }
 }
 
+/// A call's line in the log (~/Library/Logs/Clicky/theo.log), with the time it happened, so a call can be read back turn
+/// by turn: the log's lines had no times, and how long an answer took could only be guessed (Air, 24 Nov). Called from
+/// the audio thread too, so it keeps no shared state.
+nonisolated func callLog(_ text: String) {
+    var now = timeval()
+    gettimeofday(&now, nil)
+    var secondsSince1970 = now.tv_sec
+    var localTime = tm()
+    localtime_r(&secondsSince1970, &localTime)
+    let stamp = String(format: "%02d:%02d:%02d.%03d", localTime.tm_hour, localTime.tm_min, localTime.tm_sec, Int(now.tv_usec) / 1000)
+    print("\(stamp) \(text)")
+}
+
 /// Sarvam's sockets: realtime first (partial words), the standard one if realtime refuses.
 @MainActor
 final class SarvamCallEars: CallEars {
@@ -479,6 +512,12 @@ final class SarvamCallEars: CallEars {
     /// Words came in before the gate said the voice stopped.
     private var waitingFinal: Task<Void, Never>?
     private var latestPartial = ""
+    /// The last partial was handed over as a final because the server's own final didn't come in time. When the server's
+    /// final for that same stretch comes after all, often in another script (Devanagari, then "college", "football" in
+    /// Latin), it's left out: handed over too, every stretch reached the turn twice (Air, 24 Nov).
+    private var partialHandedOverAsFinalAt: Date?
+    private var wordsInPartialHandedOver = 0
+    private static let lateFinalSeconds = 8.0
     private var isStopped = false
     private static let sendBytes = 3200
 
@@ -520,7 +559,7 @@ final class SarvamCallEars: CallEars {
         guard !isStopped else { return }
         // Realtime refused or never began: the standard socket has no beta to be let into.
         if usingRealtime && !hasBegun {
-            print("📞 Sarvam realtime didn't open (\(reason ?? "closed")), trying the standard socket")
+            callLog("📞 Sarvam realtime didn't open (\(reason ?? "closed")), trying the standard socket")
             connectStandard()
             return
         }
@@ -533,14 +572,26 @@ final class SarvamCallEars: CallEars {
             hasBegun = true
         case .partial(let text):
             latestPartial = text
-            if !text.isEmpty { onPartial?(text) }
+            if !text.isEmpty {
+                // New speech: a final from here on is for it.
+                partialHandedOverAsFinalAt = nil
+                onPartial?(text)
+            }
         case .final(let text, _):
             waitingFinal?.cancel()
             waitingFinal = nil
             latestPartial = ""
+            // A final with clearly more words than the partial had is kept: the partial was cut short.
+            if let handedOverAt = partialHandedOverAsFinalAt, Date().timeIntervalSince(handedOverAt) < Self.lateFinalSeconds,
+               text.split(separator: " ").count <= wordsInPartialHandedOver + 2 {
+                partialHandedOverAsFinalAt = nil
+                callLog("📞 Sarvam's late final for a stretch already handed over, left out (\(text.split(separator: " ").count) words)")
+                return
+            }
+            partialHandedOverAsFinalAt = nil
             onFinal?(text.trimmingCharacters(in: .whitespacesAndNewlines))
         case .error(let message, let fatal):
-            print("📞 Sarvam listening: \(message)")
+            callLog("📞 Sarvam listening: \(message)")
             if fatal {
                 if usingRealtime && !hasBegun {
                     socket?.close()
@@ -571,6 +622,10 @@ final class SarvamCallEars: CallEars {
             guard !Task.isCancelled, let self else { return }
             let words = self.latestPartial
             self.latestPartial = ""
+            if !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.partialHandedOverAsFinalAt = Date()
+                self.wordsInPartialHandedOver = words.split(separator: " ").count
+            }
             self.onFinal?(words.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
@@ -743,7 +798,7 @@ final class SarvamCallVoice: CallVoice {
     }
 
     private func fail(_ message: String) {
-        print("📞 Sarvam voice: \(message)")
+        callLog("📞 Sarvam voice: \(message)")
         let pieces = unspoken
         socket?.close()
         socket = nil

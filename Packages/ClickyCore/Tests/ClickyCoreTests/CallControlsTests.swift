@@ -75,9 +75,30 @@ struct CallControlsTests {
         #expect(!CodingHarnessWords.asksToSendToCode("what is a good prompt"))
     }
 
+    @Test func groupAndPassAreTakenOutWhereverTheReplySplits() {
+        for size in [1, 2, 3, 7, 200] {
+            let pass = streamed("[PASS]", size: size)
+            #expect(pass.controls == [.stayQuiet], "chunk size \(size)")
+            #expect(pass.speech.isEmpty, "chunk size \(size)")
+            let group = streamed("Got it, I'm in the Space with you. [GROUP: on]", size: size)
+            #expect(group.controls == [.groupMode(turnOn: true)], "chunk size \(size)")
+            #expect(group.speech == "Got it, I'm in the Space with you. ", "chunk size \(size)")
+        }
+        #expect(streamed("Just us. [GROUP: off]", size: 3).controls == [.groupMode(turnOn: false)])
+        // Words that only look like the tags are spoken as written.
+        let words = streamed("[Pass the salt] and [PASSWORD] and [Group photo]", size: 4)
+        #expect(words.controls.isEmpty)
+        #expect(words.speech == "[Pass the salt] and [PASSWORD] and [Group photo]")
+    }
+
     @Test func callHowToNamesTheNewLines() {
         let howTo = ClickyTeamPrompts.callHowTo(owner: "Priya", ownChatApps: ["Notion", "Gmail"])
-        #expect(howTo.contains("[POINTER: on]"))
+        #expect(howTo.contains("[POINTER: off]"))
+        #expect(howTo.contains("[GROUP: on]"))
+        #expect(howTo.contains("[LOOK]"))
+        #expect(howTo.contains("<actions>"))
+        #expect(!howTo.contains("[CLICKY:"))
+        #expect(ClickyTeamPrompts.callHowTo(owner: "Priya", hasHands: false).contains("[POINTER: on]"))
         #expect(howTo.contains("[ROUTINE:"))
         #expect(howTo.contains("[TELL: Vello:"))
         #expect(howTo.contains("Notion, Gmail"))

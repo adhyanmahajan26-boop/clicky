@@ -33,7 +33,9 @@ enum SarvamVoiceConfig {
     static var isActive: Bool { isSelected && ProviderKeychain.get("sarvam") != nil }
     static var speaker: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.speaker) ?? "shubh_enhi_companion" }
     static var language: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.language) ?? "hinglish" }
-    static var model: String { UserDefaults.standard.string(forKey: SarvamVoiceSettings_Keys.model) ?? "bulbul:v4-flash" }
+    /// Every Sarvam voice speaks with Bulbul v4 flash, the model calls use too. A model saved on this Mac before (an older
+    /// Bulbul) is no longer followed, so Pointer Assistant, previews and calls all sound the same.
+    static let model = "bulbul:v4-flash"
     static var pace: Double {
         let stored = UserDefaults.standard.object(forKey: SarvamVoiceSettings_Keys.pace) as? Double ?? 1.0
         return SarvamClient.clampPace(stored)
