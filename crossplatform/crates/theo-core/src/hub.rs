@@ -458,6 +458,80 @@ pub fn effect_allowed(effect: &str, level: &str) -> bool {
     }
 }
 
+// MARK: Apps on a Claude account, through Composio instead
+
+/// The starter catalog's claude-account apps and Composio's name for the same app (the Mac's ClickyCore `ComposioRoute`).
+/// Notion Calendar isn't Notion's workspace and has none.
+const COMPOSIO_TOOLKIT_FOR_CATALOG_ID: [(&str, &str); 5] =
+    [("gmail", "gmail"), ("drive", "googledrive"), ("docs", "googledocs"), ("sheets", "googlesheets"), ("notion", "notion")];
+/// claude.ai's server names for apps added from Claude Code's list, and Composio's name for each.
+const COMPOSIO_TOOLKIT_FOR_CLAUDE_SERVER: [(&str, &str); 12] = [
+    ("claude.ai Gmail", "gmail"), ("claude.ai Google Drive", "googledrive"), ("claude.ai Google Docs", "googledocs"),
+    ("claude.ai Google Sheets", "googlesheets"), ("claude.ai Google Calendar", "googlecalendar"), ("claude.ai Slack", "slack"),
+    ("claude.ai Linear", "linear"), ("claude.ai Asana", "asana"), ("claude.ai HubSpot", "hubspot"), ("claude.ai Atlassian", "jira"),
+    ("claude.ai GitHub", "github"), ("claude.ai Airtable", "airtable"),
+];
+
+/// Composio's name for a claude-account app (`gmail` for Gmail), or None.
+pub fn composio_toolkit_for(app: &Value) -> Option<&'static str> {
+    if app_kind(app) != "claude-account" {
+        return None;
+    }
+    let catalog_id = app.get("catalogId").and_then(Value::as_str).unwrap_or_else(|| app_id(app));
+    if catalog_id == "calendar" {
+        return None;
+    }
+    COMPOSIO_TOOLKIT_FOR_CATALOG_ID
+        .iter()
+        .find(|(id, _)| *id == catalog_id)
+        .or_else(|| app_server(app).and_then(|server| COMPOSIO_TOOLKIT_FOR_CLAUDE_SERVER.iter().find(|(name, _)| *name == server)))
+        .map(|(_, toolkit)| *toolkit)
+}
+
+/// The owner's Composio when it can be used: added, on, and with a key saved.
+pub fn usable_composio(apps: &[Value]) -> Option<&Value> {
+    apps.iter().find(|app| app_kind(app) == "remote" && app.get("composio").map(|c| !c.is_null()).unwrap_or(false) && app_is_enabled(app) && app.get("signedIn").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// The Composio app and toolkit that reach this claude-account app without a Claude plan, when it's connected there.
+pub fn composio_route(app: &Value, apps: &[Value]) -> Option<(String, &'static str)> {
+    let toolkit = composio_toolkit_for(app)?;
+    let composio = usable_composio(apps)?;
+    let connected = composio.get("composioConnectedApps").and_then(Value::as_array)?;
+    connected.iter().any(|slug| slug.as_str() == Some(toolkit)).then(|| (app_id(composio).to_string(), toolkit))
+}
+
+/// The more allowing of two levels.
+pub fn higher_level(first: &str, second: &str) -> &'static str {
+    let rank = |level: &str| LEVELS.iter().position(|known| *known == level).unwrap_or(1);
+    LEVELS[rank(first).max(rank(second))]
+}
+
+/// Puts the claude-account apps a bot reaches through Composio (`routed`: composio id, toolkit, level) into the turn's apps
+/// as Composio, limited to those apps, and returns the ticket's `composioToolkits`. A bot given Composio itself keeps every
+/// app on it, at the higher of the two levels.
+pub fn add_composio_routes(through_hub: &mut BTreeMap<String, String>, routed: &[(String, String, String)]) -> BTreeMap<String, Vec<String>> {
+    let mut limited: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for (composio_id, toolkit, level) in routed {
+        let entry = limited.entry(composio_id.clone()).or_insert_with(|| (level.clone(), vec![]));
+        entry.0 = higher_level(&entry.0, level).to_string();
+        if !entry.1.contains(toolkit) {
+            entry.1.push(toolkit.clone());
+        }
+    }
+    let mut toolkits = BTreeMap::new();
+    for (composio_id, (level, mut kits)) in limited {
+        if let Some(given_itself) = through_hub.get(&composio_id).cloned() {
+            through_hub.insert(composio_id, higher_level(&given_itself, &level).to_string());
+        } else {
+            through_hub.insert(composio_id.clone(), level);
+            kits.sort();
+            toolkits.insert(composio_id, kits);
+        }
+    }
+    toolkits
+}
+
 // MARK: Each bot turn
 
 /// What one bot turn gets of its apps. Dropping it deletes the ticket, so the hub stops answering for the turn however
@@ -504,14 +578,18 @@ pub struct HubLaunch {
 
 /// Writes the turn's ticket in the hub's shape (`docs/CONNECTORS.md`, Tickets). It lasts as long as the turn may, plus a
 /// little; the turn deletes it when it ends. `fixed_name`: a ticket file name an engine's static config names (Grok).
-pub fn write_ticket(harness: &Harness, bot_id: &str, apps: &BTreeMap<String, String>, from_owner: bool, fixed_name: Option<&str>) -> Result<PathBuf, String> {
+/// `composio_toolkits`: a Composio app the bot has only for some apps → those apps (left out when empty).
+pub fn write_ticket(harness: &Harness, bot_id: &str, apps: &BTreeMap<String, String>, composio_toolkits: &BTreeMap<String, Vec<String>>, from_owner: bool, fixed_name: Option<&str>) -> Result<PathBuf, String> {
     let folder = ticket_folder(harness);
     std::fs::create_dir_all(&folder).map_err(|error| format!("Couldn't make the ticket folder: {error}"))?;
     crate::paths::make_private(&harness.paths.root.join("Connectors"));
     crate::paths::make_private(&folder);
     let lasts = Duration::from_secs_f64(harness.settings.turn_limit_seconds()) + Duration::from_secs(120);
     let expires_at = Utc::now() + chrono::Duration::from_std(lasts).unwrap_or_else(|_| chrono::Duration::minutes(10));
-    let ticket = json!({"botId": bot_id, "apps": apps, "ownerAsked": from_owner, "expiresAt": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)});
+    let mut ticket = json!({"botId": bot_id, "apps": apps, "ownerAsked": from_owner, "expiresAt": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)});
+    if !composio_toolkits.is_empty() {
+        ticket["composioToolkits"] = json!(composio_toolkits);
+    }
     let safe_bot_id: String = bot_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(40).collect();
     let file = match fixed_name {
         Some(name) => folder.join(name),
@@ -548,6 +626,8 @@ pub async fn wire_turn(harness: &Harness, bot: &crate::model::Bot, from_owner: b
     };
     let is_claude = bot.provider == "claude";
     let mut through_hub: BTreeMap<String, String> = BTreeMap::new();
+    // Claude-account apps a bot not on Claude reaches through the owner's Composio: (composio id, toolkit, level).
+    let mut through_composio: Vec<(String, String, String)> = vec![];
     for id in &bot.apps {
         let Some(app) = apps.iter().find(|app| app_id(app) == id) else { continue };
         if !app_is_enabled(app) {
@@ -556,6 +636,12 @@ pub async fn wire_turn(harness: &Harness, bot: &crate::model::Bot, from_owner: b
         let level = level_for_turn(&level_of(&bot, id), from_owner);
         let name = app.get("name").and_then(Value::as_str).unwrap_or(id).to_string();
         turn.named.push((name, level.to_string()));
+        if !is_claude {
+            if let Some((composio_id, toolkit)) = composio_route(app, &apps) {
+                through_composio.push((composio_id, toolkit.to_string(), level.to_string()));
+                continue;
+            }
+        }
         match (is_claude, app_kind(app), app_server(app)) {
             (true, "claude-account", Some(server)) => {
                 let (allow, deny) = direct_rules(harness, id, server, level).await;
@@ -567,12 +653,13 @@ pub async fn wire_turn(harness: &Harness, bot: &crate::model::Bot, from_owner: b
             }
         }
     }
+    let composio_toolkits = add_composio_routes(&mut through_hub, &through_composio);
     if through_hub.is_empty() {
         return Ok(turn);
     }
     let helper = helper_path().ok_or_else(missing_helper_message)?;
     let fixed_name = (bot.provider == "grok").then_some(GROK_TICKET_NAME);
-    let ticket = write_ticket(harness, &bot.id, &through_hub, from_owner, fixed_name)?;
+    let ticket = write_ticket(harness, &bot.id, &through_hub, &composio_toolkits, from_owner, fixed_name)?;
     turn.ticket = Some(ticket.clone());
     turn.through_hub = through_hub.clone();
     let (command, arguments) = serve_command(harness, &helper, &ticket);
@@ -855,6 +942,31 @@ pub fn page_report(harness: &Harness) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_account_apps_go_through_composio_limited_to_those_apps() {
+        let gmail = json!({"id": "gmail", "name": "Gmail", "kind": "claude-account", "server": "claude.ai Gmail", "catalogId": "gmail"});
+        let calendar = json!({"id": "calendar", "name": "Notion Calendar", "kind": "claude-account", "server": "claude.ai Notion", "catalogId": "calendar"});
+        let composio = json!({"id": "composio", "name": "Composio", "kind": "remote", "composio": {"userId": "vello"}, "signedIn": true, "composioConnectedApps": ["gmail", "slack"]});
+        let apps = vec![gmail.clone(), calendar.clone(), composio.clone()];
+        assert_eq!(composio_route(&gmail, &apps), Some(("composio".to_string(), "gmail")));
+        assert_eq!(composio_route(&calendar, &apps), None, "Notion Calendar has no Composio twin");
+        let no_key = vec![gmail.clone(), json!({"id": "composio", "kind": "remote", "composio": {}, "signedIn": false, "composioConnectedApps": ["gmail"]})];
+        assert_eq!(composio_route(&gmail, &no_key), None);
+        let off = vec![gmail.clone(), json!({"id": "composio", "kind": "remote", "composio": {}, "enabled": false, "signedIn": true, "composioConnectedApps": ["gmail"]})];
+        assert_eq!(composio_route(&gmail, &off), None);
+
+        let mut through_hub = BTreeMap::from([("files".to_string(), "read".to_string())]);
+        let toolkits = add_composio_routes(&mut through_hub, &[("composio".into(), "gmail".into(), "full".into()), ("composio".into(), "googledrive".into(), "read".into())]);
+        assert_eq!(through_hub.get("composio").map(String::as_str), Some("full"));
+        assert_eq!(toolkits.get("composio"), Some(&vec!["gmail".to_string(), "googledrive".to_string()]));
+
+        // Given Composio itself: every app on it, no limit, the higher level.
+        let mut given_itself = BTreeMap::from([("composio".to_string(), "read".to_string())]);
+        let none = add_composio_routes(&mut given_itself, &[("composio".into(), "gmail".into(), "readAndDraft".into())]);
+        assert!(none.is_empty());
+        assert_eq!(given_itself.get("composio").map(String::as_str), Some("readAndDraft"));
+    }
 
     #[test]
     fn ids_for_old_claude_server_names() {

@@ -108,12 +108,15 @@ final class ConnectorHealth: ObservableObject {
     /// What a connector's row says, from both engines' listings.
     enum RowState: Equatable {
         case connected, claudeOnly, othersOnly, needsSignIn, failed(String), missing, checking, skills
+        /// A Claude-account app that isn't signed in there but is connected on Composio: every bot not on Claude reaches it.
+        case viaComposio
 
         var pill: (tone: PixelTone, text: String) {
             switch self {
             case .connected: return (.ok, "Connected")
             case .claudeOnly: return (.ok, "Claude bots only")
             case .othersOnly: return (.ok, "OpenCode and Grok only")
+            case .viaComposio: return (.ok, "Via Composio")
             case .needsSignIn: return (.needs, "Needs sign-in")
             case .failed: return (.failed, "Can't connect")
             case .missing: return (.quiet, "Not connected")
@@ -127,7 +130,7 @@ final class ConnectorHealth: ObservableObject {
             switch self {
             case .needsSignIn: return 0
             case .failed: return 1
-            case .connected, .claudeOnly, .othersOnly: return 2
+            case .connected, .claudeOnly, .othersOnly, .viaComposio: return 2
             case .checking: return 3
             case .missing: return 4
             case .skills: return 5
@@ -175,14 +178,16 @@ final class ConnectorHealth: ObservableObject {
         }
         isChecking = false
         lastChecked = Date()
-        for connector in BotConnectors.known where state(of: connector) == .connected || state(of: connector) == .claudeOnly || state(of: connector) == .othersOnly {
+        for connector in BotConnectors.known where [.connected, .claudeOnly, .othersOnly, .viaComposio].contains(state(of: connector)) {
             lastConnected[connector.id] = hubRecord(of: connector)?.lastWorked ?? Date()
         }
         save()
         // An app that works again lets go of the bots that were waiting on it: the card folds and the bot picks the job back up.
         for (botID, block) in blocks {
             guard let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }) else { continue }
-            guard [.connected, .claudeOnly, .othersOnly].contains(state(of: connector)) else { continue }
+            guard [.connected, .claudeOnly, .othersOnly, .viaComposio].contains(state(of: connector)) else { continue }
+            // Through Composio only bots not on Claude reach it: a Claude bot keeps waiting for its sign-in.
+            if state(of: connector) == .viaComposio, BotsStore.shared.bot(botID)?.provider == "claude" { continue }
             let card = Self.cardID(botID: botID, block: block)
             if block.failed == true {
                 PixelCardFolds.shared.fold(card, did: "\(connector.name) answers again", about: BotsStore.shared.bot(botID).map { "\($0.name) can carry on" })
@@ -238,9 +243,16 @@ final class ConnectorHealth: ObservableObject {
         return openCode[name] ?? .missing
     }
 
+    /// Whether this Claude-account app is also connected on the owner's Composio, so bots not on Claude reach it there.
+    func reachesThroughComposio(_ connector: BotConnector) -> Bool {
+        guard let record = hubRecord(of: connector) else { return false }
+        return ComposioRoute.route(for: record, hubApps: hubApps) != nil
+    }
+
     func state(of connector: BotConnector) -> RowState {
         if connector.isSkill { return .skills }
         if let hubState = onHub(connector) {
+            if hubState != .connected, reachesThroughComposio(connector) { return .viaComposio }
             switch hubState {
             case .connected: return .connected
             case .needsSignIn: return .needsSignIn
@@ -264,6 +276,8 @@ final class ConnectorHealth: ObservableObject {
     /// apps through Claude, and the rest through OpenCode's own servers.
     func state(for connector: BotConnector, provider: String) -> ConnectorState {
         if connector.isSkill { return .connected }
+        // A Claude-account app connected on Composio works for every bot not on Claude, with no Claude plan.
+        if provider != "claude", let record = hubRecord(of: connector), ComposioRoute.route(for: record, hubApps: hubApps) != nil { return .connected }
         if let hubState = onHub(connector) { return hubState }
         let claudeSide = onClaude(connector)
         if provider == "claude" || BotConnectors.bridged(connector) { return claudeSide }
@@ -271,6 +285,7 @@ final class ConnectorHealth: ObservableObject {
     }
 
     func label(for connector: BotConnector, provider: String) -> String {
+        if provider != "claude", let record = hubRecord(of: connector), ComposioRoute.route(for: record, hubApps: hubApps) != nil { return "Via Composio" }
         let state = state(for: connector, provider: provider)
         if state == .connected, provider != "claude", BotConnectors.bridged(connector) { return "Via Claude" }
         return state.label
@@ -297,7 +312,7 @@ final class ConnectorHealth: ObservableObject {
     func blockingConnector(of botID: String) -> BotConnector? {
         guard let block = blocks[botID], block.failed != true, let connector = BotConnectors.known.first(where: { $0.id == block.connectorID }) else { return nil }
         switch state(of: connector) {
-        case .connected, .claudeOnly, .othersOnly: return nil
+        case .connected, .claudeOnly, .othersOnly, .viaComposio: return nil
         default: return connector
         }
     }

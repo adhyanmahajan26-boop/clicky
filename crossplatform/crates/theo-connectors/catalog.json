@@ -11,7 +11,7 @@
       "composio": {
         "userId": "vello"
       },
-      "description": "One key for hundreds of apps: Gmail, Slack, GitHub, Notion, Google Calendar, Linear and more. Paste your Composio API key, then connect each app once with a link.",
+      "description": "Recommended. One key for hundreds of apps: Gmail, Google Drive, Docs, Sheets, Slack, GitHub, Notion, Google Calendar, Linear and more, for every bot whatever its brain. No Claude or ChatGPT plan needed. Paste your Composio API key, then connect each app once with a link.",
       "via": "Your Composio API key (composio.dev, free plan available)",
       "tested": "Built 19 November 2026 against Composio's documented tool-router API (POST /api/v3.1/tool_router/session, its MCP address with x-api-key, and /link) and a local stand-in (crossplatform/tests/composio_stub.py)."
     },
@@ -51,7 +51,7 @@
         "apply_sensitive_thread_label"
       ],
       "description": "Search and read mail, write drafts.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     },
     {
@@ -86,7 +86,7 @@
         "notion-duplicate-page"
       ],
       "description": "Search, read and write pages and databases.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     },
     {
@@ -106,7 +106,7 @@
         "notion-calendar-cancel-events"
       ],
       "description": "See calendars and events, add and change events.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     },
     {
@@ -128,7 +128,7 @@
         "copy_file"
       ],
       "description": "Find and read files.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     },
     {
@@ -143,7 +143,7 @@
         "update_doc"
       ],
       "description": "Read and edit documents.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     },
     {
@@ -165,7 +165,7 @@
         "copy_sheet_to_another_spreadsheet"
       ],
       "description": "Read and edit spreadsheets.",
-      "via": "Your Claude account (needs Claude Code)",
+      "via": "Your Claude account (needs Claude Code and a Claude plan). Connect it on Composio too and every bot can use it, no plan needed",
       "tested": "Ported from the Mac app's ConnectorBridge, which runs these daily on the owner's Macs."
     }
   ]

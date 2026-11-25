@@ -428,7 +428,8 @@ enum BotRunner {
         var hubTicket: URL?
         if hubPlan.usesHub {
             hubTicket = try? ConnectorHub.issueTicket(botID: bot.id, apps: hubPlan.ticketApps, ownerAsked: ownerAsked, expiresIn: turnLimitSeconds + 120,
-                                                      fileName: bot.provider == "grok" ? grokHubTicketName : nil)
+                                                      fileName: bot.provider == "grok" ? grokHubTicketName : nil,
+                                                      composioToolkits: hubPlan.composioToolkits)
         }
         let issuedTicket = hubTicket
         defer { ConnectorHub.revokeTicket(issuedTicket) }

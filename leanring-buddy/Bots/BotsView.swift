@@ -1682,6 +1682,10 @@ struct ConnectorsScreen: View {
         BotConnectors.known.filter { $0.id != "calendar" || $0.hub != nil }
             .enumerated()
             .sorted { left, right in
+                // Composio, the recommended way, is always first.
+                let leftIsComposio = health.hubRecord(of: left.element)?.isComposio == true
+                let rightIsComposio = health.hubRecord(of: right.element)?.isComposio == true
+                if leftIsComposio != rightIsComposio { return leftIsComposio }
                 let leftOrder = health.state(of: left.element).sortOrder
                 let rightOrder = health.state(of: right.element).sortOrder
                 return leftOrder != rightOrder ? leftOrder < rightOrder : left.offset < right.offset
@@ -1711,6 +1715,9 @@ struct ConnectorsScreen: View {
                 if let note {
                     Text(note).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary)
                 }
+                if ConnectorHub.isAvailable {
+                    ComposioRecommendation(note: $note) { composioID in withAnimation(DS.Motion.hover) { openRow = composioID } }
+                }
                 VStack(spacing: 0) {
                     ForEach(Array(connectors.enumerated()), id: \.element.id) { index, connector in
                         if index > 0 { RowDivider() }
@@ -1732,7 +1739,8 @@ struct ConnectorsScreen: View {
     /// With the hub every brain reaches the same apps; without it, the old split between Claude and the other engines.
     private var headerWords: String {
         if ConnectorHub.isAvailable {
-            return "Vello's own apps, the same for every bot whatever its engine. Sign in here, then give an app to a bot in its settings and say how far it may go. Apps through your Claude account still need Claude Code."
+            return "Vello's own apps, the same for every bot whatever its brain. Sign in here, then give an app to a bot in its settings and say how far it may go. "
+                + "None of them needs a Claude or ChatGPT plan, except apps through your Claude account; connect those on Composio too and every bot not on Claude uses them there."
         }
         return "Bots on Claude use your claude.ai connectors. Bots on OpenCode and Grok reach Gmail, Notion and Google through Vello, on the same account, read and draft only. "
             + ConnectorHub.helperMissingWords
@@ -1741,7 +1749,7 @@ struct ConnectorsScreen: View {
     /// "6 connected", "1 needs sign-in", "1 can't connect".
     @ViewBuilder private var summaryPills: some View {
         let states = connectors.filter { !$0.isSkill }.map { health.state(of: $0) }
-        let connected = states.filter { [.connected, .claudeOnly, .othersOnly].contains($0) }.count
+        let connected = states.filter { [.connected, .claudeOnly, .othersOnly, .viaComposio].contains($0) }.count
         let signIn = states.filter { $0 == .needsSignIn }.count
         let failed = states.filter { if case .failed = $0 { return true }; return false }.count
         if health.lastChecked == nil, health.isChecking {
@@ -1765,7 +1773,10 @@ struct ConnectorsScreen: View {
             Image(systemName: openRow == connector.id ? "chevron.down" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundColor(DS.Colors.textTertiary).frame(width: 10)
             AppLogo(connector: connector, size: 30)
             VStack(alignment: .leading, spacing: 3) {
-                Text(connector.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                HStack(spacing: 6) {
+                    Text(connector.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                    if hubRecord?.isComposio == true { StatusPill(text: "Recommended", tone: .info) }
+                }
                 HStack(spacing: 5) {
                     if users.isEmpty {
                         Text("No bot uses it yet").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
@@ -1905,6 +1916,14 @@ struct ConnectorsScreen: View {
             return (ConnectorListing.plainReason(reason, app: connector.name) + worked, PixelTone.failed.text)
         case .claudeOnly:
             return ("Bots on OpenCode and Grok can't use it yet", DS.Colors.textTertiary)
+        case .needsSignIn where health.hubRecord(of: connector).map { $0.isClaudeAccount && ComposioRoute.toolkit(for: $0) != nil } == true:
+            return ("Needs your Claude plan, or connect it on Composio and every bot can use it with no plan", DS.Colors.textTertiary)
+        case .viaComposio:
+            return ("Every bot not on Claude uses it through Composio. Claude bots need it signed in on claude.ai.", DS.Colors.textTertiary)
+        case .connected where health.hubRecord(of: connector).map { $0.isClaudeAccount && ComposioRoute.toolkit(for: $0) != nil } == true:
+            return health.reachesThroughComposio(connector)
+                ? ("Claude bots through your Claude account, every other bot through Composio", DS.Colors.textTertiary)
+                : ("Needs your Claude plan. Connect it on Composio too and every bot can use it.", DS.Colors.textTertiary)
         case .missing where health.hubRecord(of: connector)?.enabled == false:
             return ("Off: no bot can use it until it's on", DS.Colors.textTertiary)
         default:

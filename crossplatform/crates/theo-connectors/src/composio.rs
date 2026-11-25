@@ -321,7 +321,7 @@ pub fn connected_apps(paths: &HubPaths, vault: &Vault, entry: &AppEntry) -> Resu
 // ---------------------------------------------------------------------------------------------------------------------
 // What a bot may do
 
-fn is_code_runner(tool_name: &str) -> bool {
+pub fn is_code_runner(tool_name: &str) -> bool {
     let words = words_in_tool_name(tool_name);
     words.iter().any(|word| matches!(word.as_str(), "workbench" | "bash" | "python" | "shell" | "sandbox"))
 }
@@ -451,9 +451,121 @@ pub fn call_words(tool_name: &str, arguments: &Value) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// A bot given Composio for some apps only
+
+/// When a bot reaches only some apps through Composio (Gmail it was given, which it can't reach through a Claude account,
+/// say), the ticket names those apps' toolkits, and every call has to stay inside them. Composio's own tools for finding
+/// tools and reading their schemas only read, so they're fine; running app tools is judged by the slugs it runs
+/// (`GMAIL_SEND_EMAIL` belongs to `gmail`); a connection link only for those apps; and the workbench, a raw API request
+/// or a run whose slugs can't be read is refused, since any of them could reach every other app. None: the call may go
+/// ahead. Some: the sentence that refuses it.
+pub fn outside_allowed_toolkits(tool_name: &str, arguments: &Value, allowed_toolkits: &[String]) -> Option<String> {
+    let allowed: Vec<String> = allowed_toolkits.iter().map(|toolkit| toolkit_slug(toolkit)).filter(|toolkit| !toolkit.is_empty()).collect();
+    let names = || allowed.iter().map(|toolkit| app_words(toolkit)).collect::<Vec<_>>().join(", ");
+    if is_code_runner(tool_name) {
+        return Some(format!("Not allowed: Composio's workbench can reach every app, and this bot was given Composio only for {}.", names()));
+    }
+    let slug_is_allowed = |slug: &str| {
+        let lowercase_slug = slug.to_lowercase();
+        // Composio's own tools run through the runner (searching for tools) are fine, its code runners are not.
+        (lowercase_slug.starts_with("composio_") && !is_code_runner(slug))
+            || allowed.iter().any(|toolkit| lowercase_slug.starts_with(&format!("{toolkit}_")))
+    };
+    if runs_other_tools(tool_name) {
+        if !http_methods_in(arguments).is_empty() {
+            return Some(format!("Not allowed: a raw request through Composio could reach any app, and this bot was given Composio only for {}.", names()));
+        }
+        let slugs = slugs_in(arguments);
+        if slugs.is_empty() {
+            return Some(format!("Not allowed: it doesn't say which app's tool it runs, and this bot was given Composio only for {}.", names()));
+        }
+        let outside: Vec<String> = slugs.into_iter().filter(|slug| !slug_is_allowed(slug)).collect();
+        if !outside.is_empty() {
+            return Some(format!("Not allowed: {} isn't {}, the only app{} this bot was given through Composio.", outside.join(", "), names(), if allowed.len() == 1 { "" } else { "s" }));
+        }
+        return None;
+    }
+    if manages_connections(tool_name) {
+        let toolkits = toolkits_named_in(arguments);
+        if toolkits.is_empty() || toolkits.iter().any(|toolkit| !allowed.contains(toolkit)) {
+            return Some(format!("Not allowed: this bot may only connect {} on Composio.", names()));
+        }
+    }
+    None
+}
+
+/// The apps (toolkits) a call names, under any key with "toolkit" in it.
+fn toolkits_named_in(arguments: &Value) -> Vec<String> {
+    fn collect(value: &Value, found: &mut Vec<String>) {
+        match value {
+            Value::String(text) => found.push(toolkit_slug(text)),
+            Value::Array(items) => items.iter().for_each(|item| collect(item, found)),
+            Value::Object(object) => object.values().for_each(|inner| collect(inner, found)),
+            _ => {}
+        }
+    }
+    fn walk(value: &Value, found: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                for (key, inner) in object {
+                    if key.to_lowercase().contains("toolkit") {
+                        collect(inner, found);
+                    } else {
+                        walk(inner, found);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = vec![];
+    walk(arguments, &mut found);
+    found.retain(|toolkit| !toolkit.is_empty());
+    found
+}
+
+/// `googledrive` as "Google Drive", for refusals.
+fn app_words(toolkit: &str) -> String {
+    match toolkit {
+        "gmail" => "Gmail".into(),
+        "googledrive" => "Google Drive".into(),
+        "googledocs" => "Google Docs".into(),
+        "googlesheets" => "Google Sheets".into(),
+        "googlecalendar" => "Google Calendar".into(),
+        "notion" => "Notion".into(),
+        "slack" => "Slack".into(),
+        "github" => "GitHub".into(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bot_given_composio_for_gmail_only_stays_in_gmail() {
+        let gmail = vec!["gmail".to_string()];
+        let run = |slug: &str| json!({"tools": [{"tool_slug": slug, "arguments": {}}]});
+        assert_eq!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &run("GMAIL_FETCH_EMAILS"), &gmail), None);
+        assert!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &run("SLACK_SEND_MESSAGE"), &gmail).unwrap().contains("SLACK_SEND_MESSAGE"));
+        assert!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &json!({"tools": [{"tool_slug": "GMAIL_FETCH_EMAILS"}, {"tool_slug": "GITHUB_CREATE_ISSUE"}]}), &gmail).is_some());
+        // A run that doesn't say what it runs, a raw request and the workbench could reach any app.
+        assert!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &json!({"tools": []}), &gmail).is_some());
+        assert!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &json!({"method": "GET", "endpoint": "/x"}), &gmail).is_some());
+        assert!(outside_allowed_toolkits("COMPOSIO_REMOTE_WORKBENCH", &json!({"code": "print(1)"}), &gmail).is_some());
+        // Finding tools only reads.
+        assert_eq!(outside_allowed_toolkits("COMPOSIO_SEARCH_TOOLS", &json!({"queries": [{"use_case": "read my mail"}]}), &gmail), None);
+        // Connecting: Gmail yes, Slack no.
+        assert_eq!(outside_allowed_toolkits("COMPOSIO_MANAGE_CONNECTIONS", &json!({"toolkits": ["gmail"]}), &gmail), None);
+        assert!(outside_allowed_toolkits("COMPOSIO_MANAGE_CONNECTIONS", &json!({"toolkits": ["slack"]}), &gmail).is_some());
+        // Google Drive's slugs are GOOGLEDRIVE_…, never GOOGLEDOCS_….
+        let drive = vec!["googledrive".to_string()];
+        assert_eq!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &run("GOOGLEDRIVE_FIND_FILE"), &drive), None);
+        assert!(outside_allowed_toolkits("COMPOSIO_MULTI_EXECUTE_TOOL", &run("GOOGLEDOCS_GET_DOCUMENT_BY_ID"), &drive).is_some());
+    }
 
     #[test]
     fn the_key_only_goes_to_composio() {

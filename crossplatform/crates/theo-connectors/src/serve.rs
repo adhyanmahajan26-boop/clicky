@@ -112,8 +112,13 @@ impl ServerState {
                     continue;
                 }
             };
+            let only_some_composio_apps = if entry.is_composio() { ticket.composio_toolkits_for(app_id).map(<[String]>::to_vec) } else { None };
             for tool in tools {
                 if !level.allows(tool.effect) {
+                    continue;
+                }
+                // Composio given only for some apps: its workbench, which could reach every app, isn't offered at all.
+                if only_some_composio_apps.is_some() && crate::composio::is_code_runner(&tool.name) {
                     continue;
                 }
                 let exposed_name = exposed_tool_name(&entry.id, &tool.name);
@@ -121,6 +126,9 @@ impl ServerState {
                 let mut description = format!("[{}] {}", entry.name, tool.description.clone().unwrap_or_default()).trim().to_string();
                 if tool.judged_per_call {
                     description.push_str(&format!(" (Vello checks every tool this runs: this bot may {} in {}.)", level_words(level), entry.name));
+                }
+                if let Some(toolkits) = &only_some_composio_apps {
+                    description.push_str(&format!(" Only for these apps: {}.", toolkits.join(", ")));
                 }
                 let mut offered = json!({
                     "name": exposed_name,
@@ -162,6 +170,11 @@ impl ServerState {
             let why = if ticket.is_held_back_only_because_owner_did_not_ask(&app_id, tool_effect) { " This turn didn't come from the owner's own words, so nothing is sent, shared or deleted.".to_string() } else { String::new() };
             let what = if entry.is_composio() { crate::composio::call_words(&tool_name, &arguments) } else { tool_name.clone() };
             return refusal(format!("Not allowed: {what} {}, and this bot may {} in {}.{why}", effect_words(tool_effect), level_words(level), entry.name));
+        }
+        if entry.is_composio() {
+            if let Some(refusal_words) = ticket.composio_toolkits_for(&app_id).and_then(|toolkits| crate::composio::outside_allowed_toolkits(&tool_name, &arguments, toolkits)) {
+                return refusal(refusal_words);
+            }
         }
         match self.with_connection(&entry, tool_effect == ToolEffect::Reads, |hub, connection| hub.call_on(connection, &tool_name, arguments.clone(), level)) {
             Ok(result) => {

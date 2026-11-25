@@ -556,6 +556,22 @@ fn composio_takes_one_key_connects_apps_by_link_and_judges_each_run_by_what_it_r
     let (read_draft, _) = hub(data.path(), &["call", "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", "--args", &json!({"tools": [{"tool_slug": "NOTION_CREATE_NOTION_PAGE"}]}).to_string(), "--ticket", &read_ticket]);
     assert_eq!(read_draft["ok"], false, "{read_draft}");
 
+    // A bot given Composio only for Gmail (its Gmail, reached without a Claude account): Slack is refused before
+    // anything reaches Composio, through `call` and through `serve`.
+    let gmail_only = json!({"botId": "ledger", "apps": {"composio": "full"}, "ownerAsked": true,
+        "expiresAt": (chrono::Utc::now() + chrono::Duration::seconds(600)).to_rfc3339(), "composioToolkits": {"composio": ["gmail"]}});
+    let (issued, _) = hub(data.path(), &["ticket", "issue", "--json", &gmail_only.to_string()]);
+    let gmail_ticket = issued["ticket"].as_str().unwrap().to_string();
+    let (slack_post, _) = hub(data.path(), &["call", "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", "--args", &json!({"tools": [{"tool_slug": "SLACK_CHAT_POST_MESSAGE"}]}).to_string(), "--ticket", &gmail_ticket]);
+    assert_eq!(slack_post["ok"], false, "{slack_post}");
+    assert!(slack_post["error"].as_str().unwrap().contains("Gmail"), "{slack_post}");
+    let mut gmail_server = McpServerUnderTest::start(data.path(), &gmail_ticket);
+    let slack_through_serve = gmail_server.call("composio__COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "SLACK_CHAT_POST_MESSAGE"}]}));
+    assert_eq!(slack_through_serve["isError"], true, "{slack_through_serve}");
+    let workbench = gmail_server.call("composio__COMPOSIO_REMOTE_WORKBENCH", json!({"code": "print(1)"}));
+    assert_eq!(workbench["isError"], true, "{workbench}");
+    drop(gmail_server);
+
     let stats = composio.stats();
     let ran: Vec<Value> = stats["ran"].as_array().unwrap().clone();
     assert_eq!(ran, vec![json!(["GMAIL_FETCH_EMAILS", "GMAIL_CREATE_EMAIL_DRAFT"]), json!(["GMAIL_SEND_EMAIL"])], "only allowed runs reached Composio");

@@ -445,6 +445,11 @@ fn call_tool(hub: &Hub, command_line: &CommandLine) -> Result<Option<Value>, Str
         let what = if entry.is_composio() { theo_connectors::composio::call_words(&tool_name, &arguments) } else { tool_name.clone() };
         return Err(format!("Not allowed: {what} {}, and this bot may {} in {}.{why}", effect_words(effect), level_words(level), entry.name));
     }
+    if entry.is_composio() {
+        if let Some(refusal_words) = ticket.composio_toolkits_for(&app_id).and_then(|toolkits| theo_connectors::composio::outside_allowed_toolkits(&tool_name, &arguments, toolkits)) {
+            return Err(refusal_words);
+        }
+    }
     match hub.call_on(&mut connection, &tool_name, arguments, level) {
         Ok(result) => {
             hub.record_worked(&app_id, None);

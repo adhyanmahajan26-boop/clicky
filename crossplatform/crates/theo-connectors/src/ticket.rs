@@ -27,6 +27,10 @@ pub struct Ticket {
     pub owner_asked: bool,
     /// When the ticket stops working (RFC 3339).
     pub expires_at: String,
+    /// A Composio app the bot was given only for some apps (its Gmail, say, which it can't reach through a Claude
+    /// account): app id → the toolkits it may use there. A Composio app not named here may use every app connected on it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub composio_toolkits: BTreeMap<String, Vec<String>>,
 }
 
 impl Ticket {
@@ -35,6 +39,11 @@ impl Ticket {
             Ok(expires_at) => expires_at.with_timezone(&chrono::Utc) <= chrono::Utc::now(),
             Err(_) => true,
         }
+    }
+
+    /// The only toolkits this turn may use on a Composio app, or None when it may use all of them.
+    pub fn composio_toolkits_for(&self, app_id: &str) -> Option<&[String]> {
+        self.composio_toolkits.get(app_id).map(Vec::as_slice)
     }
 
     /// The level this turn really has for an app, or None when the bot wasn't given it.
@@ -120,7 +129,17 @@ mod tests {
             apps: BTreeMap::from([("echo".to_string(), AccessLevel::Full)]),
             owner_asked: true,
             expires_at: (chrono::Utc::now() + chrono::Duration::seconds(seconds)).to_rfc3339(),
+            composio_toolkits: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_ticket_without_composio_toolkits_reads_as_before() {
+        let ticket: Ticket = serde_json::from_str(r#"{"botId":"a","apps":{"composio":"read"},"ownerAsked":true,"expiresAt":"2099-01-01T00:00:00Z"}"#).unwrap();
+        assert_eq!(ticket.composio_toolkits_for("composio"), None);
+        let limited: Ticket = serde_json::from_str(r#"{"botId":"a","apps":{"composio":"read"},"ownerAsked":true,"expiresAt":"2099-01-01T00:00:00Z","composioToolkits":{"composio":["gmail"]}}"#).unwrap();
+        assert_eq!(limited.composio_toolkits_for("composio"), Some(&["gmail".to_string()][..]));
+        assert!(!serde_json::to_string(&ticket).unwrap().contains("composioToolkits"));
     }
 
     #[test]

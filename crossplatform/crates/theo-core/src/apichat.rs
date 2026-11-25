@@ -553,18 +553,34 @@ impl Toolbox {
         let mut ticket_apps: BTreeMap<String, String> = BTreeMap::new();
         let mut described: Vec<String> = vec![];
         let mut hub_definitions: Vec<ToolDefinition> = vec![];
+        let mut composio_toolkits: BTreeMap<String, Vec<String>> = BTreeMap::new();
         if !bot.apps.is_empty() {
             let known = match harness.with(|state| state.hub_apps.clone()) {
                 apps if bot.apps.iter().all(|id| apps.iter().any(|app| app["id"].as_str() == Some(id))) => apps,
                 _ => crate::hub::list_apps(harness).await.unwrap_or_default(),
             };
+            // Each app with its level for this turn. A Claude-account app connected on the owner's Composio is reached there,
+            // with no Claude plan, as Composio limited to that app (`hub::add_composio_routes`).
+            let mut turn_apps: BTreeMap<String, String> = BTreeMap::new();
+            let mut through_composio: Vec<(String, String, String)> = vec![];
             for app_id in &bot.apps {
                 let Some(app) = known.iter().find(|app| app["id"].as_str() == Some(app_id.as_str())) else { continue };
                 if app["enabled"].as_bool() == Some(false) {
                     continue;
                 }
-                let app_name = app["name"].as_str().unwrap_or(app_id).to_string();
                 let level = crate::hub::level_for_turn(&crate::hub::level_of(bot, app_id), from_owner);
+                match crate::hub::composio_route(app, &known) {
+                    Some((composio_id, toolkit)) => through_composio.push((composio_id, toolkit.to_string(), level.to_string())),
+                    None => {
+                        turn_apps.insert(app_id.clone(), level.to_string());
+                    }
+                }
+            }
+            composio_toolkits = crate::hub::add_composio_routes(&mut turn_apps, &through_composio);
+            for (app_id, level) in &turn_apps {
+                let Some(app) = known.iter().find(|app| app["id"].as_str() == Some(app_id.as_str())) else { continue };
+                let app_name = app["name"].as_str().unwrap_or(app_id).to_string();
+                let level: &str = level.as_str();
                 match crate::hub::tools_of(harness, app_id).await {
                     Ok(tools) => {
                         let mut offered_any = false;
@@ -591,7 +607,8 @@ impl Toolbox {
             }
         }
         if !ticket_apps.is_empty() {
-            match crate::hub::write_ticket(harness, &bot.id, &ticket_apps, from_owner, None) {
+            composio_toolkits.retain(|composio_id, _| ticket_apps.contains_key(composio_id));
+            match crate::hub::write_ticket(harness, &bot.id, &ticket_apps, &composio_toolkits, from_owner, None) {
                 Ok(ticket) => {
                     toolbox.ticket = Some(ticket);
                     hub_definitions.sort_by(|a, b| a.name.cmp(&b.name));

@@ -13,6 +13,74 @@ struct ConnectorHubRulesTests {
         HubAppRecord(id: "files", name: "My files", kind: .local, status: "connected", command: "npx")
     }
 
+    // MARK: Apps without a Claude plan, through Composio
+
+    private func composio(connected: [String], signedIn: Bool = true, enabled: Bool = true) -> HubAppRecord {
+        HubAppRecord(id: "composio", name: "Composio", kind: .remote, enabled: enabled, status: "connected", signedIn: signedIn,
+                     url: "https://backend.composio.dev", auth: "token", catalogID: "composio", composioUserID: "vello",
+                     composioConnectedApps: connected)
+    }
+
+    @Test func aBotOffClaudeReachesItsGmailThroughComposioLimitedToGmail() {
+        let apps = [gmail(), files(), composio(connected: ["gmail", "slack"])]
+        let plan = ConnectorHubTurnPlan.make(botApps: ["gmail", "files"], savedLevels: ["gmail": "full"], hubApps: apps,
+                                             engine: "api:openai", ownerAsked: true)
+        #expect(plan.ticketApps == ["composio": .full, "files": .readAndDraft])
+        #expect(plan.composioToolkits == ["composio": ["gmail"]])
+        #expect(plan.throughComposio == ["gmail": "gmail"])
+        #expect(plan.directClaudeApps.isEmpty)
+    }
+
+    @Test func aClaudeBotKeepsClaudeCodesOwnRoute() {
+        let apps = [gmail(), composio(connected: ["gmail"])]
+        let plan = ConnectorHubTurnPlan.make(botApps: ["gmail"], savedLevels: [:], hubApps: apps, engine: "claude", ownerAsked: true)
+        #expect(plan.directClaudeApps.map(\.app.id) == ["gmail"])
+        #expect(plan.ticketApps.isEmpty && plan.throughComposio.isEmpty)
+    }
+
+    @Test func withoutTheAppOnComposioOrWithoutAKeyNothingChanges() {
+        for composioApp in [composio(connected: ["slack"]), composio(connected: ["gmail"], signedIn: false), composio(connected: ["gmail"], enabled: false)] {
+            let plan = ConnectorHubTurnPlan.make(botApps: ["gmail"], savedLevels: [:], hubApps: [gmail(), composioApp], engine: "codex", ownerAsked: true)
+            #expect(plan.ticketApps == ["gmail": .readAndDraft])
+            #expect(plan.composioToolkits.isEmpty && plan.throughComposio.isEmpty)
+        }
+    }
+
+    @Test func aBotGivenComposioItselfKeepsEveryAppOnIt() {
+        let apps = [gmail(), composio(connected: ["gmail", "slack"])]
+        let plan = ConnectorHubTurnPlan.make(botApps: ["gmail", "composio"], savedLevels: ["composio": "read", "gmail": "full"], hubApps: apps,
+                                             engine: "gemini", ownerAsked: true)
+        #expect(plan.ticketApps == ["composio": .full])
+        #expect(plan.composioToolkits.isEmpty)
+        #expect(plan.throughComposio == ["gmail": "gmail"])
+    }
+
+    @Test func aTurnNotFromTheOwnerStillOnlyReadsAndDraftsThroughComposio() {
+        let drive = HubAppRecord(id: "drive", name: "Google Drive", kind: .claudeAccount, status: "needsSignIn", server: "claude.ai Google Drive", catalogID: "drive")
+        let apps = [gmail(), drive, composio(connected: ["gmail", "googledrive"])]
+        let plan = ConnectorHubTurnPlan.make(botApps: ["gmail", "drive"], savedLevels: ["gmail": "full", "drive": "read"], hubApps: apps,
+                                             engine: "opencode", ownerAsked: false)
+        #expect(plan.ticketApps == ["composio": .readAndDraft])
+        #expect(plan.composioToolkits == ["composio": ["gmail", "googledrive"]])
+    }
+
+    @Test func composioNamesTheAppsItCanStandInFor() {
+        #expect(ComposioRoute.toolkit(for: gmail()) == "gmail")
+        #expect(ComposioRoute.toolkit(for: HubAppRecord(id: "calendar", name: "Notion Calendar", kind: .claudeAccount, server: "claude.ai Notion", catalogID: "calendar")) == nil)
+        #expect(ComposioRoute.toolkit(for: HubAppRecord(id: "slack-2", name: "Slack", kind: .claudeAccount, server: "claude.ai Slack")) == "slack")
+        #expect(ComposioRoute.toolkit(for: files()) == nil)
+        #expect(HubAccessLevel.higher(.read, .full) == .full && HubAccessLevel.higher(.readAndDraft, .read) == .readAndDraft)
+    }
+
+    @Test func aTicketNamesComposiosAppsOnlyWhenLimited() throws {
+        let expires = Date(timeIntervalSince1970: 1_800_000_000)
+        let plain = try #require(try JSONSerialization.jsonObject(with: ConnectorHubTicket.json(botID: "a", apps: ["composio": .read], ownerAsked: true, expiresAt: expires)) as? [String: Any])
+        #expect(plain["composioToolkits"] == nil)
+        let limited = try #require(try JSONSerialization.jsonObject(with: ConnectorHubTicket.json(botID: "a", apps: ["composio": .read], ownerAsked: true, expiresAt: expires,
+                                                                                               composioToolkits: ["composio": ["gmail"], "elsewhere": ["slack"]])) as? [String: Any])
+        #expect(limited["composioToolkits"] as? [String: [String]] == ["composio": ["gmail"]])
+    }
+
     // MARK: Reading the hub
 
     @Test func aListAnswerBecomesApps() throws {

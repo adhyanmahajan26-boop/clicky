@@ -27,10 +27,25 @@ const CONNECTORS = (() => {
   }
   function reached(c) {
     if (isComposio(c)) return `Composio, with your Composio API key: every app you connect there, for the account "${(c.composio && c.composio.userId) || "vello"}"`;
-    if (c.kind === "claude-account") return `Through your Claude account (${c.server || c.name}), with Claude Code`;
+    if (c.kind === "claude-account") return `Through your Claude account (${c.server || c.name}), so it needs Claude Code and a Claude plan`;
     if (c.kind === "local") return `A program on this computer: ${[c.command].concat(c.args || []).filter(Boolean).join(" ") || "a command"}`;
     const signIn = c.auth === "oauth" ? "signs in in your browser" : c.auth === "token" ? "with a token you pasted" : "no sign-in";
     return `${c.url || c.target || "An address"}, ${signIn}`;
+  }
+  // Apps on a Claude account need Claude Code and a Claude plan. The same app connected on the owner's Composio reaches every
+  // bot not on Claude there instead, limited to that app (crates/theo-core/src/hub.rs composio_route, the Mac's ComposioRoute).
+  const TOOLKIT_FOR_CATALOG_ID = { gmail: "gmail", drive: "googledrive", docs: "googledocs", sheets: "googlesheets", notion: "notion" };
+  const TOOLKIT_FOR_CLAUDE_SERVER = { "claude.ai Gmail": "gmail", "claude.ai Google Drive": "googledrive", "claude.ai Google Docs": "googledocs", "claude.ai Google Sheets": "googlesheets", "claude.ai Google Calendar": "googlecalendar", "claude.ai Slack": "slack", "claude.ai Linear": "linear", "claude.ai Asana": "asana", "claude.ai HubSpot": "hubspot", "claude.ai Atlassian": "jira", "claude.ai GitHub": "github", "claude.ai Airtable": "airtable" };
+  function toolkitFor(c) {
+    if (c.kind !== "claude-account") return null;
+    const catalogId = c.catalogId || c.id;
+    if (catalogId === "calendar") return null;
+    return TOOLKIT_FOR_CATALOG_ID[catalogId] || TOOLKIT_FOR_CLAUDE_SERVER[c.server] || null;
+  }
+  const usableComposio = () => list.find((c) => isComposio(c) && c.enabled !== false && c.signedIn);
+  function viaComposio(c) {
+    const toolkit = toolkitFor(c), composio = usableComposio();
+    return !!(toolkit && composio && (composio.composioConnectedApps || []).includes(toolkit));
   }
   const takesToken = (c) => c.kind === "remote" && c.auth === "token";
   const browserSignIn = (c) => c.kind === "remote" && c.auth === "oauth";
@@ -42,13 +57,17 @@ const CONNECTORS = (() => {
   function levelOf(bot, id) { return (bot.apps || []).includes(id) ? ((bot.appLevels || {})[id] || "readAndDraft") : "off"; }
 
   function row(c) {
-    const [tone, word] = pillOf(c);
+    const routed = c.enabled !== false && c.status !== "connected" && viaComposio(c);
+    const [tone, word] = routed ? ["ok", "Via Composio"] : pillOf(c);
     const using = users(c);
     const who = using.length ? `<span class="cn-users">${using.slice(0, 4).map((b) => botHTML(b.id, 16, { badge: false })).join("")}</span><span>${esc(using.map((b) => b.name).join(", "))}</span>` : `<span>No bot uses it yet</span>`;
-    const extra = c.status === "failed" && c.enabled !== false ? `<small class="w-bad">${esc(c.reason || "Not answering")}${c.lastConnected ? ` · worked ${esc(workedWords(c.lastConnected))}` : ""}</small>`
-      : c.status === "needsSignIn" && c.enabled !== false ? `<small class="w-ask">${c.kind === "claude-account" ? "Sign in on claude.ai so bots can use it" : isComposio(c) ? "Paste your Composio API key so bots can use it" : takesToken(c) ? "Paste its token so bots can use it" : "Sign in so bots can use it"}</small>` : "";
+    const extra = routed ? `<small class="muted">Every bot not on Claude uses it through Composio. Claude bots need it signed in on claude.ai.</small>`
+      : c.status === "connected" && toolkitFor(c) ? `<small class="muted">${viaComposio(c) ? "Claude bots through your Claude account, every other bot through Composio" : "Needs your Claude plan. Connect it on Composio too and every bot can use it."}</small>`
+      : c.status === "failed" && c.enabled !== false ? `<small class="w-bad">${esc(c.reason || "Not answering")}${c.lastConnected ? ` · worked ${esc(workedWords(c.lastConnected))}` : ""}</small>`
+      : c.status === "needsSignIn" && c.enabled !== false ? `<small class="w-ask">${c.kind === "claude-account" ? (toolkitFor(c) ? "Needs your Claude plan, or connect it on Composio and every bot can use it with no plan" : "Sign in on claude.ai so bots can use it") : isComposio(c) ? "Paste your Composio API key so bots can use it" : takesToken(c) ? "Paste its token so bots can use it" : "Sign in so bots can use it"}</small>` : "";
     let button = "";
     if (c.enabled === false) button = `<button class="btn sm" data-enable="${esc(c.id)}" data-on="1">Turn on</button>`;
+    else if (routed) button = "";
     else if (c.status === "needsSignIn" && takesToken(c)) button = `<button class="btn pri sm" data-open-row="${esc(c.id)}">${isComposio(c) ? "Add key" : "Add token"}</button>`;
     else if (c.status === "needsSignIn" && browserSignIn(c)) button = `<button class="btn pri sm" data-signin="${esc(c.id)}">${c.signIn && c.signIn.state === "waiting" ? "Signing in…" : "Sign in"}</button>`;
     else if (c.status === "needsSignIn" && c.kind === "claude-account") button = `<button class="btn pri sm" data-claude-signin="${esc(c.name)}">Sign in</button>`;
@@ -59,7 +78,7 @@ const CONNECTORS = (() => {
       ? `<div class="tc ask cn-wait"><div class="tc-q">Finish signing in to ${esc(c.name)} in your browser</div><p>Vello opened the sign-in page. If it didn't open, copy the address into your browser.</p><div class="tc-field"><span>${esc(c.signIn.url)}</span><button class="btn sm" data-copy="${esc(c.signIn.url)}">Copy</button></div></div>`
       : c.signIn && c.signIn.state === "failed" ? `<div class="tc bad cn-wait"><div class="tc-q">Signing in to ${esc(c.name)} didn't work</div><p>${esc(c.signIn.error)}</p></div>` : "";
     return `<div class="cn-row${isOpen ? " open" : ""}"><div class="crow cn-head" data-row="${esc(c.id)}"><svg class="ic chev" viewBox="0 0 24 24"><path d="${isOpen ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"}"/></svg>${tile}`
-      + `<span class="tx"><b>${esc(c.name)}</b><small>${who}</small>${extra}</span>${TP.pill(tone, word)}<span class="act cn-act">${button}</span></div>`
+      + `<span class="tx"><b>${esc(c.name)}${isComposio(c) ? ` ${TP.pill("working", "Recommended")}` : ""}</b><small>${who}</small>${extra}</span>${TP.pill(tone, word)}<span class="act cn-act">${button}</span></div>`
       + signIn + (isOpen ? details(c, using) : "") + `</div>`;
   }
   function details(c, using) {
@@ -67,7 +86,19 @@ const CONNECTORS = (() => {
     const usedBy = using.length ? using.map((b) => `${b.name} (${(LEVEL_WORDS[levelOf(b, c.id)] || "").toLowerCase()})`).join(", ") : "No bot yet. Give it to a bot below.";
     let html = `<div class="cn-details">` + line("Reached", reached(c)) + (c.status === "failed" && c.reason ? line("What it said", c.reason) : "")
       + line("Last worked", workedWords(c.lastConnected)) + line("Used by", usedBy);
+    const toolkit = toolkitFor(c);
+    if (toolkit) {
+      const composio = usableComposio(), appName = appWords(toolkit);
+      if (viaComposio(c)) html += line("Without a Claude plan", `Connected on Composio: every bot not on Claude uses ${appName} there, and only ${appName}.`);
+      else {
+        html += line("Without a Claude plan", composio ? `Connect ${appName} on Composio and every bot not on Claude uses it there, whatever its brain.` : `Set up Composio (recommended, free key) and connect ${appName} there: every bot can then use it, whatever its brain.`);
+        html += composio ? `<div class="btns"><button class="btn pri sm" data-composio-for="${esc(toolkit)}" data-composio-id="${esc(composio.id)}">Connect ${esc(appName)} on Composio</button></div>`
+          : list.some(isComposio) ? `<small class="muted">Paste your Composio key on Composio's row first.</small>`
+          : `<div class="btns"><button class="btn pri sm" data-add-catalog="composio" data-name="Composio">Set up Composio</button></div>`;
+      }
+    }
     if (isComposio(c)) {
+      html += line("Works with", "Every bot, whatever its brain: an API key, a local model, Codex, Gemini, Cursor, Grok or Claude. No Claude or ChatGPT plan needed.");
       const apps = c.composioConnectedApps || [];
       html += line("Apps connected", apps.length ? apps.map(appWords).join(", ") : c.signedIn ? "None yet. Connect one below, or ask a bot to." : "Paste your key first");
       html += `<form class="cn-token" data-token="${esc(c.id)}" data-composio="1"><input type="password" name="token" autocomplete="off" placeholder="${c.signedIn ? "Paste a new API key to replace it" : "Paste your Composio API key"}" aria-label="Composio API key"><button class="btn pri sm" type="submit">Save key</button></form>`
@@ -102,9 +133,23 @@ const CONNECTORS = (() => {
     return html;
   }
 
+  // Until Composio is set up with an app: what it is and the one next step (add it, paste its key, or connect a first app).
+  function recommendation(result) {
+    if (result.helper === false) return "";
+    const composio = list.find(isComposio);
+    if (composio && composio.enabled !== false && composio.signedIn && (composio.composioConnectedApps || []).length) return "";
+    const button = !composio ? `<button class="btn pri sm" data-add-catalog="composio" data-name="Composio">Add Composio</button>`
+      : `<button class="btn pri sm" data-open-row="${esc(composio.id)}">${composio.signedIn ? "Connect an app" : "Add your key"}</button>`;
+    return `<div class="crow cn-recommend"><span class="app">C</span><span class="tx"><b>Connect your apps with Composio ${TP.pill("working", "Recommended")}</b>`
+      + `<small>One free Composio key reaches Gmail, Google Drive, Docs, Sheets and Calendar, Slack, GitHub, Notion and hundreds more. Every bot uses them whatever its brain: an API key, a local model, Codex, Gemini or Claude. No Claude or ChatGPT plan needed.</small></span>`
+      + `<span class="act">${button}</span></div>`;
+  }
+
   function addSection(have, claudeCode) {
-    const starters = ((catalog && catalog.apps) || []).filter((a) => !have.has(a.id)).filter((a) => a.kind !== "claude-account" || claudeCode);
-    const starterRows = starters.map((a) => `<div class="crow"><span class="app">${esc(a.name.slice(0, 1))}</span><span class="tx"><b>${esc(a.name)}</b><small>${esc([a.description, a.via].filter(Boolean).join(" · "))}</small></span><span class="act"><button class="btn sm" data-add-catalog="${esc(a.id)}" data-name="${esc(a.name)}">Add</button></span></div>`).join("");
+    const remaining = ((catalog && catalog.apps) || []).filter((a) => !have.has(a.id)).filter((a) => a.kind !== "claude-account" || claudeCode);
+    // Composio, the recommended way, first.
+    const starters = remaining.filter((a) => a.composio).concat(remaining.filter((a) => !a.composio));
+    const starterRows = starters.map((a) => `<div class="crow"><span class="app">${esc(a.name.slice(0, 1))}</span><span class="tx"><b>${esc(a.name)}${a.composio ? ` ${TP.pill("working", "Recommended")}` : ""}</b><small>${esc([a.description, a.via].filter(Boolean).join(" · "))}</small></span><span class="act"><button class="btn sm" data-add-catalog="${esc(a.id)}" data-name="${esc(a.name)}">Add</button></span></div>`).join("");
     const where = addKind === "address"
       ? `<label class="cn-where">Address <input name="where" required placeholder="https://mcp.example.com/mcp" autocomplete="off" spellcheck="false"></label><label>Sign-in <select name="auth"><option value="oauth">Sign in in the browser</option><option value="token">Paste a token</option><option value="none">No sign-in</option></select></label>`
       : `<label class="cn-where">Command <input name="where" required placeholder="npx -y @modelcontextprotocol/server-filesystem C:\\Notes" autocomplete="off" spellcheck="false"></label>`;
@@ -124,7 +169,8 @@ const CONNECTORS = (() => {
     if (view.kind !== "connectors") return;
     if (cat.ok) catalog = cat.result;
     if (!r.ok) { pane.innerHTML = `<div class="column"><h1>Connectors</h1><div class="tc bad"><div class="tc-q">Couldn't list connectors</div><p>${esc(r.error)}</p><div class="btns"><button class="btn" data-refresh>Try again</button></div></div></div>`; pane.querySelector("[data-refresh]").onclick = () => render(true); return; }
-    list = r.result.connectors.slice().sort((a, b) => STATUS_ORDER.indexOf(a.enabled === false ? "off" : a.status) - STATUS_ORDER.indexOf(b.enabled === false ? "off" : b.status));
+    // Composio, the recommended way, first; then by status.
+    list = r.result.connectors.slice().sort((a, b) => (isComposio(b) - isComposio(a)) || (STATUS_ORDER.indexOf(a.enabled === false ? "off" : a.status) - STATUS_ORDER.indexOf(b.enabled === false ? "off" : b.status)));
     draw(r.result);
   }
   function draw(result) {
@@ -135,12 +181,13 @@ const CONNECTORS = (() => {
     const pills = (connected ? TP.pill("ok", `${connected} connected`) : "") + (signIn ? TP.pill("needs", `${signIn} need${signIn === 1 ? "s" : ""} sign-in`) : "") + (failed ? TP.pill("failed", `${failed} can't connect`) : "");
     const checked = result.checked ? ` Checked ${ago(result.checked) === "now" ? "just now" : `${ago(result.checked)} ago`}.` : "";
     const have = new Set(list.map((c) => c.catalogId || c.id));
-    pane.innerHTML = `<div class="column cn"><div><h1>Connectors</h1><p class="muted">Vello's own apps, the same for every bot whatever its brain. Sign in here, then give an app to a bot and say how far it may go. Apps through your Claude account are reached with Claude Code.${checked}</p></div>`
+    pane.innerHTML = `<div class="column cn"><div><h1>Connectors</h1><p class="muted">Vello's own apps, the same for every bot whatever its brain. Sign in here, then give an app to a bot and say how far it may go. None of them needs a Claude or ChatGPT plan, except apps through your Claude account; connect those on Composio too and every bot not on Claude uses them there.${checked}</p></div>`
       + (result.helper === false ? `<p class="w-bad">The connector helper is missing from this install, so apps can't be checked or used. Reinstall Vello to put it back.</p>` : "")
       + (result.note ? `<p class="muted">${esc(result.note)}</p>` : "")
       + `<div class="cn-bar"><div class="pills">${pills}</div><button class="btn sm" data-refresh${checking ? " disabled" : ""}><svg class="ic" viewBox="0 0 24 24"><path d="M19.5 12A7.5 7.5 0 1 1 17.3 6.7M13.9 6.8h3.6V3.2"/></svg>${checking ? "Checking…" : "Refresh"}</button></div>`
       + (note ? `<p class="muted cn-note">${esc(note)}</p>` : "")
       + `<div id="signin-help"></div>`
+      + recommendation(result)
       + (list.length ? `<div class="list">${list.map(row).join("")}</div>` : `<p class="muted">No apps yet. Add one below: an app's MCP address, or a program on this computer.</p>`)
       + addSection(have, result.claudeCode) + `</div>`;
     pane.scrollTop = keepScroll;
@@ -189,6 +236,12 @@ const CONNECTORS = (() => {
       act(b, invoke({ cmd: "connectorAdd", catalog: b.dataset.addCatalog }), entry.composio ? `Added ${b.dataset.name}. Paste your Composio API key in its row, then connect your apps.` : `Added ${b.dataset.name}. Give it to a bot in its row.`);
     });
     pane.querySelectorAll("[data-composio-keys]").forEach((a) => a.onclick = async (e) => { e.preventDefault(); const r = await invoke({ cmd: "openLink", url: COMPOSIO_KEYS }); if (!r.ok) { note = r.error; draw(result); } });
+    pane.querySelectorAll("[data-composio-for]").forEach((b) => b.onclick = async () => {
+      b.disabled = true;
+      const a = await invoke({ cmd: "connectorComposioLink", id: b.dataset.composioId, toolkit: b.dataset.composioFor });
+      note = a.ok ? `Opened Composio's page to connect ${appWords(a.result.toolkit)}. Approve it there, then press Check on Composio's row. If it didn't open: ${a.result.url}` : a.error;
+      render();
+    });
     pane.querySelectorAll("form[data-composio-link]").forEach((f) => f.onsubmit = async (e) => {
       e.preventDefault();
       const toolkit = String(new FormData(f).get("toolkit") || "").trim();

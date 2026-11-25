@@ -217,7 +217,7 @@ struct ConnectorFailedCard: View {
                         PixelCardButton(title: health.isChecking ? "Checking…" : "Try again", primary: true) {
                             Task {
                                 await health.refresh()
-                                guard [.connected, .claudeOnly, .othersOnly].contains(health.state(of: connector)) else { return }
+                                guard [.connected, .claudeOnly, .othersOnly, .viaComposio].contains(health.state(of: connector)) else { return }
                                 if folds.folds[cardID] == nil { folds.fold(cardID, did: "\(connector.name) answers again", about: bot.map { "\($0.name) can carry on" }) }
                                 if let bot { BotsStore.shared.clearFailure(of: bot.id) }
                             }

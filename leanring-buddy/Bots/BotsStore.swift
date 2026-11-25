@@ -2159,8 +2159,21 @@ enum BotPrompts {
                              "(app: \(bridged.map(\.id).joined(separator: ", "))): describe what to look up or draft and it " +
                              "returns what it found. Don't say an app needs connecting before you've tried it.")
             }
+            // Apps on a Claude account that this bot, not on Claude, reaches through the owner's Composio instead (no plan needed).
+            let hubAppsNow = ConnectorHub.isAvailable ? ConnectorHub.cachedApps : []
+            let viaComposio = apps.filter { connector in
+                connector.hub.map { ComposioRoute.routes($0, engine: bot.provider, hubApps: hubAppsNow) } ?? false
+            }
+            if let composioApp = ComposioRoute.composio(in: hubAppsNow), !viaComposio.isEmpty {
+                let names = viaComposio.map(\.name).joined(separator: ", ")
+                parts.append("Reach \(names) through Composio, with the \(composioApp.id)__… tools of Vello's theo_apps server: find the tool " +
+                             "you need with its search tool, then run it with its execute tool. There you may only use \(names).")
+            }
             // Apps from Theo's connector hub: the same tools on every brain, from its theo_apps server.
-            let throughHub = apps.filter { $0.hub != nil && !(bot.provider == "claude" && $0.hub?.isClaudeAccount == true) }
+            let throughHub = apps.filter { connector in
+                connector.hub != nil && !(bot.provider == "claude" && connector.hub?.isClaudeAccount == true)
+                    && !viaComposio.contains(where: { $0.id == connector.id })
+            }
             if !throughHub.isEmpty {
                 parts.append("Reach \(throughHub.map(\.name).joined(separator: ", ")) with the tools of Vello's theo_apps server, named " +
                              "<app>__<tool> (\(throughHub.map { "\($0.id)__…" }.joined(separator: ", "))). Each app only lets you do what the owner " +

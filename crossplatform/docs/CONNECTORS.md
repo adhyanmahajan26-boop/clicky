@@ -270,6 +270,26 @@ Checked on 19 November 2026 against Composio's documented API and the stand-in `
 (`cargo test -p theo-connectors`, suite test C06); the names of Composio's own tools may change, which is why the rule
 goes by words in the name rather than a fixed list.
 
+### Apps on a Claude account, without the Claude plan
+
+Composio is the recommended way to connect apps: it needs no Claude or ChatGPT plan, and every brain reaches it. A
+`claude-account` app (Gmail, Google Drive, Docs, Sheets, Notion; any `claude.ai <App>` server with a Composio twin) needs
+Claude Code signed in to a Claude plan. When the same app is connected on the owner's Composio (it's in
+`composioConnectedApps`), every bot **not on Claude** reaches it there instead, with the level it was given for that app:
+the app writes Composio into the ticket, limited to that app's toolkit:
+
+```json
+{"botId": "ledger", "apps": {"composio": "full"}, "composioToolkits": {"composio": ["gmail"]}, "ownerAsked": true, "expiresAt": "…"}
+```
+
+A Composio app named in `composioToolkits` only runs those apps: each slug a call runs must start with one of them
+(`GMAIL_…` for `gmail`), a connection link only for them, Composio's own tool search still works, and the workbench, a raw
+request (`method`) or a run whose slugs can't be read is refused and the workbench isn't offered. A bot that was given
+Composio itself keeps every app on it (no `composioToolkits`, the higher of the two levels). Claude bots keep Claude
+Code's own route. Which app maps to which toolkit: ClickyCore `ComposioRoute` on the Mac, `hub::composio_route` on
+Windows and Linux (Notion Calendar has none). Tested in `cargo test -p theo-connectors` (`composio::tests`, the end-to-end
+Composio test) and suite test C07.
+
 ## Not done yet
 
 - MCP's older HTTP+SSE transport (2024-11-05 servers that only offer `/sse`): not supported; such a server shows `failed`.

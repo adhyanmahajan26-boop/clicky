@@ -363,8 +363,9 @@ enum ConnectorHub {
 
     /// Writes a ticket for one turn into the hub's ticket folder (only this user can read it) and returns it. `fileName`: a fixed
     /// name, for Grok, whose config names the ticket file ahead of time.
+    /// `composioToolkits`: a Composio app the bot has only for some apps (its Gmail, reached without a Claude plan) → those apps.
     static func issueTicket(botID: String, apps: [String: HubAccessLevel], ownerAsked: Bool, expiresIn: TimeInterval,
-                            fileName: String? = nil) throws -> URL {
+                            fileName: String? = nil, composioToolkits: [String: [String]] = [:]) throws -> URL {
         let folder = ticketFolder
         let fileManager = FileManager.default
         for privateFolder in [folder.deletingLastPathComponent(), folder] {
@@ -373,7 +374,8 @@ enum ConnectorHub {
         }
         let name = fileName ?? ConnectorHubTicket.fileName(botID: botID, unique: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())
         let ticket = folder.appendingPathComponent(name)
-        let data = ConnectorHubTicket.json(botID: botID, apps: apps, ownerAsked: ownerAsked, expiresAt: Date().addingTimeInterval(expiresIn))
+        let data = ConnectorHubTicket.json(botID: botID, apps: apps, ownerAsked: ownerAsked, expiresAt: Date().addingTimeInterval(expiresIn),
+                                           composioToolkits: composioToolkits)
         // Written beside, made private, then moved in place: the hub never reads half a ticket, and nobody else can read it at all.
         let temporary = folder.appendingPathComponent(".\(name).\(UUID().uuidString).tmp")
         guard fileManager.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
@@ -387,7 +389,8 @@ enum ConnectorHub {
     /// A ticket for the bot's apps that go through the hub this turn; nil when there are none.
     static func issueTicket(for bot: NativeBot, plan: ConnectorHubTurnPlan, ownerAsked: Bool, expiresIn: TimeInterval) -> URL? {
         guard plan.usesHub else { return nil }
-        return try? issueTicket(botID: bot.id, apps: plan.ticketApps, ownerAsked: ownerAsked, expiresIn: expiresIn)
+        return try? issueTicket(botID: bot.id, apps: plan.ticketApps, ownerAsked: ownerAsked, expiresIn: expiresIn,
+                                composioToolkits: plan.composioToolkits)
     }
 
     /// Ends a turn's apps at once: the hub reads the ticket on every call.

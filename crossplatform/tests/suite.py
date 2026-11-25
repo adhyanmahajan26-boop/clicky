@@ -1948,6 +1948,49 @@ def c06():
     return all(checks.values()), checks
 
 
+@test("C07", "No Claude plan: an OpenCode bot given Gmail on a Claude account reaches it through Composio when Gmail is connected there, and only Gmail", "connectors")
+def c07():
+    server = subprocess.Popen([T.PY, str(T.HERE / "composio_stub.py")], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=dict(os.environ, COMPOSIO_TEST_KEY="ck-suite-key"))
+    b = None
+    try:
+        port = int(server.stdout.readline().strip())
+        P({"cmd": "connectorAdd", "app": {"id": "composio", "name": "Composio", "kind": "remote", "url": "http://127.0.0.1:%d" % port, "auth": "token", "composio": {"userId": "vello"}}}, timeout=120)
+        P({"cmd": "connectorSecret", "id": "composio", "value": "ck-suite-key"}, timeout=120)
+        composio = hub_apps(refresh=True).get("composio", {})
+        if "gmail" not in hub_apps():
+            P({"cmd": "connectorAdd", "catalog": "gmail"}, timeout=120)
+        name = "Postie %s" % T.nonce()[:4]
+        b = P({"cmd": "botCreate", "name": name, "instructions": "You are %s." % name, "provider": "opencode", "model": "opencode/fake"})["result"]["id"]
+        P({"cmd": "botApp", "bot": b, "app": "gmail", "level": "full"})
+        reports = []
+        for slug in ["GMAIL_FETCH_EMAILS", "SLACK_CHAT_POST_MESSAGE"]:
+            fake_mcp([{"tool": "composio__COMPOSIO_MULTI_EXECUTE_TOOL", "args": {"tools": [{"tool_slug": slug, "arguments": {}}]}}]); mark = T.calls_mark()
+            T.say(b, "Check my mail."); T.wait_idle()
+            reports.append(((mcp_call(name, mark) or {}).get("mcp", {})))
+        ran = json.loads(urllib_get("http://127.0.0.1:%d/debug/stats" % port)).get("ran", [])
+        gmail_result = reports[0].get("results", {}).get("composio__COMPOSIO_MULTI_EXECUTE_TOOL", "")
+        slack_result = reports[1].get("results", {}).get("composio__COMPOSIO_MULTI_EXECUTE_TOOL", "")
+        checks = {"composio_has_gmail": "gmail" in (composio.get("composioConnectedApps") or []),
+                  "offered_composio": "composio__COMPOSIO_MULTI_EXECUTE_TOOL" in reports[0].get("tools", []),
+                  "no_claude_route": not any(t.startswith("gmail__") for t in reports[0].get("tools", [])),
+                  "workbench_not_offered": "composio__COMPOSIO_REMOTE_WORKBENCH" not in reports[0].get("tools", []),
+                  "gmail_ran": gmail_result.startswith("ran ") and ["GMAIL_FETCH_EMAILS"] in ran,
+                  "slack_refused": slack_result.startswith("refused") and "Gmail" in slack_result and ["SLACK_CHAT_POST_MESSAGE"] not in ran,
+                  "ticket_gone_after_turn": not tickets_left()}
+    finally:
+        if b:
+            P({"cmd": "botDelete", "id": b})
+        P({"cmd": "connectorRemove", "id": "composio"}, timeout=60)
+        server.kill(); T.fake("ok")
+    return all(checks.values()), dict(checks, reports=reports)
+
+
+def urllib_get(address):
+    import urllib.request
+    with urllib.request.urlopen(address, timeout=10) as answer:
+        return answer.read().decode("utf-8")
+
+
 @test("C05", "Bots saved before the hub keep their apps: \"claude.ai Gmail\" and \"theo-echo\" move onto hub apps at start, and a removed app leaves every bot", "connectors")
 def c05():
     a = bid("Scout")

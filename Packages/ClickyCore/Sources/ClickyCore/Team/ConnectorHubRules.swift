@@ -158,6 +158,53 @@ public enum ComposioWords {
     }
 }
 
+/// Apps that reach a bot through a Claude account (Gmail, Google Drive, Docs, Sheets, Notion) need Claude Code signed in to a
+/// Claude plan. When the same app is connected on the owner's Composio, every bot that isn't on Claude reaches it there instead,
+/// with no Claude or ChatGPT plan at all: its ticket names Composio limited to that one app (`composioToolkits`), so a bot given
+/// Gmail never gets Slack. A Claude bot keeps Claude Code's own route, which is faster and exactly as before.
+public enum ComposioRoute {
+    /// The claude-account apps of the starter catalog, by id, and Composio's name for the same app. Notion Calendar isn't
+    /// Notion's workspace and has no Composio twin.
+    public static let toolkitForCatalogID: [String: String] = [
+        "gmail": "gmail", "drive": "googledrive", "docs": "googledocs", "sheets": "googlesheets", "notion": "notion",
+    ]
+
+    /// claude.ai's server names for apps the owner added from Claude Code's list, and Composio's name for each.
+    public static let toolkitForClaudeServer: [String: String] = [
+        "claude.ai Gmail": "gmail", "claude.ai Google Drive": "googledrive", "claude.ai Google Docs": "googledocs",
+        "claude.ai Google Sheets": "googlesheets", "claude.ai Google Calendar": "googlecalendar", "claude.ai Slack": "slack",
+        "claude.ai Linear": "linear", "claude.ai Asana": "asana", "claude.ai HubSpot": "hubspot", "claude.ai Atlassian": "jira",
+        "claude.ai GitHub": "github", "claude.ai Airtable": "airtable",
+    ]
+
+    /// Composio's name for a claude-account app, or nil when it has none (or the app isn't a claude-account one).
+    public static func toolkit(for app: HubAppRecord) -> String? {
+        guard app.isClaudeAccount else { return nil }
+        let catalogID = app.catalogID ?? app.id
+        if catalogID == "calendar" { return nil }
+        if let toolkit = toolkitForCatalogID[catalogID] { return toolkit }
+        return app.server.flatMap { toolkitForClaudeServer[$0] }
+    }
+
+    /// The owner's Composio, when it can be used: added, on, and with a key saved.
+    public static func composio(in hubApps: [HubAppRecord]) -> HubAppRecord? {
+        hubApps.first { $0.isComposio && $0.enabled && $0.signedIn }
+    }
+
+    /// The Composio app and toolkit that reach this claude-account app without a Claude plan, when the app is connected there.
+    public static func route(for app: HubAppRecord, hubApps: [HubAppRecord]) -> (composio: HubAppRecord, toolkit: String)? {
+        guard app.enabled, let toolkit = toolkit(for: app), let composio = composio(in: hubApps),
+              composio.composioConnectedApps.contains(toolkit) else { return nil }
+        return (composio, toolkit)
+    }
+
+    /// Whether a bot on this engine takes the Composio route for this app: every engine but Claude, which reaches claude.ai's
+    /// apps itself.
+    public static func routes(_ app: HubAppRecord, engine: String, hubApps: [HubAppRecord]) -> Bool {
+        engine != "claude" && route(for: app, hubApps: hubApps) != nil
+    }
+}
+
 /// The hub's times are RFC 3339 in whole seconds ("2026-11-13T21:40:33Z").
 public enum HubDates {
     public static func parse(_ text: String?) -> Date? {
@@ -183,6 +230,12 @@ public enum HubAccessLevel: String, CaseIterable, Sendable {
     case full
 
     public static let standard = HubAccessLevel.readAndDraft
+
+    /// The more allowing of two levels (read < read and draft < everything).
+    public static func higher(_ first: HubAccessLevel, _ second: HubAccessLevel) -> HubAccessLevel {
+        let order: [HubAccessLevel] = [.read, .readAndDraft, .full]
+        return (order.firstIndex(of: first) ?? 0) >= (order.firstIndex(of: second) ?? 0) ? first : second
+    }
 
     /// The level the bot's settings saved, or the standard one.
     public init(saved: String?) {
@@ -275,15 +328,23 @@ public struct ConnectorHubTurnPlan: Equatable, Sendable {
     public var ticketApps: [String: HubAccessLevel]
     /// claude-account apps a Claude bot uses directly, with the level this turn has for each.
     public var directClaudeApps: [DirectClaudeApp]
+    /// A Composio app in `ticketApps` that the bot has only for some apps: its id → the toolkits it may use there (the ticket's
+    /// `composioToolkits`). Missing: the bot was given Composio itself and may use every app connected on it.
+    public var composioToolkits: [String: [String]] = [:]
+    /// claude-account apps this turn reaches through Composio instead of a Claude account: app id → Composio's toolkit.
+    public var throughComposio: [String: String] = [:]
 
     public struct DirectClaudeApp: Equatable, Sendable {
         public var app: HubAppRecord
         public var level: HubAccessLevel
     }
 
-    public init(ticketApps: [String: HubAccessLevel], directClaudeApps: [DirectClaudeApp]) {
+    public init(ticketApps: [String: HubAccessLevel], directClaudeApps: [DirectClaudeApp], composioToolkits: [String: [String]] = [:],
+                throughComposio: [String: String] = [:]) {
         self.ticketApps = ticketApps
         self.directClaudeApps = directClaudeApps
+        self.composioToolkits = composioToolkits
+        self.throughComposio = throughComposio
     }
 
     /// No apps this turn (no helper, or a bot without apps).
@@ -297,16 +358,35 @@ public struct ConnectorHubTurnPlan: Equatable, Sendable {
                             ownerAsked: Bool) -> ConnectorHubTurnPlan {
         var ticketApps: [String: HubAccessLevel] = [:]
         var direct: [DirectClaudeApp] = []
+        var throughComposio: [String: String] = [:]
+        // Composio for apps that would otherwise need a Claude plan: its id → the level and the toolkits.
+        var composioForApps: [String: (level: HubAccessLevel, toolkits: [String])] = [:]
         for appID in botApps {
             guard let app = hubApps.first(where: { $0.id == appID }), app.enabled else { continue }
             let level = HubAccessLevel(saved: savedLevels[appID]).effective(ownerAsked: ownerAsked)
             if engine == "claude", app.isClaudeAccount, app.server != nil {
                 direct.append(DirectClaudeApp(app: app, level: level))
+            } else if engine != "claude", let route = ComposioRoute.route(for: app, hubApps: hubApps) {
+                throughComposio[appID] = route.toolkit
+                let earlier = composioForApps[route.composio.id]
+                composioForApps[route.composio.id] = (earlier.map { HubAccessLevel.higher($0.level, level) } ?? level,
+                                                      ((earlier?.toolkits ?? []) + [route.toolkit]))
             } else {
                 ticketApps[appID] = level
             }
         }
-        return ConnectorHubTurnPlan(ticketApps: ticketApps, directClaudeApps: direct)
+        var composioToolkits: [String: [String]] = [:]
+        for (composioID, routed) in composioForApps {
+            if let givenItself = ticketApps[composioID] {
+                // The bot was given Composio itself: every app on it, at the higher of the two levels.
+                ticketApps[composioID] = HubAccessLevel.higher(givenItself, routed.level)
+            } else {
+                ticketApps[composioID] = routed.level
+                composioToolkits[composioID] = Array(Set(routed.toolkits)).sorted()
+            }
+        }
+        return ConnectorHubTurnPlan(ticketApps: ticketApps, directClaudeApps: direct, composioToolkits: composioToolkits,
+                                    throughComposio: throughComposio)
     }
 }
 
@@ -336,13 +416,18 @@ public enum ClaudeDirectRoute {
 
 public enum ConnectorHubTicket {
     /// The ticket file's contents, in the shape the hub reads (crossplatform/docs/CONNECTORS.md, "Bot turns: tickets").
-    public static func json(botID: String, apps: [String: HubAccessLevel], ownerAsked: Bool, expiresAt: Date) -> Data {
-        let object: [String: Any] = [
+    /// `composioToolkits`: a Composio app the bot has only for some apps → those apps' toolkits (left out when empty, so the
+    /// ticket reads exactly as before).
+    public static func json(botID: String, apps: [String: HubAccessLevel], ownerAsked: Bool, expiresAt: Date,
+                            composioToolkits: [String: [String]] = [:]) -> Data {
+        var object: [String: Any] = [
             "botId": botID,
             "apps": apps.mapValues(\.rawValue),
             "ownerAsked": ownerAsked,
             "expiresAt": HubDates.format(expiresAt),
         ]
+        let limited = composioToolkits.filter { apps[$0.key] != nil && !$0.value.isEmpty }
+        if !limited.isEmpty { object["composioToolkits"] = limited }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
     }
 

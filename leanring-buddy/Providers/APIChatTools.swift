@@ -34,6 +34,20 @@ protocol APIChatConnectorSource: Sendable {
     func revokeTicket(_ ticket: URL) async
     /// Runs one tool. A tool that ran and failed is `isError`; a call the hub refused (or that never ran) throws.
     func call(appID: String, toolName: String, argumentsJSON: String, ticket: URL) async throws -> (text: String, isError: Bool)
+    /// A Composio app this bot has only for some apps (its Gmail, reached without a Claude plan) → those apps' toolkits, for the
+    /// ticket. Empty when none.
+    func composioToolkits(for bot: NativeBot) async -> [String: [String]]
+    func issueTicket(botID: String, appLevels: [String: String], composioToolkits: [String: [String]], ownerAsked: Bool,
+                     expiresAt: Date) async throws -> URL
+}
+
+extension APIChatConnectorSource {
+    func composioToolkits(for bot: NativeBot) async -> [String: [String]] { [:] }
+
+    func issueTicket(botID: String, appLevels: [String: String], composioToolkits: [String: [String]], ownerAsked: Bool,
+                     expiresAt: Date) async throws -> URL {
+        try await issueTicket(botID: botID, appLevels: appLevels, ownerAsked: ownerAsked, expiresAt: expiresAt)
+    }
 }
 
 final class APIChatToolbox: @unchecked Sendable {
@@ -81,6 +95,7 @@ final class APIChatToolbox: @unchecked Sendable {
                                   connectorSource: nil, ticket: nil, appsNotReachable: [])
         }
         let appLevels = await connectorSource.appLevels(for: bot)
+        let composioToolkits = await connectorSource.composioToolkits(for: bot)
         var offeredTools: [APIChatHubTool] = []
         var appsNotReachable: [String] = []
         await withTaskGroup(of: (String, Result<[APIChatHubTool], Error>).self) { group in
@@ -109,8 +124,8 @@ final class APIChatToolbox: @unchecked Sendable {
         var ticket: URL?
         if !offeredTools.isEmpty {
             do {
-                ticket = try await connectorSource.issueTicket(botID: bot.id, appLevels: appLevels, ownerAsked: ownerAsked,
-                                                               expiresAt: Date().addingTimeInterval(turnLimitSeconds + 120))
+                ticket = try await connectorSource.issueTicket(botID: bot.id, appLevels: appLevels, composioToolkits: composioToolkits,
+                                                               ownerAsked: ownerAsked, expiresAt: Date().addingTimeInterval(turnLimitSeconds + 120))
             } catch {
                 appsNotReachable = appLevels.keys.sorted().map { "\($0) (\(error.localizedDescription.prefix(120)))" }
                 offeredTools = []
@@ -270,8 +285,19 @@ struct HubConnectorSource: APIChatConnectorSource {
     }
 
     func issueTicket(botID: String, appLevels: [String: String], ownerAsked: Bool, expiresAt: Date) async throws -> URL {
+        try await issueTicket(botID: botID, appLevels: appLevels, composioToolkits: [:], ownerAsked: ownerAsked, expiresAt: expiresAt)
+    }
+
+    /// Gmail, Drive and the like that this bot reaches through Composio rather than a Claude account: only those apps there.
+    func composioToolkits(for bot: NativeBot) async -> [String: [String]] {
+        await ConnectorHub.turnPlan(for: bot, ownerAsked: true).composioToolkits
+    }
+
+    func issueTicket(botID: String, appLevels: [String: String], composioToolkits: [String: [String]], ownerAsked: Bool,
+                     expiresAt: Date) async throws -> URL {
         try ConnectorHub.issueTicket(botID: botID, apps: appLevels.mapValues { level in HubAccessLevel(saved: level) },
-                                     ownerAsked: ownerAsked, expiresIn: max(60, expiresAt.timeIntervalSinceNow))
+                                     ownerAsked: ownerAsked, expiresIn: max(60, expiresAt.timeIntervalSinceNow),
+                                     composioToolkits: composioToolkits)
     }
 
     func revokeTicket(_ ticket: URL) async {

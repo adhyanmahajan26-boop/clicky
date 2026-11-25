@@ -34,7 +34,11 @@ struct HubAppDetails: View {
             line("Last worked", record.lastWorked.map { ConnectorListing.workedAgo($0).replacingOccurrences(of: "worked ", with: "") } ?? "Not seen connected yet")
             line("Used by", users.isEmpty ? "No bot yet. Give it to a bot in the bot's settings." :
                     users.map { "\($0.name) (\(HubAccessLevel(saved: $0.appLevels?[record.id]).label.lowercased()))" }.joined(separator: ", "))
+            if let toolkit = ComposioRoute.toolkit(for: record) {
+                composioInstead(toolkit: toolkit)
+            }
             if record.isComposio {
+                line("Works with", "Every bot, whatever its brain: an API key, a local model, Codex, Gemini, Cursor, Grok or Claude. No Claude or ChatGPT plan needed.")
                 line("Apps connected", ComposioWords.connectedLine(record.composioConnectedApps, hasKey: record.signedIn))
                 composioKeyAndApps
             } else if record.takesPastedToken {
@@ -134,6 +138,49 @@ struct HubAppDetails: View {
         }
     }
 
+    /// A Claude-account app's way around the Claude plan: the same app on the owner's Composio, which every bot not on Claude then
+    /// uses instead (`ComposioRoute`, limited to this one app).
+    @ViewBuilder private func composioInstead(toolkit: String) -> some View {
+        let composio = ComposioRoute.composio(in: health.hubApps)
+        let appName = ComposioWords.appName(toolkit)
+        if ComposioRoute.route(for: record, hubApps: health.hubApps) != nil {
+            line("Without a Claude plan", "Connected on Composio: every bot not on Claude uses \(appName) there, and only \(appName).")
+        } else {
+            line("Without a Claude plan", composio == nil
+                 ? "Set up Composio (recommended, free key) and connect \(appName) there: every bot can then use it, whatever its brain."
+                 : "Connect \(appName) on Composio and every bot not on Claude uses it there, whatever its brain.")
+            HStack(spacing: 8) {
+                if let composio {
+                    Button(working ? "Opening…" : "Connect \(appName) on Composio") {
+                        working = true
+                        Task {
+                            do {
+                                let link = try await ConnectorHub.composioLink(composio.id, app: toolkit)
+                                TheoOpen.url(link.url)
+                                note = "Opened Composio's page to connect \(appName). Approve it there, then press Check on Composio's row."
+                            } catch {
+                                note = error.localizedDescription
+                            }
+                            working = false
+                        }
+                    }
+                    .buttonStyle(.theo(.primary, .small))
+                } else if health.hubApps.contains(where: \.isComposio) {
+                    Text("Paste your Composio key on Composio's row first.").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                } else {
+                    Button(working ? "Adding…" : "Set up Composio") {
+                        act("Added Composio at the top of the list: paste your free Composio key on its row, then connect \(appName) here.") {
+                            try await ConnectorHub.addFromCatalog("composio", check: false)
+                        }
+                    }
+                    .buttonStyle(.theo(.primary, .small))
+                }
+            }
+            .disabled(working)
+            .padding(.leading, 178)
+        }
+    }
+
     private func connectComposioApp() {
         let typed = composioAppToConnect.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !typed.isEmpty, !working else { return }
@@ -156,7 +203,7 @@ struct HubAppDetails: View {
             return "Composio, with your Composio API key: every app you connect there, for the account \"\(record.composioUserID ?? ComposioWords.defaultUserID)\""
         }
         switch record.kind {
-        case .claudeAccount: return "Through your Claude account (\(record.server ?? record.name)), so it needs Claude Code"
+        case .claudeAccount: return "Through your Claude account (\(record.server ?? record.name)), so it needs Claude Code and a Claude plan"
         case .remote:
             let signIn = record.auth == "oauth" ? "signs in in your browser" : record.auth == "token" ? "with a token you pasted" : "no sign-in"
             return "\(record.url ?? "An address"), \(signIn)"
@@ -211,9 +258,11 @@ struct AddConnectorSection: View {
     @State private var signIn = "oauth"
     @State private var commandLine = ""
 
+    /// Composio, the recommended way, first.
     private var notAddedYet: [HubCatalogEntry] {
         let added = Set(health.hubApps.map(\.id))
-        return catalog.filter { !added.contains($0.id) }
+        let remaining = catalog.filter { !added.contains($0.id) }
+        return remaining.filter(\.isComposio) + remaining.filter { !$0.isComposio }
     }
 
     var body: some View {
@@ -226,7 +275,10 @@ struct AddConnectorSection: View {
                         AppLogo(connector: BotConnector(id: entry.id, name: entry.name, symbol: BotConnectors.symbol(for: HubAppRecord.Kind(rawValue: entry.kind) ?? .remote),
                                                         claudeServer: nil, claudeToolPrefix: nil, openCodeServer: nil, openCodeURL: nil), size: 30)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                            HStack(spacing: 6) {
+                                Text(entry.name).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+                                if entry.isComposio { StatusPill(text: "Recommended", tone: .info) }
+                            }
                             Text([entry.description, entry.via].filter { !$0.isEmpty }.joined(separator: " · "))
                                 .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).lineLimit(2)
                         }
@@ -365,5 +417,67 @@ struct AppLevelRows: View {
         var levels = saved ?? [:]
         levels[appID] = level == .standard ? nil : level.rawValue
         return levels.isEmpty ? nil : levels
+    }
+}
+
+// MARK: - Composio, recommended
+
+/// At the top of the Connectors page until Composio is set up with at least one app: what it is (one free key, hundreds of apps,
+/// every brain, no Claude or ChatGPT plan) and the one next step (add it, paste its key, or connect a first app).
+struct ComposioRecommendation: View {
+    @Binding var note: String?
+    /// Opens Composio's row, where its key and apps are.
+    let openComposioRow: (String) -> Void
+    @ObservedObject private var health = ConnectorHealth.shared
+    @State private var working = false
+
+    private var composioRecord: HubAppRecord? { health.hubApps.first(where: \.isComposio) }
+
+    var body: some View {
+        let record = composioRecord
+        let isDone = record.map { $0.enabled && $0.signedIn && !$0.composioConnectedApps.isEmpty } ?? false
+        if !isDone, health.hubProblem == nil, health.lastChecked != nil || !health.hubApps.isEmpty {
+            HStack(alignment: .center, spacing: 14) {
+                AppTile(symbol: "square.grid.3x3.fill", size: 34)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("Connect your apps with Composio").font(.system(size: 13, weight: .semibold)).foregroundColor(DS.Colors.textPrimary)
+                        StatusPill(text: "Recommended", tone: .info)
+                    }
+                    Text("One free Composio key reaches Gmail, Google Drive, Docs, Sheets and Calendar, Slack, GitHub, Notion and hundreds more. "
+                         + "Every bot uses them whatever its brain: an API key, a local model, Codex, Gemini or Claude. No Claude or ChatGPT plan needed.")
+                        .font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Group {
+                    if let record {
+                        Button(record.signedIn ? "Connect an app" : "Add your key") { openComposioRow(record.id) }
+                            .buttonStyle(.theo(.primary, .small))
+                    } else {
+                        Button(working ? "Adding…" : "Add Composio") { addComposio() }
+                            .buttonStyle(.theo(.primary, .small)).disabled(working)
+                    }
+                }
+                .fixedSize()
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Colors.surface1))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+        }
+    }
+
+    private func addComposio() {
+        working = true
+        Task {
+            do {
+                try await ConnectorHub.addFromCatalog("composio", check: false)
+                note = "Added Composio. Paste your Composio API key in its row (free at dashboard.composio.dev), then connect your apps."
+                await health.refresh()
+                if let added = health.hubApps.first(where: \.isComposio) { openComposioRow(added.id) }
+            } catch {
+                note = error.localizedDescription
+            }
+            working = false
+        }
     }
 }
