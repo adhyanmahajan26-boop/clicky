@@ -305,6 +305,7 @@ final class LinkSyncFolderController: ObservableObject {
                 store.applyLinkPayload(item.key, item.payload)
                 merged[item.key] = item.digest
             }
+            if !items.isEmpty { callLog("🔗 Sync folder: took \(items.count) of \(wanted.count) things from \(manifest.macName): \(items.map(\.key).prefix(12).joined(separator: ", "))") }
             state.merged[folder] = merged.filter { theirs[$0.key] != nil }
             otherMacName = manifest.macName
             otherMacWrittenAt = manifest.writtenAt

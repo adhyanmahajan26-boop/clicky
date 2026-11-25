@@ -84,6 +84,7 @@ final class ConnectorLinkSync {
         if plan == lastTriedPlan, let lastTriedAt, Date().timeIntervalSince(lastTriedAt) < Self.retryAfterSeconds { return }
         lastTriedPlan = plan
         lastTriedAt = Date()
+        callLog("🔗 Link: apps from the other Mac: add \(plan.add.map(\.id)), remove \(plan.remove), on \(plan.enable), off \(plan.disable)")
         isApplying = true
         Task {
             for app in plan.add {
@@ -104,6 +105,13 @@ final class ConnectorLinkSync {
             await ConnectorHealth.shared.refresh()
             TheoLink.shared.syncSoon()
         }
+    }
+
+    /// For `linkStatus`: the shared apps here, and what the last merge tried.
+    var statusReport: [String: Any] {
+        ["shared": (state.lastSeen ?? []).map(\.id), "lastTried": lastTriedPlan.map { plan in
+            ["add": plan.add.map(\.id), "remove": plan.remove, "enable": plan.enable, "disable": plan.disable]
+        } ?? NSNull()]
     }
 
     private func save() {

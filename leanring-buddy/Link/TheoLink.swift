@@ -87,8 +87,13 @@ final class TheoLink: ObservableObject {
         ["clickyHere": clickyRunsHere, "clickyMac": clickyMacNow, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
          "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials,
-         "syncFolder": LinkSyncFolderController.shared.statusReport]
+         "syncFolder": LinkSyncFolderController.shared.statusReport, "chats": BotsStore.shared.linkChatCounts,
+         "connectors": ConnectorLinkSync.shared.statusReport, "stillDiffering": lastWantedKeys]
     }
+
+    /// What this Mac asked the other for at the last comparison: things that differ. Logged when it changes, so a thing that
+    /// never comes into step shows in theo.log.
+    private var lastWantedKeys: [String] = []
 
     // MARK: Where Clicky works
 
@@ -524,6 +529,11 @@ final class TheoLink: ObservableObject {
                 // A bot's memory that's the same on both: that's the other Mac's copy now, for the next merge.
                 for (key, value) in theirs where key.hasPrefix("botMemory/") && mine[key] == value { BotMemory.agreed(botID: String(key.dropFirst("botMemory/".count))) }
                 if let skills = theirs["skills"], mine["skills"] == skills { BotSkills.agreed(botIDs: store.bots.map(\.id)) }
+                let wantedNow = wanted.sorted()
+                if wantedNow != self.lastWantedKeys {
+                    self.lastWantedKeys = wantedNow
+                    callLog("🔗 Link: differs from \(self.peerName ?? "the other Mac"): \(wantedNow.isEmpty ? "nothing" : wantedNow.joined(separator: ", "))")
+                }
                 if wanted.isEmpty {
                     if mine == theirs || Set(theirs.keys).isSubset(of: Set(mine.keys)) { self.lastSync = Date() }
                 } else {
