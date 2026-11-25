@@ -680,6 +680,7 @@ final class TheoLink: ObservableObject {
             var found = BotMemory.digests(botIDs: botIDs)
             found["skills"] = BotSkillSync.digest(BotSkills.copies(botIDs: botIDs))
             found.merge(BotOwnFileStore.linkDigests(botIDs: botIDs)) { _, new in new }
+            if let profile = OwnerProfileStore.linkDigest() { found["ownerProfile"] = profile }
             found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
             return found
         }.value

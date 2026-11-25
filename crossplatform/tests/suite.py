@@ -964,6 +964,54 @@ def p_doctor():
     return "health check" in text and "Sleepy" in text and "nameless" in text, {"doctor": text[:600]}
 
 
+@test("P_retry_undo", "/retry asks the last message again without the old reply; /undo takes both back; the engine is told", "parity")
+def p_retry_undo():
+    T.fake("ok"); b = bid("Scout"); n = T.nonce()
+    T.say(b, "first " + n); T.wait_idle()
+    mark = T.calls_mark(); T.say(b, "/retry"); T.wait_idle()
+    owners = [m for m in T.chat(b, 400) if m["author"] == "user" and m["text"] == "first " + n]
+    i, later = after(T.chat(b, 400), "first " + n)
+    c = last_call("Scout", mark)
+    retried = len(owners) == 1 and [m["author"] for m in later] == [b] and c is not None and "/retry" in c["prompt"]
+    mark = T.calls_mark(); T.say(b, "/undo"); T.wait_idle()
+    chat = T.chat(b, 400)
+    undone = not any(m["text"] == "first " + n for m in chat) and "Took back your last message" in chat[-1]["text"]
+    T.say(b, "second"); T.wait_idle()
+    c = last_call("Scout", mark)
+    told = c is not None and "/undo" in c["prompt"]
+    return retried and undone and told, {"retried": retried, "undone": undone, "next_turn_told": told, "after_first": [m["author"] for m in later]}
+
+
+@test("P_about_you", "About you: a bot's [ABOUT YOU:] line is saved once, shown as a note, and every bot's prompt carries it", "parity")
+def p_about_you():
+    n = T.nonce()
+    P({"cmd": "aboutYou", "text": "- Keeps answers short"})
+    T.fake_reply("Noted.\n[ABOUT YOU: Lives in Pune %s]" % n); T.fake("reply")
+    T.say(bid("Scout"), "I live in Pune"); T.wait_idle()
+    shown = T.chat(bid("Scout"), 2)
+    saved = P({"cmd": "aboutYou"})["result"]["text"]
+    T.fake("ok"); mark = T.calls_mark()
+    T.say(bid("Ledger"), "hello"); T.wait_idle()
+    c = last_call("Ledger", mark)
+    in_prompt = c is not None and ("Lives in Pune " + n) in c["system"] and "Keeps answers short" in c["system"]
+    clean = shown[-2]["text"] == "Noted." and "Saved to About you" in shown[-1]["text"]
+    once = saved.count("Lives in Pune " + n) == 1
+    P({"cmd": "aboutYou", "text": ""})
+    return in_prompt and clean and once, {"in_other_bots_prompt": in_prompt, "reply_and_note": [m["text"][:80] for m in shown], "saved": saved}
+
+
+@test("P_busy_collect", "Messages sent while a bot is answering go to it together in one turn", "parity")
+def p_busy_collect():
+    b = bid("Courier"); T.fake("slow")
+    T.say(b, "long one"); time.sleep(1.2)
+    mark = T.calls_mark()
+    T.say(b, "also this"); T.say(b, "and this")
+    T.fake("ok"); T.wait_idle(seconds=60)
+    cs = [c for c in T.calls(mark) if re.search(r"You are Courier\b", c["system"])]
+    together = len(cs) == 1 and "also this" in cs[0]["prompt"] and "and this" in cs[0]["prompt"] and "2 messages" in cs[0]["prompt"]
+    return together, {"turns_after": len(cs), "prompt": cs[0]["prompt"][-200:] if cs else None}
+
+
 # ---------------------------------------------------------------- Local API
 
 def req(method, path, body=None, token=None, headers=None, host=None):
@@ -2160,6 +2208,12 @@ def b06():
                 provider + "_memory_written": memory.exists() and "fern" in memory.read_text(encoding="utf-8"),
                 provider + "_next_turn_has_history": bool(later) and len(later[0].get("body", {}).get("messages", [])) >= 3,
             })
+            # Both turns' requests (tool rounds too) count in the bot's usage, tokens only.
+            used = next((x for x in P({"cmd": "botsUsage", "days": 1})["result"]["bots"] if x["id"] == b), {})
+            checks[provider + "_usage_counted"] = used.get("turns") == 2 and used.get("inputTokens") == 100 * (len(turn) + len(later)) and used.get("cacheReadTokens") == 10 * (len(turn) + len(later))
+            if provider == "openai":
+                checks["openai_asked_for_usage"] = bool(turn) and (turn[0].get("body", {}).get("stream_options") or {}).get("include_usage") is True
+            evidence[provider + "_usage"] = used
             evidence[provider] = {"reply": reply[:200], "requests": [{k: r[k] for k in ("tools", "results", "model", "key_right")} for r in turn]}
             P({"cmd": "botDelete", "id": b})
         brains = P({"cmd": "brains"}, timeout=90).get("result", {})

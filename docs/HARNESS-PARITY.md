@@ -12,7 +12,7 @@ Grades: **Yes**, **Partly**, **No**. "Before" is branch theo-harness-review; "No
 | 1 | An always-on process that owns the agents, their sessions and schedules | gateway | Gateway | Yes (the app, opens at login) | Yes | torture |
 | 2 | Many agents, each with its own persona, workspace and sessions | profiles | multi-agent routing | Yes (bots) | Yes | torture |
 | 3 | Persistent memory put into every session, with a size limit | MEMORY.md 2,200 chars, USER.md | MEMORY.md, USER.md | Partly: a file the bot is told to read; no limit | Yes: in the prompt, 4,000 chars, oversize shows start + newest and asks for a tidy | probes `memory_in_prompt`, `memory_cap` |
-| 4 | A shared profile of the owner every agent sees | USER.md | USER.md | Partly (Theo's roster and team context; no shared owner file) | Partly | code |
+| 4 | A shared profile of the owner every agent sees | USER.md | USER.md | Partly (Theo's roster and team context; no shared owner file) | Yes: "About you" (`memory/about-you.md`, 3,000 chars) in every bot's prompt, edited in Settings › About, added to by a bot's `[ABOUT YOU:]` line on the owner's own turn, synced between Macs | suite `P_about_you`, ClickyCore `OwnerProfileTests` |
 | 5 | Recall of what was said before the current session | `session_search` (FTS5) | `sessions_search` | No: a lost session got the last 8 lines | Yes: the bot Greps its own chat, its group chats and its private threads (no search index) | probes `recall`, `recall_groups` (real Haiku) |
 | 6 | Skills: procedures the agent writes itself and loads when a task matches | SKILL.md, agent-created | SKILL.md, ClawHub | No (`Skill` tool blocked, no skills) | Yes, except sync between Macs and a hub | probes `skills_create`, `skills_reuse` (real Haiku; the second bot's engine Read the first bot's SKILL.md) |
 | 7 | Scheduled jobs with history, pause, run now | cron | automation jobs | Yes (routines) | Yes | torture |
@@ -24,14 +24,14 @@ Grades: **Yes**, **Partly**, **No**. "Before" is branch theo-harness-review; "No
 | 13 | Retry a failing model, then fall back to others | fallback providers | auth rotation + model fallback | Partly: OpenCode's free limit → Haiku only | Yes: 2 retries, then Sonnet → Haiku → Opus for Claude bots; the owner's stand-in brain (`v3.bots.standInBrain`), else Claude Code when it's ready, stands in for any other engine; with neither the engine's own error stands | probes `retry_same_model`, `fallback_chain`, `no_fallback_on_auth`, `nonclaude_fallback` |
 | 14 | Delegation to other agents | `delegate_task`, parallel batches | sub-agents, lanes | Partly: `[TELL:]`, one at a time; Clicky's team | Yes: different bots answer at the same time (4 by default), same caps | torture, probes `parallel_delegation`, `parallel_caps` |
 | 15 | Caps on agents messaging each other in loops | iteration limits | queue caps | Yes (3 round trips, 12 a message) | Yes, also for messages from the local API | torture, probe `gateway_dm_cap` |
-| 16 | What a message does while the agent is busy | interrupt and redirect | steer / followup / collect / interrupt | Partly: each waits its turn; Stop | Partly | code |
+| 16 | What a message does while the agent is busy | interrupt and redirect | steer / followup / collect / interrupt | Partly: each waits its turn; Stop | Yes: collect, everything sent while it answers goes in its next turn together; Stop, /undo and /retry act at once | suite `P_busy_collect` |
 | 17 | Tool policy and sandbox per agent | approvals, write-safe root | sandbox modes, tool policy | Partly: no shell, writes only its folder, sends blocked; reads anywhere | Partly (reads: enforcement thread) | torture, code |
 | 18 | Hooks on lifecycle events (session start, tool calls, boot) | event hooks, BOOT.md | internal hooks | No | Partly: owner scripts on app-started, turn-finished, routine-finished, gateway-message; no hooks around tool calls | probe `hooks` |
 | 19 | Long sessions compacted | `/compress` | compaction | Partly: Claude Code compacts its own sessions; API-key bots don't | Partly | code |
 | 20 | Interrupted work resumes after a crash or restart | session DB | restart recovery | Yes | Yes | torture, faults thread |
 | 21 | Several devices as one assistant | — | nodes | Yes (two Macs over Theo Link) | Yes | torture |
-| 22 | Usage and cost per agent | `/usage`, `/insights` | usage tracking | No for bots (Clicky's turns are logged) | Yes for Claude Code and OpenCode bots (by day, in settings and `/v1/usage`); API-key bots not counted | probe `usage` |
-| 23 | Start a fresh session, retry or undo a turn | `/new`, `/retry`, `/undo` | `/new`, `/reset` | Partly (model and effort by words; no reset) | Partly: `/new` and a settings button; no retry or undo | probe `fresh_session` |
+| 22 | Usage and cost per agent | `/usage`, `/insights` | usage tracking | No for bots (Clicky's turns are logged) | Yes for every bot (by day, in settings and `/v1/usage`); API-key bots count tokens from the stream itself, tool rounds included, with no price | probe `usage`, suite `P_usage`, `B06` |
+| 23 | Start a fresh session, retry or undo a turn | `/new`, `/retry`, `/undo` | `/new`, `/reset` | Partly (model and effort by words; no reset) | Yes: `/new`, `/retry`, `/undo` and `/help` in a bot's own chat; an API-key bot loses the exchange from its conversation, an engine with its own session is told; no file rollback | probe `fresh_session`, suite `P_retry_undo` |
 | 24 | A health check / doctor | `hermes doctor` | `openclaw doctor` | Partly (state commands, logs) | Yes: `/doctor` in any chat, control inbox, `/v1/doctor` | probe `doctor` |
 | 25 | MCP tools | yes | yes | Yes (connectors, Theo's MCP server) | Yes | torture |
 | 26 | Hand coding to coding agents | Codex runtime, worktrees | ACP agents, CLI backends | Yes (7 harnesses, branch, draft PR) | Yes | torture |
@@ -42,7 +42,7 @@ Grades: **Yes**, **Partly**, **No**. "Before" is branch theo-harness-review; "No
 `after` is theo-harness-parity on a fresh profile (all 29 probes). The local-API probes have no "before": there was nothing to probe.
 `owner_routine_control` shows the not-the-owner test can see a routine being added. On the old build `recall_groups` also got the answer, by asking Theo privately (Theo is told about group chats); on the new build the bot Grepped the group chat's file itself, which is what the probe now checks.
 
-Totals now: 19 Yes, 6 Partly, 1 No (before: 8, 10, 8).
+Totals now: 23 Yes, 2 Partly, 1 No (before: 8, 10, 8). On 25 Nov rows 4, 16, 22 and 23 moved to Yes (branch feature/hermes-parity-polish).
 
 ## What changed on theo-harness-parity
 
@@ -61,7 +61,7 @@ Totals now: 19 Yes, 6 Partly, 1 No (before: 8, 10, 8).
 - Reads aren't limited to a bot's folder, and the older T3 page server on 127.0.0.1:47320 and the control inbox run every command as the owner's own words. Both are with the enforcement work.
 - Recall is a Grep: no search index and no summarising, so a very long history is slow to search.
 - No hooks around tool calls (Hermes's `pre_tool_call`): Claude Code runs the tools, and Theo only sees the turn.
-- No `/retry` or `/undo`, no structured output for delegation (Hermes's `output_schema`), no usage for API-key bots.
+- `/undo` doesn't roll back files a bot changed, and there's no structured output for delegation (Hermes's `output_schema`). API-key bots count tokens but not dollars.
 
 ## What chat-app channels would need from Addy
 

@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::usage::TurnUsage;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Rounds of tool calls in one turn before the model is asked to answer with what it has.
@@ -718,7 +719,39 @@ enum RoundError {
 
 /// One request, streamed: its words go to `on_round_text` as they come, and its tool calls are collected. Blocking: run on
 /// a blocking thread. Stops at the next line once `cancel` is set.
-fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &Cancel, on_round_text: &dyn Fn(&str)) -> Result<RoundReply, RoundError> {
+/// Adds what one request used to the turn's total when the request ends, however it ends: a failed or stopped one was paid for too.
+struct RoundMeter<'a> {
+    seen: crate::usage::StreamUsage,
+    into: &'a Mutex<TurnUsage>,
+}
+
+impl Drop for RoundMeter<'_> {
+    fn drop(&mut self) {
+        if !self.seen.usage.is_empty() {
+            if let Ok(mut total) = self.into.lock() {
+                total.add(&self.seen.usage);
+            }
+        }
+    }
+}
+
+/// Records what a bot's turn on an API key used when the turn ends, however it ends.
+struct TurnMeter<'a> {
+    harness: &'a Harness,
+    bot: String,
+    usage: Arc<Mutex<TurnUsage>>,
+}
+
+impl Drop for TurnMeter<'_> {
+    fn drop(&mut self) {
+        let used = self.usage.lock().map(|u| u.clone()).unwrap_or_default();
+        if !used.is_empty() {
+            self.harness.record_usage(&self.bot, &used);
+        }
+    }
+}
+
+fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &Cancel, on_round_text: &dyn Fn(&str), usage: &mut crate::usage::StreamUsage) -> Result<RoundReply, RoundError> {
     let address = endpoint(provider);
     let request = authorize(http_agent(&address).post(&address).set("Content-Type", "application/json").set("Accept", "text/event-stream"), provider.style, key);
     let response = match request.send_string(&body.to_string()) {
@@ -754,6 +787,7 @@ fn send_round(provider: &ApiProvider, key: Option<&str>, body: &Value, cancel: &
                 break;
             }
         };
+        usage.take(&line);
         if !line.starts_with("data:") && !line.starts_with("event:") && not_streamed.len() < 4000 {
             not_streamed.push_str(&line);
         }
@@ -825,14 +859,21 @@ struct TurnContext {
     system: String,
     history: Vec<HistoryMessage>,
     cancel: Arc<Cancel>,
+    /// What the turn's requests used so far, tool rounds too (`crate::usage::StreamUsage`).
+    usage: Arc<Mutex<TurnUsage>>,
 }
 
 async fn send_round_off_thread(context: &TurnContext, tools: &[ToolDefinition], rounds: &[ToolRound], may_call_tools: bool, text_before: String, on_text: Arc<dyn Fn(&str) + Send + Sync>) -> Result<RoundReply, RoundError> {
-    let body = request_body(context.provider.style, &context.model, &context.system, &context.history, tools, rounds, may_call_tools);
+    let mut body = request_body(context.provider.style, &context.model, &context.system, &context.history, tools, rounds, may_call_tools);
+    // So a bot's turn on this key counts in its usage.
+    if crate::usage::asks_for_usage(&context.provider.id) && matches!(context.provider.style, WireStyle::OpenAI) {
+        body["stream_options"] = json!({"include_usage": true});
+    }
     let context = context.clone();
     tokio::task::spawn_blocking(move || {
         let show = move |round_text: &str| on_text(&joined_answer(&text_before, round_text));
-        send_round(&context.provider, context.key.as_deref(), &body, &context.cancel, &show)
+        let mut meter = RoundMeter { seen: crate::usage::StreamUsage::default(), into: &context.usage };
+        send_round(&context.provider, context.key.as_deref(), &body, &context.cancel, &show, &mut meter.seen)
     })
     .await
     .unwrap_or_else(|_| Err(RoundError::Failed("The request stopped unexpectedly.".into())))
@@ -925,6 +966,18 @@ fn save_history(harness: &Harness, session: &str, mut messages: Vec<HistoryMessa
     let _ = crate::store::write_atomic(&file, &serde_json::to_vec(&messages).unwrap_or_default());
 }
 
+/// /retry and /undo: the conversation kept for an API key without its newest exchange (the last "user" turn and anything after it).
+pub fn drop_last_exchange(harness: &Harness, session: &str) {
+    if !is_session_id(session) {
+        return;
+    }
+    let mut history = load_history(harness, session);
+    if let Some(index) = history.iter().rposition(|m| m.role == "user") {
+        history.truncate(index);
+        save_history(harness, session, history);
+    }
+}
+
 // MARK: One bot turn
 
 /// One turn of a bot on an API key. Returns the answer and the session that holds this chat's earlier messages.
@@ -943,7 +996,9 @@ pub async fn run_bot_turn(harness: &Harness, bot: &Bot, model: &str, system: Str
     history.push(HistoryMessage { role: "user".into(), text: prompt.to_string() });
     let toolbox = Toolbox::for_turn(harness, bot, from_owner).await;
     let system = format!("{system}\n\n{}", toolbox.prompt_section);
-    let context = TurnContext { provider: provider.clone(), key, model: model.to_string(), system, history: history.clone(), cancel: cancel.clone() };
+    // Every request of the turn, tool rounds too, counts in the bot's usage like a Claude Code turn does (tokens only: API prices aren't known here).
+    let meter = TurnMeter { harness, bot: bot.id.clone(), usage: Arc::new(Mutex::new(TurnUsage::default())) };
+    let context = TurnContext { provider: provider.clone(), key, model: model.to_string(), system, history: history.clone(), cancel: cancel.clone(), usage: meter.usage.clone() };
     let on_text: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(on_text);
     let mut tools = toolbox.definitions.clone();
     if model_has_no_tools(harness, &provider.id, model) {

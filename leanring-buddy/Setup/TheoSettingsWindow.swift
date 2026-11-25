@@ -98,7 +98,7 @@ enum SettingsTab {
             case .link: return "Both Macs run as one Vello: the same bots, group chats, chats and memory."
             case .permissions: return "What Vello needs to hear, see and point."
             case .updates: return "Keep Vello current."
-            case .about: return "Your name, the Dock icon and the setup guide."
+            case .about: return "Your name, what every bot knows about you, the Dock icon and the setup guide."
             }
         }
 
@@ -884,6 +884,9 @@ struct AboutSettingsContent: View {
                     .buttonStyle(.theoSecondary)
                 }
             }
+            TheoSection(title: "About you", hint: "Every bot reads this, like Hermes's and OpenClaw's USER.md. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.") {
+                OwnerProfileEditor()
+            }
             TheoSection(title: "Keyboard", hint: nil) {
                 shortcut("New bot", "⌘N")
                 RowDivider()
@@ -902,6 +905,45 @@ struct AboutSettingsContent: View {
             Text(keys).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
                 .padding(.horizontal, 7).frame(height: 22)
                 .background(RoundedRectangle(cornerRadius: 5).fill(DS.Colors.hover))
+        }
+    }
+}
+
+/// Settings › About › About you: the file every bot reads (`OwnerProfileStore`), edited in place.
+struct OwnerProfileEditor: View {
+    @State private var text = ""
+    @State private var savedText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextEditor(text: $text)
+                .font(.system(size: 12.5)).frame(minHeight: 110)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("For example: I run a small design studio in Pune. Keep answers short. My cofounder is Riya.")
+                            .font(.system(size: 12.5)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 5).padding(.vertical, 1)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            HStack(spacing: 8) {
+                Text("\(text.count) of \(OwnerProfile.limit) characters")
+                    .font(TheoType.caption).foregroundColor(text.count > OwnerProfile.limit ? DS.Colors.warning : DS.Colors.textTertiary)
+                Spacer()
+                Button("Open file") { NSWorkspace.shared.open(OwnerProfileStore.makeIfMissing()) }
+                    .buttonStyle(.theo(.secondary, .small)).pointerCursor()
+                Button("Save") {
+                    OwnerProfileStore.save(text)
+                    savedText = text
+                }
+                .buttonStyle(.theo(.primary, .small)).pointerCursor()
+                .disabled(text == savedText)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .onAppear {
+            text = OwnerProfileStore.textForTheField
+            savedText = text
         }
     }
 }

@@ -209,6 +209,84 @@ pub fn asks_for_doctor(text: &str) -> bool {
     matches!(text.trim().to_lowercase().as_str(), "/doctor" | "/health")
 }
 
+/// "/help": the commands a chat takes, answered with a note and no bot turn.
+pub fn asks_for_help(text: &str) -> bool {
+    matches!(text.trim().to_lowercase().as_str(), "/help" | "/commands" | "/?")
+}
+
+pub const HELP_MARKDOWN: &str = "**Commands for this chat**\n\n\
+- `/retry`: ask your last message again. The reply to it is taken out.\n\
+- `/undo`: take back your last message and the reply to it.\n\
+- `/new`: start a fresh session. Memory, skills and this chat are kept.\n\
+- `/doctor`: check everything Vello needs on this computer, with a fix for each problem.\n\
+- `/help`: this list.\n\n\
+You can also just say what you want changed, like \"switch to haiku\" or \"what model are you on\".";
+
+/// "/retry" and "/undo" in a bot's own chat (Hermes's words), the whole message and nothing else. The Mac's ClickyCore `ChatTakeBack`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TakeBack {
+    /// The newest message is asked again, and what answered it leaves the chat.
+    Retry,
+    /// The newest message and what answered it both leave the chat.
+    Undo,
+}
+
+pub fn take_back_command(text: &str) -> Option<TakeBack> {
+    match text.trim().to_lowercase().as_str() {
+        "/retry" => Some(TakeBack::Retry),
+        "/undo" => Some(TakeBack::Undo),
+        _ => None,
+    }
+}
+
+/// Goes on top of the bot's next turn when its engine keeps its own session, which Vello can't edit. A bot on an API key has the
+/// exchange taken out of its conversation instead.
+pub fn take_back_note(command: TakeBack, owner_text: &str, owner: &str) -> String {
+    let quoted: String = owner_text.trim().chars().take(300).collect();
+    let who = crate::settings::owner_starting_sentence(owner);
+    match command {
+        TakeBack::Retry => format!("{who} asked for another try at their last message (\"{quoted}\") with /retry. Your earlier answer to it was taken out of the chat and they didn't want it: answer afresh, not the same way."),
+        TakeBack::Undo => format!("{who} took back their last message (\"{quoted}\") and your answer to it with /undo. Both are gone from the chat: act as if neither was said, and don't bring them up."),
+    }
+}
+
+pub const UNDONE_NOTE: &str = "Took back your last message and the reply to it. Anything the bot already did, such as files it changed or messages it sent, stays as it is.";
+pub const NOTHING_TO_RETRY: &str = "There's no message of yours here to try again.";
+pub const NOTHING_TO_UNDO: &str = "There's no message of yours here to take back.";
+pub const NOT_ANSWERED_YET: &str = "It hasn't answered your last message yet. It goes to the bot as soon as the answer in progress ends.";
+pub const ONLY_IN_OWN_CHAT: &str = "/retry and /undo work in a bot's own chat.";
+
+/// Messages the owner sent while a bot was answering go to it together in its next turn (OpenClaw's "collect"). One goes as it is.
+pub fn combined_busy_messages(texts: &[String], owner: &str) -> String {
+    let said: Vec<&str> = texts.iter().map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
+    if said.len() <= 1 {
+        return said.first().map(|s| s.to_string()).or_else(|| texts.first().cloned()).unwrap_or_default();
+    }
+    format!("({} sent these {} messages while you were answering. Answer them together, in one reply.)\n\n{}", crate::settings::owner_starting_sentence(owner), said.len(), said.join("\n\n"))
+}
+
+#[cfg(test)]
+mod take_back_tests {
+    use super::*;
+
+    #[test]
+    fn commands_are_the_whole_message_only() {
+        assert_eq!(take_back_command(" /Retry \n"), Some(TakeBack::Retry));
+        assert_eq!(take_back_command("/undo"), Some(TakeBack::Undo));
+        assert_eq!(take_back_command("/undo that"), None);
+        assert!(asks_for_help("/HELP") && !asks_for_help("help me"));
+        assert!(take_back_note(TakeBack::Retry, "write a poem", "Addy").starts_with("Addy asked for another try"));
+        assert!(take_back_note(TakeBack::Undo, "x", crate::settings::OWNER_UNSET).starts_with("The owner took back"));
+    }
+
+    #[test]
+    fn busy_messages_go_together() {
+        assert_eq!(combined_busy_messages(&["just this".into()], "Addy"), "just this");
+        assert_eq!(combined_busy_messages(&["first".into(), " ".into(), "second\n".into()], "Addy"),
+                   "(Addy sent these 2 messages while you were answering. Answer them together, in one reply.)\n\nfirst\n\nsecond");
+    }
+}
+
 /// Asked in so many words to build or change code, as opposed to "make me a prompt". The coding agent has full access,
 /// so a word like "build" alone isn't enough: the words have to be about code.
 pub fn owner_asked_to_build(text: &str) -> bool {
