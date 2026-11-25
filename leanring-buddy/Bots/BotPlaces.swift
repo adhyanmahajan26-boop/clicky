@@ -281,10 +281,70 @@ enum BotOwnFileStore {
 }
 
 extension NativeBot {
-    /// What every prompt of its starts with: its instructions (the instructions file's when there is one) and its nature.
+    /// What every prompt of its starts with: its instructions (the instructions file's when there is one), its nature, and what
+    /// every bot knows about the owner (`OwnerProfileStore`; not Pointer Assistant's helpers, whose jobs carry what they need).
+    /// A change to any of them refreshes a resumed Claude Code session (`BotRunner.personaFingerprint`).
     var personaHead: String {
-        BotOwnFiles.personaHead(field: instructions, instructionsFile: BotOwnFileStore.text(.instructions, botID: id),
-                                natureFile: BotOwnFileStore.text(.nature, botID: id))
+        let own = BotOwnFiles.personaHead(field: instructions, instructionsFile: BotOwnFileStore.text(.instructions, botID: id),
+                                          natureFile: BotOwnFileStore.text(.nature, botID: id))
+        guard owner == nil else { return own }
+        let aboutOwner = OwnerProfile.section(OwnerProfileStore.text, path: OwnerProfileStore.file.path, owner: BotPrompts.ownerName)
+        return own.isEmpty ? aboutOwner : own + "\n\n" + aboutOwner
+    }
+}
+
+/// "About you" (`Theo/Bots/memory/about-you.md`): one file about the owner that every bot reads, written in Settings › About or added to
+/// by a bot's `[ABOUT YOU: …]` line. Kept the same on both linked Macs (link key "ownerProfile", the newer copy wins). Rules: ClickyCore `OwnerProfile`.
+enum OwnerProfileStore {
+    static var file: URL { BotMemory.root.appendingPathComponent(OwnerProfile.fileName) }
+
+    /// The file's text, or "" when there's none yet.
+    static var text: String { (try? String(contentsOf: file, encoding: .utf8)) ?? "" }
+
+    /// For the Settings field: the text without the comment a new file starts with.
+    static var textForTheField: String { OwnerProfile.withoutComment(text).trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    static func save(_ newText: String) {
+        let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? (trimmed.isEmpty ? "" : trimmed + "\n").write(to: file, atomically: true, encoding: .utf8)
+        TheoLink.shared.syncSoon()
+    }
+
+    /// Makes the file if it isn't there, for "Open file".
+    @discardableResult
+    static func makeIfMissing() -> URL {
+        if !FileManager.default.fileExists(atPath: file.path) { try? OwnerProfile.newFile.write(to: file, atomically: true, encoding: .utf8) }
+        return file
+    }
+
+    /// A bot's `[ABOUT YOU: …]` facts, added once each. What the chat should say about it, or nil when nothing changed.
+    static func add(_ facts: [String]) -> String? {
+        switch OwnerProfile.adding(facts, to: text) {
+        case .added(let newText, let added):
+            try? newText.write(to: file, atomically: true, encoding: .utf8)
+            TheoLink.shared.syncSoon()
+            return OwnerProfile.addedNote(facts: added)
+        case .alreadyKnown:
+            return nil
+        case .full:
+            return OwnerProfile.fullNote
+        }
+    }
+
+    // MARK: Both Macs (link key "ownerProfile", the same rule as a bot's own files: `LinkBotFiles.copyToWrite`)
+
+    static func linkItem() -> LinkBotFile? {
+        guard let saved = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let modified = (try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date) ?? Date.distantPast
+        return LinkBotFile(text: saved, changedAt: Date(timeIntervalSince1970: modified.timeIntervalSince1970.rounded(.down)))
+    }
+
+    static func linkDigest() -> String? { linkItem().map { LinkCoding.digest([$0.text]) } }
+
+    static func applyLink(_ theirs: LinkBotFile) {
+        guard let chosen = LinkBotFiles.copyToWrite(mine: linkItem(), theirs: theirs) else { return }
+        guard (try? chosen.text.write(to: file, atomically: true, encoding: .utf8)) != nil else { return }
+        try? FileManager.default.setAttributes([.modificationDate: chosen.changedAt], ofItemAtPath: file.path)
     }
 }
 

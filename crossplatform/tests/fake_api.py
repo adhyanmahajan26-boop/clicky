@@ -135,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.end_headers()
-        events = anthropic_events(text, calls) if style == "anthropic" else openai_events(text, calls)
+        events = anthropic_events(text, calls) if style == "anthropic" else openai_events(text, calls, (body.get("stream_options") or {}).get("include_usage") is True)
         for event in events:
             self.wfile.write(event.encode("utf-8"))
             self.wfile.flush()
@@ -148,7 +148,8 @@ def sse(value, event=None):
 
 
 def anthropic_events(text, calls):
-    out = [sse({"type": "message_start", "message": {"id": "msg_fake", "role": "assistant", "content": []}}, "message_start")]
+    # What the request used, as Anthropic says it: input at the start, output so far in each message_delta.
+    out = [sse({"type": "message_start", "message": {"id": "msg_fake", "role": "assistant", "content": [], "usage": {"input_tokens": 100, "cache_read_input_tokens": 10, "output_tokens": 1}}}, "message_start")]
     index = 0
     if text:
         out.append(sse({"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}}, "content_block_start"))
@@ -170,7 +171,7 @@ def anthropic_events(text, calls):
     return out
 
 
-def openai_events(text, calls):
+def openai_events(text, calls, include_usage=False):
     out = []
     if text:
         half = len(text) // 2
@@ -182,6 +183,9 @@ def openai_events(text, calls):
         out.append(sse({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": number, "id": "call_%d" % number, "type": "function", "function": {"name": call["tool"], "arguments": arguments[:half]}}]}, "finish_reason": None}]}))
         out.append(sse({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": number, "function": {"arguments": arguments[half:]}}]}, "finish_reason": None}]}))
     out.append(sse({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if calls else "stop"}]}))
+    # Only when asked, like OpenAI itself: one chunk with no choices, cached input inside prompt_tokens.
+    if include_usage:
+        out.append(sse({"choices": [], "usage": {"prompt_tokens": 110, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 10}}}))
     out.append("data: [DONE]\n\n")
     return out
 

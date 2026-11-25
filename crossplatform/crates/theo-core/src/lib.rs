@@ -17,6 +17,7 @@ pub mod engine;
 pub mod procs;
 pub mod policy;
 pub mod usage;
+pub mod owner_profile;
 pub mod hooks;
 pub mod gateway;
 pub mod secrets;

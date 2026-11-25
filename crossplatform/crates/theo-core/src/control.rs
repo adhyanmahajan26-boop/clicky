@@ -431,7 +431,7 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "doctor" => {
             let f = h.doctor_findings();
-            ok(json!({"findings": f.iter().map(|x| json!({"level": x.0, "check": x.1, "detail": x.2})).collect::<Vec<_>>(), "text": crate::harness::doctor_markdown(&f)}))
+            ok(json!({"findings": f.iter().map(crate::harness::doctor_finding_json).collect::<Vec<_>>(), "text": crate::harness::doctor_markdown(&f)}))
         }
         "gateway" => {
             match s(cmd, "action").as_deref().unwrap_or("state") {
@@ -447,7 +447,15 @@ pub async fn handle(h: &Arc<Harness>, cmd: &Value) -> Value {
         }
         "status" => ok(json!({"os": std::env::consts::OS, "arch": std::env::consts::ARCH, "data": h.paths.root, "claude": h.executable("claude"), "version": env!("CARGO_PKG_VERSION"),
                                  "build": crate::update::this_build(), "versionLabel": crate::update::version_label(crate::update::this_build()),
-                                 "ownerName": h.settings.string("owner.name").unwrap_or_default()})),
+                                 "ownerName": h.settings.string("owner.name").unwrap_or_default(),
+                                 "aboutYou": h.owner_profile_for_settings(), "aboutYouLimit": crate::owner_profile::LIMIT})),
+        // Settings › About › About you: the file every bot reads (owner_profile.rs).
+        "aboutYou" => {
+            if let Some(text) = cmd.get("text").and_then(|v| v.as_str()) {
+                h.save_owner_profile(text);
+            }
+            ok(json!({"text": h.owner_profile_for_settings(), "path": h.owner_profile_file(), "limit": crate::owner_profile::LIMIT}))
+        }
         // Routines editor, chat cards and the coding-run card (chat_controls.rs).
         other if crate::chat_controls::handles(other) => crate::chat_controls::handle(h, other, cmd).await,
         // Clicky, the voice and screen companion (clicky/mod.rs).

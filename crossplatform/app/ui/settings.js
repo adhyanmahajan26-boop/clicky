@@ -3,7 +3,7 @@
 // #settings-clicky and #settings-dictation, and the "theo-settings" event on document fires each time the page is drawn.
 const SETTINGS_SECTIONS = [
   ["bots", "Bots & categories", "Every bot and category in one place. Make, rename, move and delete them here."],
-  ["about", "About", "Your name and the setup guide."],
+  ["about", "About", "Your name, what every bot knows about you, and the setup guide."],
   ["products", "Products", "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."],
   ["teams", "Bot teams", "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."],
   ["brains", "Models & API keys", "Bring your own key for any provider, or use an agent you're signed in to. Any one is enough."],
@@ -31,7 +31,11 @@ function settingRowHTML(title, detail, act, extraClass = "") {
 async function renderSettingsPage() {
   const [doc, gw, st] = await Promise.all([invoke({ cmd: "doctor" }), invoke({ cmd: "gateway" }), invoke({ cmd: "status" })]);
   if (view.kind !== "settings") return;
-  const rows = (doc.result.findings || []).map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}</div>`).join("");
+  // Problems first, each with its button (the Mac's Settings › Health): "settings:<id>" jumps there, "connectors" opens Connectors.
+  const rank = { fail: 0, warn: 1, ok: 2 };
+  const findings = (doc.result.findings || []).map((x, i) => [x, i]).sort((a, b) => (rank[a[0].level] - rank[b[0].level]) || (a[1] - b[1])).map(([x]) => x);
+  const fixButton = (x) => x.fix ? `<span class="act"><button class="btn sm${x.level === "fail" ? " primary" : ""}" data-health-fix="${esc(x.fix)}">${x.fix === "connectors" ? "Open Connectors" : "Fix"}</button></span>` : "";
+  const rows = findings.map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}${fixButton(x)}</div>`).join("");
   const g = gw.result;
   const s = st.result;
   const section = (id, body) => {
@@ -41,6 +45,9 @@ async function renderSettingsPage() {
   const productLine = (id) => (typeof productIsOn === "function" && !productIsOn(id))
     ? `<div class="list">${settingRowHTML(`${esc(productTitle(id))} is off`, "Turn it on to use it on this computer.", `<button class="btn sm" data-turn-on="${id}">Turn on</button>`)}</div>` : "";
   const about = `<div class="list">${settingRowHTML("Your name", `What your bots call you. Empty: they say "the owner".`, `<input id="owner-name" value="${esc(s.ownerName || "")}" maxlength="40" placeholder="Your first name">`)}`
+    + `<div class="crow about-you"><span class="tx"><b>About you</b><small style="white-space:normal">Every bot reads this. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.</small>`
+    + `<textarea id="about-you" rows="5" maxlength="6000" placeholder="For example: I run a small design studio in Pune. Keep answers short. My cofounder is Riya.">${esc(s.aboutYou || "")}</textarea>`
+    + `<span class="about-you-bar"><small class="muted" id="about-you-count"></small><button class="btn sm primary" id="about-you-save" disabled>Save</button></span></span></div>`
     + settingRowHTML("Setup guide", "A brain, your products, coding runs and a first bot, one step at a time.", `<button class="btn sm" data-setup-again>Run it again</button>`)
     + settingRowHTML("This is Vello", `${esc(s.versionLabel || s.version)} on ${esc(s.os)} ${esc(s.arch)}`, "") + `</div>`;
   const coding = `<section id="coding-settings"></section><div class="list" id="projects-folder"></div>`;
@@ -66,11 +73,32 @@ async function renderSettingsPage() {
     + `</div></div>`;
   const pane = $("#pane");
   pane.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () => settingsJump(b.dataset.jump));
+  pane.querySelectorAll("[data-health-fix]").forEach((b) => b.onclick = () => {
+    const fix = b.dataset.healthFix;
+    if (fix === "connectors") open({ kind: "connectors" });
+    else if (fix.startsWith("settings:")) settingsJump(fix.slice("settings:".length));
+  });
   pane.querySelector("[data-open-connectors]").onclick = () => open({ kind: "connectors" });
   pane.querySelector("[data-setup-again]").onclick = () => startSetup({ again: true });
   pane.querySelectorAll("[data-turn-on]").forEach((b) => b.onclick = async () => { await setProduct(b.dataset.turnOn, true); renderSettingsPage(); });
   $("#gw").onclick = async () => { await invoke({ cmd: "gateway", action: g.listening ? "off" : "on" }); renderSettingsPage(); };
   $("#owner-name").oninput = (e) => saveOwnerName(e.target.value);
+  // About you: saved with its button, so a half-written line never reaches the bots.
+  const aboutYou = $("#about-you");
+  let aboutYouSaved = aboutYou.value;
+  const aboutYouCount = () => {
+    const count = aboutYou.value.length;
+    $("#about-you-count").textContent = `${count} of ${s.aboutYouLimit || 3000} characters`;
+    $("#about-you-count").classList.toggle("warn", count > (s.aboutYouLimit || 3000));
+    $("#about-you-save").disabled = aboutYou.value === aboutYouSaved;
+  };
+  aboutYou.oninput = aboutYouCount;
+  $("#about-you-save").onclick = async () => {
+    await invoke({ cmd: "aboutYou", text: aboutYou.value });
+    aboutYouSaved = aboutYou.value;
+    aboutYouCount();
+  };
+  aboutYouCount();
   watchSettingsSections(pane);
 
   // Products: the same cards as Setup's "Pick products".

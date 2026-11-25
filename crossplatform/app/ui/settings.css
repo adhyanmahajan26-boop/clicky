@@ -131,3 +131,9 @@ body.theo-off .row.nav[data-pane="routines"], body.theo-off .row.nav[data-pane="
 .su-products { margin: 0; padding-left: 18px; color: var(--t2); line-height: 1.7; font-size: 14px; }
 .su-products b { color: var(--t1); }
 #login-row:empty { display: none; }
+
+/* ---------- About you ---------- */
+.about-you .tx { flex: 1; min-width: 0; }
+.about-you textarea { display: block; width: 100%; margin-top: 8px; background: var(--card2); color: var(--t1); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 14px/1.5 var(--body); resize: vertical; box-sizing: border-box; }
+.about-you-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.about-you-bar .warn { color: var(--ask-t); }

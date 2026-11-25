@@ -133,6 +133,10 @@ pub struct State {
     pub gateway_recent: Vec<(DateTime<Utc>, String, String)>,
     /// The categories, build discussions and Theo's asks to group chats (`harness_teams`).
     pub teams: harness_teams::TeamState,
+    /// What /retry or /undo tells a bot at the top of its next turn in its own chat, when its engine keeps a session Vello can't edit.
+    pub turn_notes: HashMap<String, String>,
+    /// The owner's messages (id, text) that came while a bot was answering, oldest first, to go to it together when it's free.
+    pub waiting_while_busy: HashMap<String, Vec<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -459,7 +463,7 @@ impl Harness {
     /// The persona: Claude Code takes it as its system prompt.
     pub fn persona(&self, bot: &Bot) -> String {
         let owner = self.owner();
-        let mut parts = vec![bot.instructions.clone(), prompts::house_style(&owner), prompts::ASKING_STYLE.to_string()];
+        let mut parts = vec![bot.instructions.clone(), self.owner_profile_section(), prompts::house_style(&owner), prompts::ASKING_STYLE.to_string()];
         let team = self.bots();
         if bot.primary {
             let others: Vec<String> = team.iter().filter(|b| b.id != bot.id).map(|b| format!("{} ({})", b.name, b.description)).collect();
@@ -488,6 +492,45 @@ impl Harness {
         let skills = prompts::all_skills(&self.paths, &names, Some(&bot.id));
         parts.push(prompts::skills_section(&skills, &self.paths.skills_dir(&bot.id).to_string_lossy(), &self.paths.shared_skills_dir().to_string_lossy(), &bot.name, &owner));
         parts.join("\n\n")
+    }
+
+    // MARK: About you (owner_profile.rs)
+
+    pub fn owner_profile_file(&self) -> std::path::PathBuf { self.paths.memory_root().join(crate::owner_profile::FILE_NAME) }
+
+    pub fn owner_profile_text(&self) -> String { std::fs::read_to_string(self.owner_profile_file()).unwrap_or_default() }
+
+    /// What every bot knows about the owner, right after its own instructions.
+    pub fn owner_profile_section(&self) -> String {
+        crate::owner_profile::section(&self.owner_profile_text(), &self.owner_profile_file().to_string_lossy(), &self.owner())
+    }
+
+    /// Settings: the text, without the comment a new file starts with.
+    pub fn owner_profile_for_settings(&self) -> String { crate::owner_profile::without_comment(&self.owner_profile_text()).trim().to_string() }
+
+    pub fn save_owner_profile(&self, text: &str) {
+        let file = self.owner_profile_file();
+        if let Some(folder) = file.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        let trimmed = text.trim();
+        let _ = write_atomic(&file, if trimmed.is_empty() { String::new() } else { format!("{trimmed}\n") }.as_bytes());
+    }
+
+    /// A bot's `[ABOUT YOU: …]` facts, added once each. What the chat should say about it, or None when nothing changed.
+    pub fn add_to_owner_profile(&self, facts: &[String]) -> Option<String> {
+        match crate::owner_profile::adding(facts, &self.owner_profile_text()) {
+            crate::owner_profile::Addition::Added { text, facts } => {
+                let file = self.owner_profile_file();
+                if let Some(folder) = file.parent() {
+                    let _ = std::fs::create_dir_all(folder);
+                }
+                let _ = write_atomic(&file, text.as_bytes());
+                Some(crate::owner_profile::added_note(&facts))
+            }
+            crate::owner_profile::Addition::AlreadyKnown => None,
+            crate::owner_profile::Addition::Full => Some(crate::owner_profile::FULL_NOTE.to_string()),
+        }
     }
 
     /// The bot's apps by name, from the hub's list as last read, with what it may do in each.
@@ -544,6 +587,16 @@ impl Harness {
             s.replying.remove(bot);
             s.replying_in.remove(bot);
         });
+    }
+
+    /// One turn's usage, added to the bot's day and saved.
+    pub fn record_usage(&self, bot_id: &str, usage: &crate::usage::TurnUsage) {
+        let data = {
+            let mut ledger = self.usage.lock().unwrap();
+            ledger.record(bot_id, usage, Utc::now());
+            serde_json::to_vec(&*ledger).unwrap_or_default()
+        };
+        let _ = write_atomic(&self.paths.usage_file(), &data);
     }
 
     pub fn is_replying(&self, bot: &str) -> bool { self.with(|s| s.replying.contains_key(bot)) }
@@ -623,6 +676,16 @@ impl Harness {
         };
         let owner_message_id = message.id.clone();
         let already = self.with(|s| s.conversations.get(bot_id).map(|c| c.messages.iter().any(|m| m.id == owner_message_id)).unwrap_or(false));
+        // "/retry" and "/undo" (Hermes's words): never queued behind the reply they're about.
+        if let Some(command) = protocol::take_back_command(text) {
+            self.take_back_last_exchange(command, bot_id);
+            return;
+        }
+        if protocol::asks_for_help(text) {
+            self.post(message, bot_id);
+            self.post(ChatMessage::note(protocol::HELP_MARKDOWN), bot_id);
+            return;
+        }
         if protocol::asks_for_doctor(text) {
             self.post(message, bot_id);
             let findings = self.doctor_findings();
@@ -649,15 +712,117 @@ impl Harness {
         }
         let me = self.clone();
         let text = text.to_string();
+        // Busy answering: everything sent meanwhile goes to it together in its next turn (OpenClaw's "collect"), not one turn each.
+        let busy = self.is_replying(bot_id) || self.with(|s| s.queues.get(bot_id).map(|q| !q.is_empty()).unwrap_or(false));
+        if busy {
+            let first_waiting = self.with(|s| {
+                let waiting = s.waiting_while_busy.entry(bot_id.into()).or_default();
+                waiting.push((owner_message_id.clone(), text.clone()));
+                waiting.len() == 1
+            });
+            if !first_waiting {
+                return;
+            }
+            tokio::spawn(async move {
+                me.wait_in_line(&bot.id, &bot.id).await;
+                let waiting = me.with(|s| s.waiting_while_busy.remove(&bot.id)).unwrap_or_default();
+                let Some((newest_id, _)) = waiting.last().cloned() else { return me.release(&bot.id) };
+                let Some(bot) = me.bot(&bot.id) else { return me.release(&bot.id) };
+                let together = protocol::combined_busy_messages(&waiting.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(), &me.owner());
+                // The others are in `together` already: the catch-up mustn't tell them twice.
+                let sent_together: Vec<String> = waiting.iter().map(|(id, _)| id.clone()).collect();
+                me.start_own_turn(bot, &together, &newest_id, &sent_together).await;
+            });
+            return;
+        }
         tokio::spawn(async move {
             me.wait_in_line(&bot.id, &bot.id).await;
             // It may have been changed or turned off while the message waited.
             let Some(bot) = me.bot(&bot.id) else { return me.release(&bot.id) };
-            me.start_own_turn(bot, &text, &owner_message_id).await;
+            me.start_own_turn(bot, &text, &owner_message_id, &[]).await;
         });
     }
 
-    async fn start_own_turn(self: &Arc<Self>, bot: Bot, text: &str, owner_message_id: &str) {
+    /// "/retry": the owner's newest message goes again and what answered it leaves the chat. "/undo": both leave. A reply still being
+    /// written is stopped first. A bot on an API key loses that exchange from its conversation; an engine that keeps its own session is
+    /// told at the top of its next turn. The Mac's `BotsStore.takeBackLastExchange`.
+    pub fn take_back_last_exchange(self: &Arc<Self>, command: protocol::TakeBack, bot_id: &str) {
+        let Some(bot) = self.bot(bot_id) else { return };
+        // The newest message is still waiting for the bot to be free: /undo takes just that back, /retry has nothing to try yet.
+        let waiting_newest = self.with(|s| s.waiting_while_busy.get(bot_id).and_then(|w| w.last().map(|(id, _)| id.clone())));
+        if let Some(newest) = waiting_newest {
+            if command == protocol::TakeBack::Retry {
+                self.post(ChatMessage::note(protocol::NOT_ANSWERED_YET), bot_id);
+                return;
+            }
+            self.with(|s| {
+                if let Some(waiting) = s.waiting_while_busy.get_mut(bot_id) {
+                    waiting.pop();
+                    if waiting.is_empty() {
+                        s.waiting_while_busy.remove(bot_id);
+                    }
+                }
+                if let Some(c) = s.conversations.get_mut(bot_id) {
+                    c.messages.retain(|m| m.id != newest);
+                }
+            });
+            self.write_conversation(bot_id);
+            return;
+        }
+        if self.is_replying(bot_id) {
+            self.stop(bot_id);
+            let me = self.clone();
+            let bot_id = bot_id.to_string();
+            tokio::spawn(async move {
+                // The stopped turn posts what it had; that goes too.
+                for _ in 0..40 {
+                    if !me.is_replying(&bot_id) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                me.take_back_last_exchange(command, &bot_id);
+            });
+            return;
+        }
+        let is_local_command = |t: &str| protocol::asks_for_doctor(t) || protocol::asks_for_help(t) || protocol::asks_for_fresh_session(t);
+        let taken = self.with(|s| {
+            let c = s.conversations.get_mut(bot_id)?;
+            let index = c.messages.iter().rposition(|m| m.author == OWNER_AUTHOR && !is_local_command(&m.text))?;
+            let owner = c.messages[index].clone();
+            let previous = if index > 0 { Some(c.messages[index - 1].id.clone()) } else { None };
+            let first_removed = if command == protocol::TakeBack::Undo { index } else { index + 1 };
+            let removed: Vec<String> = c.messages[first_removed..].iter().map(|m| m.id.clone()).collect();
+            c.messages.truncate(first_removed);
+            let exchange: Vec<String> = std::iter::once(owner.id.clone()).chain(removed.iter().cloned()).collect();
+            if c.heard.get(bot_id).map(|h| exchange.contains(h)).unwrap_or(false) {
+                match &previous {
+                    Some(p) => { c.heard.insert(bot_id.into(), p.clone()); }
+                    None => { c.heard.remove(bot_id); }
+                }
+            }
+            Some((owner, c.sessions.get(bot_id).cloned()))
+        });
+        let Some((owner_message, session)) = taken else {
+            self.post(ChatMessage::note(if command == protocol::TakeBack::Retry { protocol::NOTHING_TO_RETRY } else { protocol::NOTHING_TO_UNDO }), bot_id);
+            return;
+        };
+        self.write_conversation(bot_id);
+        if let Some(session) = session {
+            if crate::brains::api_provider_id(&bot.provider).is_some() {
+                crate::apichat::drop_last_exchange(self, &session);
+            } else {
+                let note = protocol::take_back_note(command, &owner_message.text, &self.owner());
+                self.with(|s| s.turn_notes.insert(bot_id.into(), note));
+            }
+        }
+        match command {
+            protocol::TakeBack::Undo => self.post(ChatMessage::note(protocol::UNDONE_NOTE), bot_id),
+            protocol::TakeBack::Retry => self.send_with_id(&owner_message.text, bot_id, Some(owner_message.id.clone()), None),
+        }
+    }
+
+    async fn start_own_turn(self: &Arc<Self>, bot: Bot, text: &str, owner_message_id: &str, sent_together: &[String]) {
         let record = self.conversation(&bot.id);
         let session = record.sessions.get(&bot.id).cloned();
         let first_turn = session.is_none();
@@ -670,10 +835,14 @@ impl Harness {
             let names: Vec<String> = tagged.iter().filter_map(|id| self.bot(id).map(|b| b.name)).collect();
             prompt.push_str(&format!("\n\n({} tagged {}: message them with a [TELL:] line.)", self.owner(), names.join(" and ")));
         }
-        let (reports, taken) = self.take_waiting_reports(&bot);
+        let (reports, mut taken) = self.take_waiting_reports(&bot);
+        taken.extend(sent_together.iter().cloned());
         prompt = self.catch_up(&record, &bot, owner_message_id, &taken) + &reports + &self.ceo_turn_note(&bot) + &prompt;
         if !bot.primary {
             prompt = format!("({})\n\n{}", self.reach_note(&bot), prompt);
+        }
+        if let Some(note) = self.with(|s| s.turn_notes.remove(&bot.id)) {
+            prompt = format!("({note})\n\n{prompt}");
         }
         prompt = self.awareness(&bot, &bot.id) + &prompt;
         self.owner_spoke(&bot.id);
@@ -894,6 +1063,17 @@ impl Harness {
                 let (text, question) = crate::vmscreens::research::extract(&said);
                 if question.is_some() { answer = Some(text); research_question = question; }
             }
+            // [ABOUT YOU: fact]: something lasting the owner said about themselves, added to the profile every bot reads. Only from their own words.
+            let mut about_owner_facts: Vec<String> = vec![];
+            if let Some(said) = answer.clone() {
+                let (text, facts) = crate::owner_profile::extract(&said);
+                if text != said || !facts.is_empty() {
+                    answer = Some(text);
+                    if opts.from_owner && opts.privately.is_none() {
+                        about_owner_facts = facts;
+                    }
+                }
+            }
             // ```team: the CEO making the new bots and categories the owner asked for (team_build.rs).
             let mut team_order: Option<crate::team_build::TeamBuildOrder> = None;
             if let Some(said) = answer.clone() {
@@ -925,7 +1105,7 @@ impl Harness {
                             }
                             record.messages.push(message);
                         }
-                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && attached_files.is_empty() && file_saves.is_empty() && research_question.is_none() && team_order.is_none() => {
+                        Some(_) if tells.is_empty() && clicky_orders == 0 && pdf_files.is_empty() && attached_files.is_empty() && file_saves.is_empty() && research_question.is_none() && team_order.is_none() && about_owner_facts.is_empty() => {
                             record.messages.push(ChatMessage::new(&bot.id, "(No answer this time. Send it again, or try another model.)").with_exchange(exchange.clone()));
                         }
                         _ => {}
@@ -943,6 +1123,11 @@ impl Harness {
             crate::pdf::make_for_turn(&me, &bot, &pdf_files, &conversation_id, exchange.clone());
             crate::files::carry_out_for_turn(&me, &bot, &attached_files, &file_saves, &conversation_id, exchange.clone(), opts.from_owner);
             crate::vmscreens::research::start_for_turn(&me, &bot, research_question, &conversation_id, exchange.clone());
+            if !about_owner_facts.is_empty() {
+                if let Some(note) = me.add_to_owner_profile(&about_owner_facts) {
+                    me.post(ChatMessage::note(note), &conversation_id);
+                }
+            }
             if let Some(order) = team_order {
                 // The bot is free again, but nothing is settled until the bots and categories exist: finding the brains here can
                 // take seconds (each agent's command is looked for), and anyone waiting for Vello to go quiet must wait for this too.
@@ -1346,12 +1531,7 @@ impl Harness {
         }
         let outcome = outcome.map_err(|e| RunError::Failed(format!("{label} couldn't start: {e}")))?;
         if let Some(u) = &outcome.usage {
-            let data = {
-                let mut ledger = self.usage.lock().unwrap();
-                ledger.record(&bot.id, u, Utc::now());
-                serde_json::to_vec(&*ledger).unwrap_or_default()
-            };
-            let _ = write_atomic(&self.paths.usage_file(), &data);
+            self.record_usage(&bot.id, u);
         }
         if !outcome.stderr_tail.is_empty() {
             let log = self.paths.logs_dir().join(format!("bots-{provider}.log"));
@@ -1637,6 +1817,10 @@ impl Harness {
         let Some(group) = self.group(group_id) else { return };
         let Some(head) = group.head_id.clone() else { return };
         let room = group.room_id();
+        if protocol::take_back_command(text).is_some() {
+            self.post(ChatMessage::note(protocol::ONLY_IN_OWN_CHAT), &room);
+            return;
+        }
         let mut message = ChatMessage::new(OWNER_AUTHOR, text);
         if let Some(id) = message_id { message.id = id; }
         if let Some(at) = written_at { message.at = at; }
@@ -2289,9 +2473,16 @@ impl Harness {
 
     pub fn doctor_findings(&self) -> Vec<(String, String, String)> {
         let mut f: Vec<(String, String, String)> = vec![];
+        if self.settings.string("owner.name").map(|name| name.trim().is_empty()).unwrap_or(true) {
+            f.push(("warn".into(), "Your name".into(), "Your bots call you \u{201C}the owner\u{201D}. Tell Vello your name in Settings › About.".into()));
+        }
+        // Claude Code is one brain among several: it only matters when a bot that's on runs on it.
+        let claude_users: Vec<String> = self.with(|s| s.bots.iter().filter(|b| b.is_on() && b.provider == "claude").map(|b| b.name.clone()).collect());
         match self.executable("claude") {
             Some(p) => f.push(("ok".into(), "Claude Code".into(), format!("Found at {}.", p.display()))),
-            None => f.push(("fail".into(), "Claude Code".into(), "Not found. Install it (https://claude.com/claude-code) and sign in with `claude auth login`.".into())),
+            None if claude_users.is_empty() => f.push(("ok".into(), "Claude Code".into(), "Not installed, and no bot runs on it.".into())),
+            None => f.push(("fail".into(), "Claude Code".into(), format!("Not found, and {} run{} on it. Install it (https://claude.com/claude-code) and sign in, or move {} to another brain in Settings › Brains.",
+                claude_users.join(", "), if claude_users.len() == 1 { "s" } else { "" }, if claude_users.len() == 1 { "it" } else { "them" }))),
         }
         let problems = self.problems.problems.lock().unwrap().clone();
         if problems.is_empty() {
@@ -2449,6 +2640,23 @@ fn lateness(seconds: i64) -> String {
     if hours < 48 { format!("{hours} hours") } else { format!("{} days", hours / 24) }
 }
 
+/// The button beside a problem in Settings › Health (the Mac's `TheoDoctorFix` wire words): "settings:<section>" jumps
+/// to that Settings section, "connectors" opens the Connectors page. Nil for a finding that's fine or has nothing to press.
+pub fn doctor_fix(level: &str, check: &str) -> Option<&'static str> {
+    if level == "ok" { return None; }
+    match check {
+        "Your name" => Some("settings:about"),
+        "Claude Code" => Some("settings:brains"),
+        "Local API" => Some("settings:api"),
+        _ => None,
+    }
+}
+
+/// A finding as JSON, with its fix.
+pub fn doctor_finding_json(finding: &(String, String, String)) -> Value {
+    json!({"level": finding.0, "check": finding.1, "detail": finding.2, "fix": doctor_fix(&finding.0, &finding.1)})
+}
+
 pub fn doctor_markdown(findings: &[(String, String, String)]) -> String {
     let rank = |l: &str| match l { "fail" => 0, "warn" => 1, _ => 2 };
     let mut sorted: Vec<&(String, String, String)> = findings.iter().collect();
@@ -2493,6 +2701,16 @@ pub(crate) fn rename_starter_theo_to_vello(bots: &mut [Bot]) {
 
 #[cfg(test)]
 mod rename_tests {
+    #[test]
+    fn doctor_fixes_are_only_on_problems_and_go_to_the_right_place() {
+        assert_eq!(super::doctor_fix("warn", "Your name"), Some("settings:about"));
+        assert_eq!(super::doctor_fix("fail", "Claude Code"), Some("settings:brains"));
+        assert_eq!(super::doctor_fix("ok", "Claude Code"), None);
+        assert_eq!(super::doctor_fix("warn", "Skills"), None);
+        let finding = ("fail".to_string(), "Local API".to_string(), "Port taken.".to_string());
+        assert_eq!(super::doctor_finding_json(&finding)["fix"], "settings:api");
+    }
+
     use super::*;
 
     #[test]

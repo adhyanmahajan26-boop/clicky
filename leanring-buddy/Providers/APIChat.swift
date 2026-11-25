@@ -92,6 +92,8 @@ enum APIChat {
             all += messages.map(openAIMessage)
             all += roundMessages
             var body: [String: Any] = ["model": model, "stream": true, "messages": all]
+            // So a bot's turn on this key counts in its usage (`APIStreamUsage`).
+            if APIStreamUsage.asksForUsage(providerID: provider.id) { body["stream_options"] = ["include_usage": true] }
             if let openAIOutputLimit { body[outputLimitField(providerID: provider.id)] = openAIOutputLimit }
             addTools(tools, mayCallTools: mayCallTools, style: style, to: &body)
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -162,7 +164,7 @@ enum APIChat {
     /// Runs one turn and returns the whole answer; `onText` gets the answer so far as it grows. With a `toolbox`, the model may
     /// call its tools: each round's calls are run and sent back, until it answers without asking for more (or the round cap).
     static func stream(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
-                       toolbox: APIChatToolbox? = nil, fast: Bool = false, maxOutputTokens: Int? = nil,
+                       toolbox: APIChatToolbox? = nil, fast: Bool = false, maxOutputTokens: Int? = nil, usageMeter: APIUsageMeter? = nil,
                        onText: @MainActor (String) -> Void) async throws -> String {
         guard key != nil || provider.keyless || provider.group == .custom else { throw APIChatError.noKey(provider.label) }
         guard request(provider: provider, key: key, model: model, system: system, messages: messages) != nil else {
@@ -174,7 +176,8 @@ enum APIChat {
         let outcome: APIChatToolLoopOutcome
         do {
             outcome = try await runToolLoop(provider: provider, key: key, model: model, system: system, messages: messages,
-                                            tools: offeredTools, toolbox: toolbox, fast: fast, maxOutputTokens: maxOutputTokens, onText: onText)
+                                            tools: offeredTools, toolbox: toolbox, fast: fast, maxOutputTokens: maxOutputTokens,
+                                            usageMeter: usageMeter, onText: onText)
         } catch APIChatError.toolsRefused(let refusal, let message) {
             // Today's words-only turn, and the chat says why: once for a model that has no tools at all, every time for a one-off.
             switch refusal {
@@ -186,7 +189,8 @@ enum APIChat {
                 wordsOnlyNote = "_(\(provider.label) turned down this bot's tools this time (\(message)), so it answered in words only.)_"
             }
             outcome = try await runToolLoop(provider: provider, key: key, model: model, system: system, messages: messages,
-                                            tools: [], toolbox: nil, fast: fast, maxOutputTokens: maxOutputTokens, onText: onText)
+                                            tools: [], toolbox: nil, fast: fast, maxOutputTokens: maxOutputTokens,
+                                            usageMeter: usageMeter, onText: onText)
         }
         var answer = outcome.answer
         guard !answer.isEmpty else { return answer }
@@ -209,11 +213,12 @@ enum APIChat {
     /// has already taken them.
     private static func runToolLoop(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
                                     tools: [APIChatToolDefinition], toolbox: APIChatToolbox?, fast: Bool = false, maxOutputTokens: Int? = nil,
-                                    onText: @MainActor (String) -> Void) async throws -> APIChatToolLoopOutcome {
+                                    usageMeter: APIUsageMeter? = nil, onText: @MainActor (String) -> Void) async throws -> APIChatToolLoopOutcome {
         try await APIChatToolLoop.run(
             sendRound: { rounds, mayCallTools, textBeforeThisRound in
                 try await streamRound(provider: provider, key: key, model: model, system: system, messages: messages, tools: tools,
-                                      toolRounds: rounds, mayCallTools: mayCallTools, fast: fast, maxOutputTokens: maxOutputTokens) { roundText in
+                                      toolRounds: rounds, mayCallTools: mayCallTools, fast: fast, maxOutputTokens: maxOutputTokens,
+                                      usageMeter: usageMeter) { roundText in
                     onText(APIChatToolWire.joinedAnswer(textBeforeThisRound, roundText))
                 }
             },
@@ -226,7 +231,8 @@ enum APIChat {
     /// One request: streams its words to `onRoundText` and collects the tool calls it asks for.
     private static func streamRound(provider: ProviderInfo, key: String?, model: String, system: String, messages: [APIChatMessage],
                                     tools: [APIChatToolDefinition], toolRounds: [APIChatToolRound], mayCallTools: Bool, fast: Bool = false,
-                                    maxOutputTokens: Int? = nil, onRoundText: @MainActor (String) -> Void) async throws -> APIChatRoundReply {
+                                    maxOutputTokens: Int? = nil, usageMeter: APIUsageMeter? = nil,
+                                    onRoundText: @MainActor (String) -> Void) async throws -> APIChatRoundReply {
         let sendsFast = fast && provider.kind == .anthropic && ClaudeFastMode.supports(model: model)
         guard let style = wireStyle(for: provider.kind),
               let request = request(provider: provider, key: key, model: model, system: system, messages: messages,
@@ -240,7 +246,7 @@ enum APIChat {
         if sendsFast, [400, 403, 429, 529].contains(status) {
             return try await streamRound(provider: provider, key: key, model: model, system: system, messages: messages, tools: tools,
                                          toolRounds: toolRounds, mayCallTools: mayCallTools, fast: false, maxOutputTokens: maxOutputTokens,
-                                         onRoundText: onRoundText)
+                                         usageMeter: usageMeter, onRoundText: onRoundText)
         }
         if !(200..<300).contains(status) {
             var body = Data()
@@ -263,8 +269,12 @@ enum APIChat {
         var serverSeparatesReasoning = false
         let mayStartMidThink = ThinkingText.mayThinkWithoutOpeningTag(model: model)
         var shownSoFar = ""
+        // What this request used, counted even when it fails or is stopped part way: it was paid for.
+        var roundUsage = APIStreamUsage()
+        defer { usageMeter?.add(roundUsage.usage) }
         for try await line in bytes.lines {
             try Task.checkCancellation()
+            roundUsage.take(line: line)
             if !line.hasPrefix("data:"), !line.hasPrefix("event:"), notStreamed.count < 4000 { notStreamed += line }
             let parsed = parse(line: line, kind: provider.kind)
             if let error = parsed.error { throw APIChatError.rejected("\(provider.label): \(error)") }
@@ -318,6 +328,25 @@ enum APIChat {
     }
 
     // MARK: Conversations
+
+    /// What one bot turn on an API key used, over all its requests. Requests run one after another, the lock is for the type checker's sake.
+    nonisolated final class APIUsageMeter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var total = BotTurnUsage()
+
+        func add(_ usage: BotTurnUsage) {
+            guard !usage.isEmpty else { return }
+            lock.lock()
+            total = total + usage
+            lock.unlock()
+        }
+
+        var used: BotTurnUsage? {
+            lock.lock()
+            defer { lock.unlock() }
+            return total.isEmpty ? nil : total
+        }
+    }
 
     /// A stateless API has no session of its own, so the conversation is kept here, under an id that works like an
     /// engine's session id (Theo's own folder, never sent anywhere but the provider).
@@ -418,9 +447,17 @@ enum APIChat {
         // As much of the chat as the model holds; the rest is in its summary.
         let room = await History.roomCharacters(provider: provider, model: bot.model, systemCharacters: system.count, wantedAnswerTokens: maxOutputTokens)
         let answer: String
+        // Every request of the turn, tool rounds too, counts in the bot's usage like a Claude Code turn does. API prices aren't known here,
+        // so these turns count tokens only.
+        let usageMeter = APIUsageMeter()
+        let botID = bot.id
+        defer {
+            let used = usageMeter.used
+            Task { @MainActor in BotUsage.shared.record(botID: botID, usage: used) }
+        }
         do {
             answer = try await stream(provider: provider, key: key, model: bot.model, system: system, messages: History.fitting(messages, roomCharacters: room),
-                                      toolbox: toolbox, fast: bot.fast ?? false, onText: onText)
+                                      toolbox: toolbox, fast: bot.fast ?? false, usageMeter: usageMeter, onText: onText)
         } catch {
             await toolbox.finish()
             throw error

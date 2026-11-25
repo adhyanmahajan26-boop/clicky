@@ -150,6 +150,8 @@ struct BotConversationRecord: Codable {
     /// In a group chat: the answers each bot's engine session wrote itself since it was last shown the chat. Only these are left out of
     /// what it reads next. Anything else under its name (Theo's question, its words from the other Mac, a run's notice) is news to it.
     var ownAnswers: [String: [String]]?
+    /// Messages taken back with /retry or /undo, so the other Mac's copy of them doesn't bring them back (ClickyCore `ChatTakeBack`).
+    var takenBack: [String]?
 }
 
 extension BotConversationRecord {
@@ -162,6 +164,7 @@ extension BotConversationRecord {
         clearedAt = try container.decodeIfPresent(Date.self, forKey: .clearedAt)
         heard = try container.decodeIfPresent([String: String].self, forKey: .heard)
         ownAnswers = try container.decodeIfPresent([String: [String]].self, forKey: .ownAnswers)
+        takenBack = try container.decodeIfPresent([String].self, forKey: .takenBack)
     }
 }
 
@@ -237,6 +240,10 @@ final class BotsStore: ObservableObject {
     var screenTurns: [String: Int] = [:]
     /// What Vello said on a call it would do in its own chat, waiting for that chat's next turn (`askOwnChatFromCall`). Old ones are dropped.
     var callTaskNotes: [String: (note: String, at: Date)] = [:]
+    /// What /retry or /undo tells a bot at the top of its next turn in its own chat, when its engine keeps a session Vello can't edit.
+    var turnNotes: [String: String] = [:]
+    /// The owner's messages that came while a bot was answering, oldest first, to go to it together when it's free.
+    var waitingWhileBusy: [String: [(id: String, text: String, command: String?)]] = [:]
     /// Theo is waiting on the head of these group chats, by room.
     private var groupWaiters: [String: (String) -> Void] = [:]
     /// That folder's chats, for the head's next turn, when the owner asked to carry on earlier work.
@@ -537,14 +544,9 @@ final class BotsStore: ObservableObject {
         if messageID == nil { ownerMacs[botID] = nil }
         if messageID == nil, forwardToBotsMac("botSay", room: botID, target: botID, text: text, command: command, engine: bot(botID)?.provider) { return }
         guard let bot = bot(botID) else { return }
-        // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now and goes in when it's free.
-        if replying[botID] != nil {
-            let id = messageID ?? UUID().uuidString
-            if !conversation(botID).messages.contains(where: { $0.id == id }) { post(ownerMessage(id: id, text: text, writtenAt: writtenAt), to: botID) }
-            Task { [weak self] in
-                while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
-                self?.send(text, command: command, to: botID, messageID: id)
-            }
+        // "/retry" and "/undo" (Hermes's words): never queued behind the reply they're about.
+        if let takeBack = ChatTakeBack.command(in: text) {
+            takeBackLastExchange(takeBack, botID: botID)
             return
         }
         // "/doctor": the health check, as a note, with no bot turn.
@@ -553,10 +555,34 @@ final class BotsStore: ObservableObject {
             post(BotChatMessage(author: Self.noteAuthor, text: TheoDoctor.markdown(doctorFindings())), to: botID)
             return
         }
+        // "/help": the commands a chat takes, as a note.
+        if ChatCommandsHelp.asksForHelp(text) {
+            post(ownerMessage(id: messageID ?? UUID().uuidString, text: text, writtenAt: writtenAt), to: botID)
+            post(BotChatMessage(author: Self.noteAuthor, text: ChatCommandsHelp.markdown), to: botID)
+            return
+        }
         // "/new" or "/reset" (Hermes and OpenClaw's words): the next reply starts a fresh engine session.
         if BotsStore.asksForFreshSession(text) {
             post(ownerMessage(id: messageID ?? UUID().uuidString, text: text, writtenAt: writtenAt), to: botID)
             startFreshSession(botID)
+            return
+        }
+        // It may be answering another bot in private, which doesn't show here. Nothing the owner says gets lost: it shows now, and
+        // everything sent while it's busy goes to it together in its next turn (OpenClaw's "collect"), rather than one turn each.
+        if replying[botID] != nil {
+            let id = messageID ?? UUID().uuidString
+            if !conversation(botID).messages.contains(where: { $0.id == id }) { post(ownerMessage(id: id, text: text, writtenAt: writtenAt), to: botID) }
+            let isFirstWaiting = waitingWhileBusy[botID] == nil
+            waitingWhileBusy[botID, default: []].append((id: id, text: text, command: command))
+            guard isFirstWaiting else { return }
+            Task { [weak self] in
+                while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
+                guard let self, let waiting = self.waitingWhileBusy.removeValue(forKey: botID), let newest = waiting.last else { return }
+                let together = BusyMessages.combined(waiting.map { $0.text }, owner: BotPrompts.ownerName)
+                // What decides "@code …" and the like reads their own words, without the note that they came together.
+                let commands = waiting.count == 1 ? newest.command : waiting.map { $0.command ?? $0.text }.joined(separator: "\n\n")
+                self.send(together, command: commands, to: botID, messageID: newest.id)
+            }
             return
         }
         guard bot.isOn else {
@@ -634,12 +660,77 @@ final class BotsStore: ObservableObject {
         if bot.owner == nil { prompt = "(\(BotPrompts.screenHowTo))\n\n" + prompt }
         if let cancelled = cancelNote { prompt = "(\(cancelled))\n\n" + prompt }
         if let call = callTaskNotes.removeValue(forKey: botID), call.at > Date().addingTimeInterval(-300) { prompt = "(\(call.note))\n\n" + prompt }
+        if let takeBackNote = turnNotes.removeValue(forKey: botID) { prompt = "(\(takeBackNote))\n\n" + prompt }
         if !bot.primary, !runsStatus.isEmpty { prompt = "(\(runsStatus))\n\n" + prompt }
         if bot.owner == nil, !bot.primary { prompt = "(\(BotPrompts.reachNote(for: bot)))\n\n" + prompt }
         if bot.owner == nil { prompt = BotPrompts.awarenessNote(for: bot, room: botID) + prompt }
         ownerSpoke(in: botID)
         screenTurns[botID] = 0
         reply(bot: bot, in: botID, prompt: prompt, session: record.sessions[botID]) { _ in }
+    }
+
+    /// "/retry": the owner's newest message goes again and what answered it leaves the chat. "/undo": both leave. A reply still being
+    /// written is stopped first. A bot on an API key loses that exchange from its conversation; an engine that keeps its own session
+    /// (Claude Code, Codex and the rest) is told at the top of its next turn, since its session can't be edited from here.
+    func takeBackLastExchange(_ command: ChatTakeBack.Command, botID: String) {
+        guard let bot = bot(botID) else { return }
+        // The newest message is still waiting for the bot to be free: /undo takes just that back and the answer in progress goes on;
+        // /retry has nothing to try again yet.
+        if let waiting = waitingWhileBusy[botID], let newest = waiting.last {
+            if command == .retry {
+                post(BotChatMessage(author: Self.noteAuthor, text: ChatTakeBack.notAnsweredYet), to: botID)
+                return
+            }
+            let stillWaiting = Array(waiting.dropLast())
+            waitingWhileBusy[botID] = stillWaiting.isEmpty ? nil : stillWaiting
+            var record = conversation(botID)
+            record.messages.removeAll { $0.id == newest.id }
+            record.takenBack = ChatTakeBack.remembering(record.takenBack ?? [], adding: [newest.id])
+            conversations[botID] = record
+            writeConversation(botID)
+            return
+        }
+        if replying[botID] != nil {
+            stop(botID)
+            Task { [weak self] in
+                // The stopped turn posts what it had; that goes too.
+                for _ in 0..<40 where self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+                self?.takeBackLastExchange(command, botID: botID)
+            }
+            return
+        }
+        var record = conversation(botID)
+        // "/doctor", "/help" and "/new" were never a turn of the bot's: the exchange is the owner's newest real message, and they go with it.
+        func isLocalCommand(_ text: String) -> Bool {
+            TheoDoctor.asksForDoctor(text) || ChatCommandsHelp.asksForHelp(text) || BotsStore.asksForFreshSession(text)
+        }
+        guard let exchange = ChatTakeBack.lastExchange(in: record.messages, id: \.id, isOwner: { $0.author == "user" && !isLocalCommand($0.text) }, text: \.text) else {
+            post(BotChatMessage(author: Self.noteAuthor, text: command == .retry ? ChatTakeBack.nothingToRetry : ChatTakeBack.nothingToUndo), to: botID)
+            return
+        }
+        let removed = ChatTakeBack.removedIDs(exchange, command: command)
+        record.messages = ChatTakeBack.keeping(record.messages, id: \.id, takenBack: Set(removed))
+        let takenBack = ChatTakeBack.remembering(record.takenBack ?? [], adding: removed)
+        record.takenBack = takenBack
+        if let heard = record.heard?[botID] {
+            record.heard?[botID] = ChatTakeBack.heardAfterRemoving(heard: heard, exchange: exchange)
+        }
+        let session = record.sessions[botID]
+        conversations[botID] = record
+        writeConversation(botID)
+        if bot.provider.hasPrefix("api:"), let session {
+            let before = APIChat.History.load(session)
+            let after = ChatTakeBack.droppingLastExchange(before, role: \.role)
+            if after.count != before.count { APIChat.History.save(after, session: session) }
+        } else if session != nil {
+            turnNotes[botID] = ChatTakeBack.engineNote(command, ownerText: exchange.ownerText, owner: BotPrompts.ownerName)
+        }
+        switch command {
+        case .undo:
+            post(BotChatMessage(author: Self.noteAuthor, text: ChatTakeBack.undoneNote), to: botID)
+        case .retry:
+            send(exchange.ownerText, to: botID, messageID: exchange.ownerMessageID)
+        }
     }
 
     static func asksForFreshSession(_ text: String) -> Bool {
@@ -788,6 +879,10 @@ final class BotsStore: ObservableObject {
         let room = group.roomID
         if messageID == nil { ownerMacs[room] = nil }
         if messageID == nil, forwardToBotsMac("groupSay", room: room, target: groupID, text: text, command: command, engine: head.provider) { return }
+        if ChatTakeBack.command(in: text) != nil {
+            post(BotChatMessage(author: Self.noteAuthor, text: ChatTakeBack.onlyInOwnChat), to: room)
+            return
+        }
         var record = conversation(room)
         let ownerMessageID = messageID ?? UUID().uuidString
         if !record.messages.contains(where: { $0.id == ownerMessageID }) {
@@ -1377,6 +1472,13 @@ final class BotsStore: ObservableObject {
                 answer = taken.text
                 teamBuildOrder = taken.order
             }
+            // [ABOUT YOU: fact]: something lasting the owner said about themselves, added to the profile every bot reads. Only from their own words.
+            var aboutOwnerFacts: [String] = []
+            if bot.owner == nil, let said = answer {
+                let taken = OwnerProfile.extract(from: said)
+                answer = taken.text
+                if fromOwner && privately == nil { aboutOwnerFacts = taken.facts }
+            }
             var screenOrders: [String] = []
             var researchOrders: [String] = []
             var screenGifts: [(bot: String, screen: String)] = []
@@ -1418,7 +1520,7 @@ final class BotsStore: ObservableObject {
                 self.noteUnread(message, in: conversationID)
                 record.messages.append(message)
                 if self.isRoom(conversationID) { record.ownAnswers = (record.ownAnswers ?? [:]).merging([bot.id: (record.ownAnswers?[bot.id] ?? []) + [message.id]]) { _, new in new } }
-            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty && attachedFiles.isEmpty && fileSaves.isEmpty && teamBuildOrder == nil {
+            } else if answer != nil && orders.isEmpty && screenOrders.isEmpty && directMessages.isEmpty && pdfFiles.isEmpty && attachedFiles.isEmpty && fileSaves.isEmpty && teamBuildOrder == nil && aboutOwnerFacts.isEmpty {
                 record.messages.append(BotChatMessage(author: bot.id, text: "(No answer this time. Send it again, or try another model.)", exchangeID: privately?.exchangeID))
             }
             // Its engine session has now seen everything in this chat, on this Mac.
@@ -1434,6 +1536,7 @@ final class BotsStore: ObservableObject {
             self.carryOutFileOrders(pdfs: pdfFiles, attached: attachedFiles, saves: fileSaves, bot: bot, conversationID: conversationID,
                                     fromOwner: fromOwner, exchangeID: privately?.exchangeID)
             if let teamBuildOrder { self.buildTeamFromChat(teamBuildOrder, maker: bot, conversationID: conversationID, fromOwner: fromOwner) }
+            if !aboutOwnerFacts.isEmpty, let note = OwnerProfileStore.add(aboutOwnerFacts) { self.post(BotChatMessage(author: Self.noteAuthor, text: note), to: conversationID) }
             for order in screenOrders { self.workOnScreen(order, bot: bot, room: conversationID) }
             for question in researchOrders { self.researchForBot(question, bot: bot, room: conversationID) }
             for gift in screenGifts { self.proposeScreen(gift, from: bot, room: conversationID) }
@@ -2981,6 +3084,8 @@ enum LinkLogTime {
 struct LinkChatItem: Codable {
     var messages: [BotChatMessage]
     var clearedAt: Date?
+    /// Ids taken back with /retry or /undo on either Mac. A Mac on an older build leaves it out, and its copies are dropped here.
+    var takenBack: [String]?
 }
 
 struct LinkListItem<T: Codable>: Codable {
@@ -3062,7 +3167,7 @@ extension BotsStore {
 
     private func linkItem(forChat id: String) -> LinkChatItem {
         let record = conversation(id)
-        return LinkChatItem(messages: record.messages, clearedAt: record.clearedAt)
+        return LinkChatItem(messages: record.messages, clearedAt: record.clearedAt, takenBack: record.takenBack)
     }
 
     /// One fingerprint per thing the Macs share. Memory's is worked out by the caller, off the main thread.
@@ -3080,7 +3185,7 @@ extension BotsStore {
         ]
         for id in linkChatIDs {
             let item = linkItem(forChat: id)
-            digests["chat/" + id] = LinkCoding.digest(item.messages.map(\.id).sorted() + [item.clearedAt?.description ?? ""])
+            digests["chat/" + id] = LinkCoding.digest(item.messages.map(\.id).sorted() + [item.clearedAt?.description ?? ""] + (item.takenBack ?? []).sorted())
         }
         return digests
     }
@@ -3108,6 +3213,7 @@ extension BotsStore {
         case "memory": return try? encoder.encode(memoryStore.everything())
         case "skills": return try? encoder.encode(BotSkills.copies(botIDs: bots.map(\.id)))
         case "connectors": return ConnectorLinkSync.shared.payload()
+        case "ownerProfile": return OwnerProfileStore.linkItem().flatMap { try? encoder.encode($0) }
         default:
             if key.hasPrefix("botFiles/") { return try? encoder.encode(BotOwnFileStore.linkItem(botID: String(key.dropFirst("botFiles/".count)))) }
             if key.hasPrefix("botMemory/") { return try? encoder.encode(BotMemory.read(botID: String(key.dropFirst("botMemory/".count)))) }
@@ -3198,6 +3304,8 @@ extension BotsStore {
             BotSkills.merge(theirs, botIDs: bots.map(\.id))
         case "connectors":
             ConnectorLinkSync.shared.apply(data)
+        case "ownerProfile":
+            if let theirs = try? decoder.decode(LinkBotFile.self, from: data) { OwnerProfileStore.applyLink(theirs) }
         default:
             if key.hasPrefix("botFiles/") {
                 let botID = String(key.dropFirst("botFiles/".count))
@@ -3222,9 +3330,12 @@ extension BotsStore {
             let known = Set(record.messages.map(\.id))
             let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
             // If each Mac holds a copy of one message, the earlier time is the one it was written.
-            let merged = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.sortDate, clearedAt: clearedAt) { first, second in
+            let takenBack = ChatTakeBack.remembering(record.takenBack ?? [], adding: theirs.takenBack ?? [])
+            let union = LinkMerge.union(local: record.messages, remote: theirs.messages, id: \.id, at: \.sortDate, clearedAt: clearedAt) { first, second in
                 first.sortDate <= second.sortDate ? first : second
             }
+            let merged = ChatTakeBack.keeping(union, id: \.id, takenBack: Set(takenBack))
+            record.takenBack = takenBack.isEmpty ? nil : takenBack
             let arrived = merged.filter { !known.contains($0.id) }
             record.messages = merged
             record.clearedAt = clearedAt

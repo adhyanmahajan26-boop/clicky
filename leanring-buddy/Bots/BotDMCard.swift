@@ -129,9 +129,14 @@ struct ChatNote: View {
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "info.circle").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).padding(.top, 1)
-            Text(text).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+            Text(Self.styled(text)).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.leading, 36)
+    }
+
+    /// Bold and `code` show as such (the health check and the /help list use them); line breaks stay as written.
+    static func styled(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     }
 }
 

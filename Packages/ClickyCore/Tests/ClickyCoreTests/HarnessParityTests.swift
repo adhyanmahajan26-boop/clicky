@@ -172,6 +172,31 @@ final class HarnessParityRoundTwoTests: XCTestCase {
         XCTAssertFalse(TheoDoctor.asksForDoctor("doctor who?"))
     }
 
+    func testDoctorFixesAreOnlyOnProblemsAndListWhatsLeftOnce() {
+        XCTAssertNil(TheoDoctorFinding(.ok, "Disk", "fine", fix: .openSettings(section: "about")).fix)
+        let findings: [TheoDoctorFinding] = [
+            .init(.warn, "Update", "Build 5 is ready.", fix: .installUpdate),
+            .init(.ok, "Disk", "500 GB free."),
+            .init(.fail, "Notion", "Needs signing in on this Mac.", fix: .signInApp(id: "notion")),
+            .init(.fail, "Notion", "Needs signing in on this Mac.", fix: .signInApp(id: "notion")),
+            .init(.warn, "Skills", "One has no description."),
+        ]
+        let left = TheoDoctor.leftToSetUp(findings)
+        XCTAssertEqual(left.map(\.check), ["Notion", "Update"])
+        XCTAssertEqual(TheoDoctor.leftToSetUpTitle(count: 1), "1 thing left to set up")
+        XCTAssertEqual(TheoDoctor.leftToSetUpTitle(count: 3), "3 things left to set up")
+        XCTAssertTrue(TheoDoctor.markdown(findings).hasSuffix("Each one has a button in Settings › Health."))
+        XCTAssertFalse(TheoDoctor.markdown([.init(.fail, "Disk", "Full.")]).contains("Settings › Health"))
+    }
+
+    func testDoctorFixesRoundTripThroughTheirWireWord() {
+        let fixes: [TheoDoctorFix] = [.openSettings(section: "keys"), .askPermission("microphone"), .signInApp(id: "gmail"), .openConnectors, .installUpdate]
+        for fix in fixes { XCTAssertEqual(TheoDoctorFix(wire: fix.wire), fix) }
+        XCTAssertNil(TheoDoctorFix(wire: "settings:"))
+        XCTAssertNil(TheoDoctorFix(wire: "launch:missiles"))
+        XCTAssertEqual(TheoDoctorFix.signInApp(id: "gmail").buttonTitle, "Sign in")
+    }
+
     func testGatewayHasUsageAndDoctorRoutes() {
         XCTAssertEqual(TheoGatewayHTTP.route(method: "GET", path: "/v1/usage"), .usage)
         XCTAssertEqual(TheoGatewayHTTP.route(method: "GET", path: "/v1/doctor"), .doctor)

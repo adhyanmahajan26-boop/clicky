@@ -26,7 +26,7 @@ enum TheoSettingsWindowController {
 
 enum SettingsTab {
     enum Section: String, CaseIterable, Identifiable {
-        case bots, products, teams, look, devices, studio, clicky, accessibility, coding, keys, voice, dictation, screen, link, permissions, updates, about
+        case health, bots, products, teams, look, devices, studio, clicky, accessibility, coding, keys, voice, dictation, screen, link, permissions, updates, about
         var id: String { rawValue }
 
         /// The pages this Mac has: VM screens on any Mac that can make them (it sets them up here in one click), or that's linked to one.
@@ -35,6 +35,7 @@ enum SettingsTab {
         /// Its Hairline icon.
         var icon: String {
             switch self {
+            case .health: return "check"
             case .bots: return "group"
             case .products: return "team"
             case .teams: return "bot"
@@ -57,6 +58,7 @@ enum SettingsTab {
 
         var title: String {
             switch self {
+            case .health: return "Health"
             case .bots: return "Bots & categories"
             case .products: return "Products"
             case .teams: return "Bot teams"
@@ -79,6 +81,7 @@ enum SettingsTab {
 
         var subtitle: String {
             switch self {
+            case .health: return "Everything Vello needs on this Mac, checked in one place, with a button beside anything that isn't set up."
             case .bots: return "Every bot and category in one place. Make, rename, move and delete them here."
             case .products: return "Vello, Pointer Assistant and Dictation are separate. Turn on the ones you want."
             case .teams: return "Ready-made teams, each a manager and its bots. Change them, make your own, and add a whole team at once."
@@ -95,12 +98,13 @@ enum SettingsTab {
             case .link: return "Both Macs run as one Vello: the same bots, group chats, chats and memory."
             case .permissions: return "What Vello needs to hear, see and point."
             case .updates: return "Keep Vello current."
-            case .about: return "Your name, the Dock icon and the setup guide."
+            case .about: return "Your name, what every bot knows about you, the Dock icon and the setup guide."
             }
         }
 
         var symbol: String {
             switch self {
+            case .health: return "stethoscope"
             case .bots: return "folder.fill"
             case .products: return "square.grid.2x2.fill"
             case .teams: return "person.3.fill"
@@ -123,6 +127,7 @@ enum SettingsTab {
 
         var colors: [Color] {
             switch self {
+            case .health: return TileColors.lime
             case .bots: return TileColors.sky
             case .products: return TileColors.indigo
             case .teams: return TileColors.ember
@@ -205,6 +210,7 @@ struct SettingsPage: View {
 
     @ViewBuilder private var content: some View {
         switch section {
+        case .health: HealthSettingsContent()
         case .bots: BotsSettingsContent()
         case .products: ProductsSettingsContent()
         case .teams: BotTeamsSettingsContent()
@@ -878,6 +884,9 @@ struct AboutSettingsContent: View {
                     .buttonStyle(.theoSecondary)
                 }
             }
+            TheoSection(title: "About you", hint: "Every bot reads this. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.") {
+                OwnerProfileEditor()
+            }
             TheoSection(title: "Keyboard", hint: nil) {
                 shortcut("New bot", "⌘N")
                 RowDivider()
@@ -896,6 +905,45 @@ struct AboutSettingsContent: View {
             Text(keys).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundColor(DS.Colors.textSecondary)
                 .padding(.horizontal, 7).frame(height: 22)
                 .background(RoundedRectangle(cornerRadius: 5).fill(DS.Colors.hover))
+        }
+    }
+}
+
+/// Settings › About › About you: the file every bot reads (`OwnerProfileStore`), edited in place.
+struct OwnerProfileEditor: View {
+    @State private var text = ""
+    @State private var savedText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextEditor(text: $text)
+                .font(.system(size: 12.5)).frame(minHeight: 110)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("For example: I run a small design studio in Pune. Keep answers short. My cofounder is Riya.")
+                            .font(.system(size: 12.5)).foregroundColor(DS.Colors.textTertiary).padding(.horizontal, 5).padding(.vertical, 1)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            HStack(spacing: 8) {
+                Text("\(text.count) of \(OwnerProfile.limit) characters")
+                    .font(TheoType.caption).foregroundColor(text.count > OwnerProfile.limit ? DS.Colors.warning : DS.Colors.textTertiary)
+                Spacer()
+                Button("Open file") { NSWorkspace.shared.open(OwnerProfileStore.makeIfMissing()) }
+                    .buttonStyle(.theo(.secondary, .small)).pointerCursor()
+                Button("Save") {
+                    OwnerProfileStore.save(text)
+                    savedText = text
+                }
+                .buttonStyle(.theo(.primary, .small)).pointerCursor()
+                .disabled(text == savedText)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .onAppear {
+            text = OwnerProfileStore.textForTheField
+            savedText = text
         }
     }
 }

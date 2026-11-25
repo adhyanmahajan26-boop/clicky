@@ -64,7 +64,10 @@ public enum LoginShell {
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
         guard (try? process.run()) != nil else { return nil }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+        // A queue of its own, not the global one: when every shared worker thread is busy (a loaded Mac, a test run), a timer
+        // on the global queue can fire many seconds late and a hung command is waited on that long.
+        let timeoutQueue = DispatchQueue(label: "LoginShell.commandOutput.timeout")
+        timeoutQueue.asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         _ = exited.wait(timeout: .now() + timeout + 2)
         return String(decoding: data, as: UTF8.self)
