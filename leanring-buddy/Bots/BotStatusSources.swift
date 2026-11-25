@@ -164,13 +164,13 @@ final class ConnectorHealth: ObservableObject {
                 hubProblem = "Vello's connector helper didn't answer. Details are in ~/Library/Logs/Clicky/connectors.log."
             }
             // The engines' own listings still tell Clicky's tools' and Chrome's states, and the servers that aren't in Theo yet.
-            claude = ConnectorListing.parseClaude(claudeText)
+            claude = ConnectorListing.addingBuiltInChrome(ConnectorListing.parseClaude(claudeText), claudeHasChrome: BotConnectors.claudeHasChrome)
             openCode = ConnectorListing.parseOpenCode(openCodeText)
         } else {
             async let claudeListing = BotConnectors.listing(.claude)
             async let openCodeListing = BotConnectors.listing(.opencode)
             let (claudeText, openCodeText) = await (claudeListing, openCodeListing)
-            claude = ConnectorListing.parseClaude(claudeText)
+            claude = ConnectorListing.addingBuiltInChrome(ConnectorListing.parseClaude(claudeText), claudeHasChrome: BotConnectors.claudeHasChrome)
             openCode = ConnectorListing.parseOpenCode(openCodeText)
         }
         isChecking = false
@@ -287,9 +287,7 @@ final class ConnectorHealth: ObservableObject {
     }
 
     /// "claude.ai Runway (runway.team)" as "Runway (runway.team)".
-    static func displayName(_ server: String) -> String {
-        server.hasPrefix("claude.ai ") ? String(server.dropFirst("claude.ai ".count)) : server
-    }
+    static func displayName(_ server: String) -> String { ConnectorListing.displayName(server) }
 
     // MARK: Bots stuck on an app
 
