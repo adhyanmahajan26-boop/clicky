@@ -127,7 +127,7 @@ public enum SpaceSpeakingIndicator {
     }
 
     /// Connected runs of vivid pixels (four neighbours).
-    static func components(of mask: [Bool], width: Int, height: Int) -> [Component] {
+    static func components(of mask: [Bool], width: Int, height: Int, smallest: Int = 24) -> [Component] {
         var seen = [Bool](repeating: false, count: mask.count)
         var result: [Component] = []
         var stack: [Int] = []
@@ -146,7 +146,7 @@ public enum SpaceSpeakingIndicator {
                 if y > 0, mask[index - width], !seen[index - width] { seen[index - width] = true; stack.append(index - width) }
                 if y < height - 1, mask[index + width], !seen[index + width] { seen[index + width] = true; stack.append(index + width) }
             }
-            if component.count >= 24 { result.append(component) }
+            if component.count >= smallest { result.append(component) }
         }
         return result
     }
@@ -210,6 +210,110 @@ public enum SpaceSpeakingIndicator {
                     && other.box.y <= ring.box.midY && other.box.maxY >= ring.box.midY && other.box.width > ring.box.width * 1.05
             }
         }
+    }
+}
+
+/// X's real speaking indicator in a Space (Studio, 25 Nov, docked Space panel in Brave): no ring around the avatar, but a
+/// small violet sound-bars icon (three bars, about 5 by 6 to 24 pixels each at 1.5x) to the left of the speaker's role
+/// ("ıll Host"), right under their name. A speaker who isn't talking has three violet dots there ("··· Host"), and a muted
+/// one a red crossed-out mic, so only tall bars count.
+public enum SpaceSpeakingBars {
+    /// Where speaking bars are on `frame`, each cluster's box.
+    public static func find(in frame: RGBAFrame) -> [SpaceBox] {
+        let width = frame.width, height = frame.height
+        guard width > 8, height > 8, frame.pixels.count >= width * height * 4 else { return [] }
+        var violet = [Bool](repeating: false, count: width * height)
+        frame.pixels.withUnsafeBufferPointer { pixels in
+            for index in 0..<(width * height) {
+                let red = Double(pixels[index * 4]), green = Double(pixels[index * 4 + 1]), blue = Double(pixels[index * 4 + 2])
+                let brightest = max(red, green, blue), darkest = min(red, green, blue)
+                guard brightest > 0, (brightest - darkest) / brightest >= 0.42, brightest / 255 >= 0.32 else { continue }
+                violet[index] = SpaceSpeakingIndicator.isPurpleOrBlue(red: red, green: green, blue: blue)
+            }
+        }
+        // Small violet pieces: a bar or a dot each.
+        let pieces = SpaceSpeakingIndicator.components(of: violet, width: width, height: height, smallest: 3).filter { piece in
+            let pieceWidth = piece.maxX - piece.minX + 1, pieceHeight = piece.maxY - piece.minY + 1
+            return pieceWidth >= 2 && Double(pieceWidth) <= Double(width) * 0.01 && Double(pieceHeight) <= Double(width) * 0.045
+        }.sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
+        var used = Set<Int>()
+        var clusters: [SpaceBox] = []
+        for (index, piece) in pieces.enumerated() where !used.contains(index) {
+            let pieceWidth = piece.maxX - piece.minX + 1
+            // Its neighbours: about as wide, side by side, a bar's width or two apart, sharing a bottom line or a middle.
+            var members = [index]
+            var right = piece.maxX
+            var changed = true
+            while changed {
+                changed = false
+                for (other, candidate) in pieces.enumerated() where !members.contains(other) && !used.contains(other) {
+                    let candidateWidth = candidate.maxX - candidate.minX + 1
+                    let gap = candidate.minX - right
+                    let middle = Double(candidate.minY + candidate.maxY) / 2, pieceMiddle = Double(piece.minY + piece.maxY) / 2
+                    if gap >= 1, gap <= pieceWidth * 3, abs(candidateWidth - pieceWidth) <= max(2, pieceWidth / 2),
+                       abs(middle - pieceMiddle) <= Double(max(piece.maxY - piece.minY, candidate.maxY - candidate.minY)) + 2 {
+                        members.append(other)
+                        right = candidate.maxX
+                        changed = true
+                    }
+                }
+            }
+            guard (2...5).contains(members.count) else { continue }
+            let group = members.map { pieces[$0] }
+            // Bars, not dots: at least one is clearly taller than it is wide.
+            guard group.contains(where: { Double($0.maxY - $0.minY + 1) >= 1.8 * Double($0.maxX - $0.minX + 1) }) else { continue }
+            let minX = group.map(\.minX).min()!, maxX = group.map(\.maxX).max()!, minY = group.map(\.minY).min()!, maxY = group.map(\.maxY).max()!
+            // The whole icon is taller than a bar is wide: dots smoothed by scaling can make one piece look tall.
+            let widths = group.map { $0.maxX - $0.minX + 1 }.sorted()
+            guard Double(maxY - minY + 1) >= 1.5 * Double(widths[widths.count / 2]) else { continue }
+            members.forEach { used.insert($0) }
+            clusters.append(SpaceBox(x: Double(minX) / Double(width), y: Double(minY) / Double(height),
+                                     width: Double(maxX - minX + 1) / Double(width), height: Double(maxY - minY + 1) / Double(height)))
+        }
+        return clusters
+    }
+
+    /// Where the speaker's name is: the line just above the bars, over the same tile.
+    public static func nameRegion(above bars: SpaceBox, frameAspect: Double) -> SpaceBox {
+        // Measured from the icon's width, which stays put, not its height, which moves with the voice: sized by height,
+        // the strip was too narrow when the bars were low and cut names to "hee" and "ngji" (Studio, 25 Nov). The tile is
+        // about 5 icon-widths either side; the name sits within 3 icon-widths above.
+        let iconWidth = max(bars.width, 0.006)
+        let halfWidth = iconWidth * 4
+        let above = iconWidth * 3 * frameAspect
+        let top = max(0, bars.y - above)
+        return SpaceBox(x: max(0, bars.midX - halfWidth), y: top, width: min(1, bars.midX + halfWidth) - max(0, bars.midX - halfWidth),
+                        height: bars.y - top + bars.height * 0.1)
+    }
+
+    /// Where the speaker's role is: the words right of the bars, on the same row ("ıll Host").
+    public static func roleRegion(beside bars: SpaceBox) -> SpaceBox {
+        let iconWidth = max(bars.width, 0.006)
+        let pad = bars.height * 0.6
+        return SpaceBox(x: bars.maxX, y: max(0, bars.y - pad), width: min(1 - bars.maxX, iconWidth * 5), height: bars.height + pad * 2)
+    }
+
+    /// Whether a line read beside the bars is a Space role, so the violet bars are X's speaking icon and not something
+    /// violet on a page behind the docked Space (a feed post, Studio 25 Nov, gave a speaker the name "Post").
+    public static func isRole(_ text: String) -> Bool {
+        let words = text.lowercased().split { !$0.isLetter && $0 != "-" }.map(String.init)
+        let roles: Set<String> = ["host", "co-host", "cohost", "speaker", "होस्ट", "स्पीकर", "को-होस्ट"]
+        return words.contains { roles.contains($0) || $0.hasPrefix("co-host") }
+    }
+
+    /// The name line for bars: the lowest line above them whose span covers or sits over the bars.
+    public static func nameLine(above bars: SpaceBox, among lines: [SpaceTextLine], frameAspect: Double) -> SpaceTextLine? {
+        let region = nameRegion(above: bars, frameAspect: frameAspect)
+        let candidates = lines.filter { line in
+            SpaceSpeakerName.cleaned(line.text) != nil && line.box.maxY <= bars.y + bars.height * 0.3 && line.box.y >= region.y - bars.height
+                && line.box.maxX >= region.x && line.box.x <= region.maxX
+        }
+        // The row right above the bars; on it, the name nearest the tile's middle, which is a little right of the bars
+        // (they start the role line under the name). Taking any line on the row named PEW "arfi", the end of the
+        // neighbouring "Sam Garfi…" (a public Space, 25 Nov).
+        guard let lowest = candidates.map(\.box.maxY).max() else { return nil }
+        let tileMiddle = bars.midX + bars.width * 1.5
+        return candidates.filter { lowest - $0.box.maxY <= bars.height * 0.8 }.min { abs($0.box.midX - tileMiddle) < abs($1.box.midX - tileMiddle) }
     }
 }
 
@@ -313,6 +417,9 @@ public enum SpaceSpeakerName {
     public static func isTheBot(_ name: String, handle: String, botName: String) -> Bool {
         let plainName = plain(name)
         guard !plainName.isEmpty else { return false }
+        // A cut-off piece of its own name ("a Tirri" of "Chotta Tirri").
+        let plainBotName = plain(botName)
+        if plainName.count >= 4, plainBotName.count > plainName.count, plainBotName.contains(plainName) { return true }
         let plainHandle = plain(XHandle.normalized(handle))
         if !plainHandle.isEmpty, plainName == plainHandle || plainName.hasPrefix(plainHandle) { return true }
         let plainBot = plain(botName)
@@ -463,15 +570,23 @@ public struct SpaceSpeakerRoster: Sendable {
         entries.values.filter { $0.sightings >= Self.sightingsToBeOnStage }.sorted { $0.firstSeen < $1.firstSeen }.map(Self.bestSpelling)
     }
 
-    /// The entry a reading belongs to: the same skeleton, else the most-seen entry one letter away (two for long names).
+    /// The entry a reading belongs to: the same skeleton, else the most-seen entry one letter away (two for long names),
+    /// else a longer name it's a cut-off piece of ("hee" of "Sipahee", "ngji" of "Kongji").
     private func matchingKey(for reading: String) -> String? {
         let key = SpaceSpeakerName.skeleton(reading)
         guard !key.isEmpty else { return nil }
         if entries[key] != nil { return key }
-        return entries.filter { SpaceSpeakerName.isMisreading(key, of: $0.key) }.max { $0.value.sightings < $1.value.sightings }?.key
+        if let near = entries.filter({ SpaceSpeakerName.isMisreading(key, of: $0.key) }).max(by: { $0.value.sightings < $1.value.sightings })?.key {
+            return near
+        }
+        return entries.filter { $0.key.count > key.count && key.count >= 2 && $0.key.contains(key) }.max { $0.value.sightings < $1.value.sightings }?.key
     }
 
+    /// The fullest reading that's common enough to trust: the longest of those read at least a third as often as the
+    /// most-read one, so a name read whole now and then wins over a frequent cut-off ("Sipahee" over "hee").
     private static func bestSpelling(_ entry: Entry) -> String {
-        entry.spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? ""
+        let most = entry.spellings.values.max() ?? 0
+        return entry.spellings.filter { Double($0.value) >= Double(most) / 3 }
+            .max { ($0.key.count, $0.value, $1.key) < ($1.key.count, $1.value, $0.key) }?.key ?? ""
     }
 }

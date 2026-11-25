@@ -48,7 +48,8 @@ final class SpaceSpeakerWatcher {
     /// Frames a second while someone talks.
     nonisolated static let framesPerSecond = 3.0
     /// The picture's width for finding the ring: enough to see a 2-point ring on a big window.
-    nonisolated static let analysisWidth = 900
+    /// X's sound-bars icon is about 5 points wide, so the picture needs about a point a pixel to see it.
+    nonisolated static let analysisWidth = 1600
 
     /// The bot account's display name on X, when it's set (its own tile shows that, not the handle).
     private var ownDisplayNames: [String] = []
@@ -121,11 +122,30 @@ final class SpaceSpeakerWatcher {
         let handle = self.handle, botName = self.botName, ownDisplayNames = self.ownDisplayNames
         let result = await Task.detached(priority: .userInitiated) { () -> (RGBAFrame?, [String], Bool) in
             guard let frame = Self.frame(from: image, width: Self.analysisWidth) else { return (nil, [], false) }
-            let rings = SpaceSpeakingIndicator.rings(in: frame, previous: previous)
-            guard !rings.isEmpty else { return (frame, [], false) }
-            let lines = Self.readText(in: image, near: rings)
-            return (frame, SpaceSpeakerLayout.speakingNames(rings: rings, lines: lines, handle: handle, botName: botName,
-                                                                     ownDisplayNames: ownDisplayNames), true)
+            // X's own indicator first (sound bars by the role, under the name), then a ring round the avatar.
+            let bars = SpaceSpeakingBars.find(in: frame)
+            let rings = bars.isEmpty ? SpaceSpeakingIndicator.rings(in: frame, previous: previous) : []
+            guard !bars.isEmpty || !rings.isEmpty else { return (frame, [], false) }
+            let aspect = Double(frame.width) / Double(frame.height)
+            var names: [String] = []
+            for box in bars.prefix(4) {
+                // X's icon sits beside the speaker's role; violet bars anywhere else are part of a page behind the Space.
+                let roleLines = Self.read(region: SpaceSpeakingBars.roleRegion(beside: box), of: image)
+                guard roleLines.contains(where: { SpaceSpeakingBars.isRole($0.text) }) else { continue }
+                let lines = Self.read(region: SpaceSpeakingBars.nameRegion(above: box, frameAspect: aspect), of: image)
+                guard let line = SpaceSpeakingBars.nameLine(above: box, among: lines, frameAspect: aspect),
+                      let name = SpaceSpeakerName.cleaned(line.text),
+                      !SpaceSpeakerName.isTheBot(name, handle: handle, botName: botName),
+                      !ownDisplayNames.contains(where: { SpaceSpeakerName.isTheBot(name, handle: "", botName: $0) }),
+                      !names.contains(name) else { continue }
+                names.append(name)
+            }
+            if !rings.isEmpty {
+                let lines = Self.readText(in: image, near: rings)
+                names += SpaceSpeakerLayout.speakingNames(rings: rings, lines: lines, handle: handle, botName: botName,
+                                                          ownDisplayNames: ownDisplayNames).filter { !names.contains($0) }
+            }
+            return (frame, names, true)
         }.value
         previousFrame = result.0
         if result.2 { framesWithRing += 1 }
@@ -185,6 +205,9 @@ final class SpaceSpeakerWatcher {
         configuration.width = Int(window.frame.width * scale)
         configuration.height = Int(window.frame.height * scale)
         configuration.showsCursor = false
+        // The window drawn over the whole picture: without this, a window on a 1x display filled only two thirds of it
+        // and the rest was white (Studio, 25 Nov), so no ring or name was ever where the finder looked.
+        configuration.scalesToFit = true
         configuration.ignoreShadowsSingleWindow = true
         do {
             let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: configuration)

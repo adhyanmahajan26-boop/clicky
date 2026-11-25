@@ -73,6 +73,7 @@
 //                               "Join a Space as Vello" does (the settings given are saved first; link opens in the bot's
 //                               browser): {started, problem} and the call's status
 //    ownAccountStop           → ends it
+//    ownAccountNote {text}    → a standing instruction from the owner for the Space going on, added to each turn
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
@@ -302,6 +303,10 @@ final class DebugCommandInbox {
             let defaults = UserDefaults.standard
             if let handle = commandObject["handle"] as? String { defaults.set(handle, forKey: XAccountSettings.handleKey) }
             if let displayName = commandObject["displayName"] as? String { defaults.set(displayName, forKey: XAccountSettings.displayNameKey) }
+            if let boss = commandObject["boss"] as? String { defaults.set(boss, forKey: XAccountSettings.bossKey) }
+            if let stance = commandObject["stance"] as? String, let picked = SpaceStance(rawValue: stance) {
+                XAccountSettings.setStance(picked, target: commandObject["stanceTarget"] as? String ?? "")
+            }
             if let browser = commandObject["browser"] as? String { defaults.set(browser, forKey: XAccountSettings.browserKey) }
             if let output = commandObject["output"] as? String {
                 // A device's name or its unique id.
@@ -353,6 +358,15 @@ final class DebugCommandInbox {
                 }
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
             }
+        case "ownAccountNote":
+            // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
+            guard let session = TheoCallController.session, session.isOwnAccount else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "No Space on the X account is going.")
+                return
+            }
+            let text = (commandObject["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            session.spaceNote = text.isEmpty ? nil : text
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["note": session.spaceNote ?? ""], errorMessage: nil)
         case "ownAccountStatus":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: TheoCallController.session?.report() ?? [:], errorMessage: nil)
         case "ownAccountLook":

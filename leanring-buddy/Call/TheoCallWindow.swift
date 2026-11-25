@@ -294,6 +294,8 @@ struct TheoCallView: View {
 /// are the owner's to make.
 private struct OwnAccountStrip: View {
     @ObservedObject var session: TheoCallSession
+    @AppStorage(XAccountSettings.stanceKey) private var stance = SpaceStance.normal.rawValue
+    @AppStorage(XAccountSettings.stanceTargetKey) private var stanceTarget = ""
 
     var body: some View {
         VStack(spacing: 4) {
@@ -313,6 +315,15 @@ private struct OwnAccountStrip: View {
             .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
             Text(session.currentSpeaker.map { "Talking now: \($0)" } ?? CallOwnAccount.joinNote)
                 .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+            HStack(spacing: 6) {
+                Picker("Stance", selection: $stance) {
+                    ForEach(SpaceStance.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 110)
+                TextField("with everyone", text: $stanceTarget).textFieldStyle(.roundedBorder).frame(width: 120)
+                    .disabled(stance == SpaceStance.normal.rawValue)
+            }
+            .font(.system(size: 11)).help("How the bot takes part: Debate takes the other side, Arguing pushes back harder, Agreeing backs people up. Name one speaker, or leave it empty for everyone.")
         }
         .padding(.top, 2)
     }
@@ -330,7 +341,7 @@ private struct CallLineView: View {
             if line.text.isEmpty && line.isLive {
                 TypingDots()
             } else {
-                Text(line.text + (line.wasCut ? " —" : "")).font(.system(size: 14))
+                Text(line.text + (line.wasCut ? " —" : "") + (line.wasNotHeard ? " (not heard)" : "")).font(.system(size: 14))
                     .foregroundColor(line.who == .addy && line.isLive ? DS.Colors.textSecondary : DS.Colors.textPrimary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }

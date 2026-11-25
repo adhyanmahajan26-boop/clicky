@@ -17,6 +17,9 @@ import SwiftUI
 struct XAccountSettingsSection: View {
     @AppStorage(XAccountSettings.handleKey) private var handle = ""
     @AppStorage(XAccountSettings.displayNameKey) private var displayName = ""
+    @AppStorage(XAccountSettings.bossKey) private var boss = ""
+    @AppStorage(XAccountSettings.stanceKey) private var stance = SpaceStance.normal.rawValue
+    @AppStorage(XAccountSettings.stanceTargetKey) private var stanceTarget = ""
     @AppStorage(XAccountSettings.browserKey) private var browserBundleID = ""
     @AppStorage(XAccountSettings.outputDeviceKey) private var outputDeviceUID = ""
     @AppStorage(XAccountSettings.monitorKey) private var monitors = false
@@ -36,6 +39,20 @@ struct XAccountSettingsSection: View {
             RowDivider()
             SettingRow(title: "Its display name on X", detail: "Optional. A Space shows this under the bot's own picture, so the bot never takes itself for someone talking.") {
                 TextField("Vello (AI)", text: $displayName).textFieldStyle(.roundedBorder).frame(width: 180)
+            }
+            RowDivider()
+            SettingRow(title: "Your name in Spaces", detail: "Optional: your display name or handle on X. When the Space's screen clearly shows you talking, the bot does what you ask about the conversation, and never says so there. Anyone can copy a display name, so this only steers the talk, never anything on your Mac.") {
+                TextField("your_handle", text: $boss).textFieldStyle(.roundedBorder).frame(width: 180)
+            }
+            RowDivider()
+            SettingRow(title: "Stance", detail: "Debate takes the other side with arguments, Arguing pushes back harder, Agreeing backs people up; always against ideas, never people. Name one speaker, or leave it empty for everyone.") {
+                HStack(spacing: 6) {
+                    Picker("Stance", selection: $stance) {
+                        ForEach(SpaceStance.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden().frame(width: 110)
+                    TextField("everyone", text: $stanceTarget).textFieldStyle(.roundedBorder).frame(width: 110)
+                }
             }
             RowDivider()
             SettingRow(title: "The bot's browser", detail: "A browser that isn't your everyday Chrome, signed in to the bot's X account.") {

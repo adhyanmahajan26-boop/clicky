@@ -33,8 +33,13 @@ final class CallMicConverter: @unchecked Sendable {
     private var pending = Data()
     private let blockBytes = Int(Double(CallAudioBlock.sampleRate) * CallAudioBlock.seconds) * 2
     var onBlock: (@Sendable (CallAudioBlock) -> Void)?
+    /// One caller at a time: a Space's process tap is made again when the browser's helpers change, and for a moment the
+    /// old and new taps both deliver, from two threads. Unguarded, that crashed the app twice in a public Space (25 Nov).
+    private let lock = NSLock()
 
     func append(_ input: AVAudioPCMBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
         guard let buffer = Self.firstChannel(of: input) else { return }
         if converter == nil || converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: output) }
         guard let converter else { return }
@@ -262,6 +267,11 @@ final class CallAudio {
     var onDrained: (() -> Void)?
     /// How loud the voice is right now, for the avatar.
     private(set) var voiceLevel: CGFloat = 0
+    /// The loudest voice audio handed to the player (and taken) since `resetLoudness`, for telling a reply that made no
+    /// sound in a Space.
+    private(set) var loudestDecibelsSinceReset = -100.0
+
+    func resetLoudness() { loudestDecibelsSinceReset = -100 }
 
     init(hub: AudioEngineHub, isLive: Bool, ownAccount: XAccountSetup? = nil) {
         self.hub = hub
@@ -438,7 +448,9 @@ final class CallAudio {
                 self.onDrained?()
             }
         }
-        if !accepted {
+        if accepted {
+            loudestDecibelsSinceReset = max(loudestDecibelsSinceReset, Self.decibels(of: buffer))
+        } else {
             scheduled -= 1
             if scheduled == 0 { onDrained?() }
         }
@@ -453,6 +465,13 @@ final class CallAudio {
         channel.stop()
         monitorSegmentOpen = false
         monitor?.channel.stop()
+    }
+
+    private static func decibels(of buffer: AVAudioPCMBuffer) -> Double {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return -100 }
+        var sum: Float = 0
+        for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
+        return 20 * log10(Double(max(sqrt(sum / Float(buffer.frameLength)), 0.000_01)))
     }
 
     private static func level(of buffer: AVAudioPCMBuffer) -> CGFloat {

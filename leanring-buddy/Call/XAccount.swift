@@ -25,6 +25,20 @@ enum XAccountSettings {
     /// The bot account's display name on X ("Chotta Tirri"): its own tile in a Space shows this, so it's never taken for
     /// someone talking.
     static let displayNameKey = "v5.xAccount.displayName"
+    /// Who runs the bot, as they appear in a Space (display names or handles, comma-separated): their lines are marked
+    /// for the bot's brain, which follows what they ask about the conversation (ClickyCore `SpaceBoss`).
+    static let bossKey = "v5.xAccount.boss"
+    /// How the bot takes part (ClickyCore `SpaceStance`), and the one speaker it's for (empty: everyone).
+    static let stanceKey = "v5.xAccount.stance"
+    static let stanceTargetKey = "v5.xAccount.stanceTarget"
+
+    static var stance: SpaceStance { UserDefaults.standard.string(forKey: stanceKey).flatMap(SpaceStance.init(rawValue:)) ?? .normal }
+    static var stanceTarget: String { UserDefaults.standard.string(forKey: stanceTargetKey) ?? "" }
+
+    static func setStance(_ stance: SpaceStance, target: String) {
+        UserDefaults.standard.set(stance.rawValue, forKey: stanceKey)
+        UserDefaults.standard.set(target, forKey: stanceTargetKey)
+    }
 
     /// "@vello_ai", or empty.
     static var handle: String { XHandle.normalized(UserDefaults.standard.string(forKey: handleKey) ?? "") }
@@ -67,6 +81,7 @@ enum XAccountSettings {
     static func setup() -> XAccountSetup {
         let browser = browser
         return XAccountSetup(handle: handle, displayName: UserDefaults.standard.string(forKey: displayNameKey) ?? "",
+                             bossNames: SpaceBoss.names(saved: UserDefaults.standard.string(forKey: bossKey) ?? ""),
                              browser: browser, browserAppURL: browser.flatMap { appURL(bundleID: $0.bundleID) },
                              outputDeviceUID: outputDeviceUID, monitors: monitors)
     }
@@ -102,6 +117,7 @@ enum XAccountSettings {
 struct XAccountSetup {
     var handle: String
     var displayName: String = ""
+    var bossNames: [String] = []
     var browser: BotBrowserApp?
     var browserAppURL: URL?
     var outputDeviceUID: String?
