@@ -9,6 +9,7 @@
 
 import AVFoundation
 import ClickyCore
+import Combine
 import SwiftUI
 
 @MainActor
