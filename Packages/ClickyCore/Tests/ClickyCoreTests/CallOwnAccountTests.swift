@@ -334,6 +334,21 @@ struct CallOwnAccountTests {
         #expect(CallOwnAccount.pauseBeforeAnswering > CallGroupMode.longestWaitSeconds)
     }
 
+    @Test func aNamedFinishedQuestionGetsTheQuickPause() {
+        #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: "Chotta Tirri, what do you think?") == CallOwnAccount.quickPauseWhenNamed)
+        #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: false, words: "what do you think?") == CallOwnAccount.pauseBeforeAnswering)
+        #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: "Chotta Tirri, I was thinking that and") == CallOwnAccount.pauseBeforeAnswering)
+        #expect(CallOwnAccount.quickPauseWhenNamed >= 0.6 && CallOwnAccount.quickPauseWhenNamed <= 0.8)
+    }
+
+    @Test func factChecksAreRareAndTranslationIsOnRequest() {
+        let prompt = CallOwnAccount.systemPrompt(personaHead: "You are Chotta Tirri.", handle: "@KPKPKP9828", owner: "Addy", botName: "Chotta Tirri", languageRule: "")
+        #expect(prompt.contains("you may correct it once, briefly and politely"))
+        #expect(prompt.contains("Never correct jokes, opinions or things you're unsure of"))
+        #expect(prompt.contains("Translate only when someone asks you to"))
+        #expect(prompt.contains("very short first sentence"))
+    }
+
     @Test func theSpaceBotNeverHosts() {
         let prompt = CallOwnAccount.systemPrompt(personaHead: "You are Chotta Tirri.", handle: "@KPKPKP9828", owner: "Addy", botName: "Chotta Tirri", languageRule: "")
         #expect(prompt.contains("You only ever join Spaces"))

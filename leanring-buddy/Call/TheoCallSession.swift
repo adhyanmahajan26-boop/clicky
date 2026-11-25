@@ -929,7 +929,7 @@ final class TheoCallSession: ObservableObject {
                 guard let self, !Task.isCancelled, self.state != .ended else { return }
                 if self.gate.isSpeaking || self.replyInProgress { continue }
                 guard let speechEndedAt = self.speechEndedAt,
-                      Date().timeIntervalSince(speechEndedAt) >= CallOwnAccount.pauseBeforeAnswering else { continue }
+                      Date().timeIntervalSince(speechEndedAt) >= CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: words) else { continue }
                 self.earlyPartialTask = nil
                 callLog("📞 Space: took the words before the ears' final (\(words.split(separator: " ").count) words)")
                 self.heardFinal(words)
@@ -1120,7 +1120,7 @@ final class TheoCallSession: ObservableObject {
                 let releases: Bool
                 if self.isGroupMode {
                     // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
-                    wait = self.isOwnAccount ? CallOwnAccount.pauseBeforeAnswering
+                    wait = self.isOwnAccount ? CallOwnAccount.pauseBeforeAnswering(isAddressed: self.isAddressedInTheGroup(self.heldTurnWords), words: self.heldTurnWords)
                         : CallGroupMode.waitSeconds(ownWait: wait, isAddressed: self.isAddressedInTheGroup(self.heldTurnWords))
                     releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
