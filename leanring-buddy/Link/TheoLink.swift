@@ -669,10 +669,12 @@ final class TheoLink: ObservableObject {
         let fromDisk = await Task.detached { () -> [String: String] in
             var found = BotMemory.digests(botIDs: botIDs)
             found["skills"] = BotSkillSync.digest(BotSkills.copies(botIDs: botIDs))
+            found.merge(BotOwnFileStore.linkDigests(botIDs: botIDs)) { _, new in new }
             found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
             return found
         }.value
         digests.merge(fromDisk) { _, new in new }
+        digests["connectors"] = ConnectorLinkSync.shared.digest()
         return digests
     }
 }
@@ -792,7 +794,7 @@ struct LinkSettingsContent: View {
                 }
             }
             if link.isPaired { SyncFolderSettingsSection() }
-            Text("Bots, categories, group chats, chats, private messages between bots, coding runs, Pointer Assistant's team and memory stay the same on both, and each message says which Mac it was written on. API keys stay on their own Mac: they don't leave the Keychain. Routines show on both and fire on one.")
+            Text("Bots, categories, group chats, chats, private messages between bots, coding runs, Pointer Assistant's team, the apps on the Connectors page, each bot's instructions and nature files and memory stay the same on both, and each message says which Mac it was written on. API keys and app sign-ins stay on their own Mac: an app you reach through your Claude account works on both once each Mac's Claude Code is signed in to it, and any other app asks you to sign in once on each Mac. Routines show on both and fire on one.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }

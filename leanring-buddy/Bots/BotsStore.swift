@@ -3082,6 +3082,7 @@ extension BotsStore {
 
     func wantsLinkItem(_ key: String) -> Bool {
         if key.hasPrefix("botMemory/") { return bot(String(key.dropFirst("botMemory/".count))) != nil }
+        if key.hasPrefix("botFiles/") { return bot(String(key.dropFirst("botFiles/".count))) != nil }
         // An older build's name for what "device" says now.
         if key == "projects" { return false }
         guard key.hasPrefix("chat/") else { return true }
@@ -3101,7 +3102,9 @@ extension BotsStore {
         case "clickyMac": return try? encoder.encode(TheoLink.shared.clickyMacItem)
         case "memory": return try? encoder.encode(memoryStore.everything())
         case "skills": return try? encoder.encode(BotSkills.copies(botIDs: bots.map(\.id)))
+        case "connectors": return ConnectorLinkSync.shared.payload()
         default:
+            if key.hasPrefix("botFiles/") { return try? encoder.encode(BotOwnFileStore.linkItem(botID: String(key.dropFirst("botFiles/".count)))) }
             if key.hasPrefix("botMemory/") { return try? encoder.encode(BotMemory.read(botID: String(key.dropFirst("botMemory/".count)))) }
             guard key.hasPrefix("chat/") else { return nil }
             return try? encoder.encode(linkItem(forChat: String(key.dropFirst("chat/".count))))
@@ -3170,6 +3173,8 @@ extension BotsStore {
             if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) {
                 peerDevice = theirs
                 DeviceRoles.rememberOtherMac(theirs)
+                // The other Mac's sync folder is on: this one turns its own on in the same place.
+                LinkSyncFolderController.shared.followOtherMac(theirs)
                 // The other Mac may have picked a new main Mac: the VM screens leave this one if they're no longer its.
                 StudioController.shared.followDeviceSetting()
             }
@@ -3184,7 +3189,14 @@ extension BotsStore {
         case "skills":
             guard let theirs = try? decoder.decode([String: SkillCopy].self, from: data) else { return }
             BotSkills.merge(theirs, botIDs: bots.map(\.id))
+        case "connectors":
+            ConnectorLinkSync.shared.apply(data)
         default:
+            if key.hasPrefix("botFiles/") {
+                let botID = String(key.dropFirst("botFiles/".count))
+                if bot(botID) != nil, let theirs = try? decoder.decode(LinkBotFilesItem.self, from: data) { BotOwnFileStore.applyLink(theirs, botID: botID) }
+                return
+            }
             if key.hasPrefix("botMemory/") {
                 let botID = String(key.dropFirst("botMemory/".count))
                 if bot(botID) != nil, let theirs = try? decoder.decode(String.self, from: data) { BotMemory.merge(theirs, botID: botID) }
