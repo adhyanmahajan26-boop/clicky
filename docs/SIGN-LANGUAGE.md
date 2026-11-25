@@ -174,6 +174,19 @@ there it answers far fewer signs.
 What might make it shippable: training with "not a sign" examples, or calibrating on never-taught signs, so the gain
 on new people doesn't cost the "not sure" behaviour.
 
+The same recipe was tried for the ASL word model (PopSign sweep 1, 100 epochs, same folds and test signers) and is not
+shipped either: better in Python and in the held-out-word folds, but through the app it answers fewer signs, so fewer
+are read right in all.
+
+| Row | Shipped ASL | Retrained ASL |
+| --- | --- | --- |
+| Whole clip, PopSign's 10 test signers (4,477 clips, Python) | 76.4% / 94.4% top-5 | 77.0% / 94.6% |
+| Threshold chosen | 0.95 | 0.94 |
+| Held-out-word folds at that threshold | taught answered 43.0%, right 96.4%, never-taught wrongly answered 9.2% | 45.0%, 96.9%, 9.2% |
+| App pipeline, both ASL models | **45.3% answered**, 92.1% right (41.7% of signs right in all) | **42.7% answered**, 94.3% right (40.3% in all) |
+| Finger-spelling as the app reads it (FSboard test) | 11.7% of characters wrong, 48.2% exact | 11.6%, 48.2% |
+| Core ML vs PyTorch | 40/40 same top-1 | 40/40 |
+
 ### What it can't read
 
 - Signers it hasn't learned from, reliably (above). Expect "?".
