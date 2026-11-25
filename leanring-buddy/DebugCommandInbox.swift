@@ -76,7 +76,7 @@
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
-//    ownAccountLook           → one frame of the speaker watcher now: rings, names
+//    ownAccountLook {path?}   → one frame of the speaker watcher now: rings, names (path: TEST ONLY, the frame as a PNG)
 //
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
@@ -360,7 +360,7 @@ final class DebugCommandInbox {
                 return
             }
             Task { @MainActor in
-                let report = await session.lookForSpeakerNow()
+                let report = await session.lookForSpeakerNow(savingTo: (commandObject["path"] as? String).map { URL(fileURLWithPath: $0) })
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: report, errorMessage: nil)
             }
         case "ownAccountRecord":

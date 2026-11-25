@@ -1687,9 +1687,9 @@ final class TheoCallSession: ObservableObject {
     }
 
     /// `ownAccountLook`: one frame of the speaker watcher now, whoever is talking.
-    func lookForSpeakerNow() async -> [String: Any] {
+    func lookForSpeakerNow(savingTo fileURL: URL? = nil) async -> [String: Any] {
         guard let speakerWatcher else { return ["error": "No speaker watcher."] }
-        await speakerWatcher.lookOnce()
+        await speakerWatcher.lookOnce(savingTo: fileURL)
         return speakerWatcher.report()
     }
 

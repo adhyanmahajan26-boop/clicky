@@ -13,6 +13,7 @@ import AppKit
 import ClickyCore
 import CoreGraphics
 import Foundation
+import ImageIO
 import ScreenCaptureKit
 import Vision
 
@@ -94,9 +95,14 @@ final class SpaceSpeakerWatcher {
     }
 
     /// One frame: capture the window, find the rings, read the names under them, vote.
-    func lookOnce() async {
+    /// `savingTo`: test use only (`ownAccountLook {path}`), the frame is also written there as a PNG.
+    func lookOnce(savingTo fileURL: URL? = nil) async {
         let capturedAt = Date()
         guard let image = await captureWindow() else { return }
+        if let fileURL, let destination = CGImageDestinationCreateWithURL(fileURL as CFURL, "public.png" as CFString, 1, nil) {
+            CGImageDestinationAddImage(destination, image, nil)
+            CGImageDestinationFinalize(destination)
+        }
         captureSeconds = Date().timeIntervalSince(capturedAt)
         framesLooked += 1
         let analysisStarted = Date()
