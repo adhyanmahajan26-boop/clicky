@@ -209,7 +209,7 @@ final class TheoGateway {
             let names = Dictionary(store.bots.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             send(connection, status: 200, ["days": days, "bots": BotUsage.shared.report(days: min(400, max(1, days)), names: names)])
         case .doctor:
-            send(connection, status: 200, ["findings": store.doctorFindings().map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail] }])
+            send(connection, status: 200, ["findings": store.doctorFindings().map { ["level": $0.level.rawValue, "check": $0.check, "detail": $0.detail, "fix": ($0.fix?.wire as Any?) ?? NSNull()] as [String: Any] }])
         case .notFound:
             send(connection, status: 404, ["error": "Not found"])
         case .methodNotAllowed:

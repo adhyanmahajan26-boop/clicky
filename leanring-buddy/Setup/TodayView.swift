@@ -40,6 +40,8 @@ struct TodayView: View {
                     Text(products.isOn(.clicky) ? "Say \u{201C}hey \(ClickySettings.assistantName)\u{201D} for Pointer Assistant, or open a bot on the left." : "Open a bot on the left. Pointer Assistant is off; turn it on in Settings \u{203A} Products.")
                         .font(.system(size: 14)).foregroundColor(DS.Colors.textSecondary)
                 }
+                // Anything this Mac still needs (a brain, a permission, an app to sign in to here, an update), each with its button.
+                FinishSetupCard(selection: selection)
                 // What needs you and what failed come first, as cards you can answer right here.
                 HomeLanes(store: store, selection: selection)
                 section("Your team") {
@@ -134,7 +136,12 @@ struct TodayView: View {
         }
         .background(DS.Colors.background)
         .task { notes = await ClaudiaLibrary.itemsWithoutBlocking() }
-        .onAppear { if !facesKeyShown && !TheoProfile.isTest && ClickySettings.isSetupCompleted { showsFacesKey = true } }
+        .onAppear {
+            if !facesKeyShown && !TheoProfile.isTest && ClickySettings.isSetupCompleted { showsFacesKey = true }
+            TheoHealth.shared.refreshIfStale()
+        }
+        // The Connectors page's last look changed (a sign-in, an app from the other Mac): Home's card follows.
+        .onReceive(ConnectorHealth.shared.$hubApps) { _ in TheoHealth.shared.refresh() }
         .sheet(isPresented: $showsFacesKey) {
             FacesKeyView {
                 facesKeyShown = true

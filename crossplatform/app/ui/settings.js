@@ -31,7 +31,11 @@ function settingRowHTML(title, detail, act, extraClass = "") {
 async function renderSettingsPage() {
   const [doc, gw, st] = await Promise.all([invoke({ cmd: "doctor" }), invoke({ cmd: "gateway" }), invoke({ cmd: "status" })]);
   if (view.kind !== "settings") return;
-  const rows = (doc.result.findings || []).map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}</div>`).join("");
+  // Problems first, each with its button (the Mac's Settings › Health): "settings:<id>" jumps there, "connectors" opens Connectors.
+  const rank = { fail: 0, warn: 1, ok: 2 };
+  const findings = (doc.result.findings || []).map((x, i) => [x, i]).sort((a, b) => (rank[a[0].level] - rank[b[0].level]) || (a[1] - b[1])).map(([x]) => x);
+  const fixButton = (x) => x.fix ? `<span class="act"><button class="btn sm${x.level === "fail" ? " primary" : ""}" data-health-fix="${esc(x.fix)}">${x.fix === "connectors" ? "Open Connectors" : "Fix"}</button></span>` : "";
+  const rows = findings.map((x) => `<div class="crow"><span class="tx"><b>${esc(x.check)}</b><small style="white-space:normal">${esc(x.detail)}</small></span>${TP.pill(x.level === "ok" ? "ok" : x.level === "warn" ? "needs" : "failed", x.level === "ok" ? "OK" : x.level === "warn" ? "Needs you" : "Failed")}${fixButton(x)}</div>`).join("");
   const g = gw.result;
   const s = st.result;
   const section = (id, body) => {
@@ -66,6 +70,11 @@ async function renderSettingsPage() {
     + `</div></div>`;
   const pane = $("#pane");
   pane.querySelectorAll("[data-jump]").forEach((b) => b.onclick = () => settingsJump(b.dataset.jump));
+  pane.querySelectorAll("[data-health-fix]").forEach((b) => b.onclick = () => {
+    const fix = b.dataset.healthFix;
+    if (fix === "connectors") open({ kind: "connectors" });
+    else if (fix.startsWith("settings:")) settingsJump(fix.slice("settings:".length));
+  });
   pane.querySelector("[data-open-connectors]").onclick = () => open({ kind: "connectors" });
   pane.querySelector("[data-setup-again]").onclick = () => startSetup({ again: true });
   pane.querySelectorAll("[data-turn-on]").forEach((b) => b.onclick = async () => { await setProduct(b.dataset.turnOn, true); renderSettingsPage(); });

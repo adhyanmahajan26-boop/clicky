@@ -391,11 +391,68 @@ public struct TheoDoctorFinding: Equatable, Sendable {
     public var level: Level
     public var check: String
     public var detail: String
+    /// What one click does about it (Settings › Health and Home's "Finish setting up"). Nil: nothing to press.
+    public var fix: TheoDoctorFix?
 
-    public init(_ level: Level, _ check: String, _ detail: String) {
+    public init(_ level: Level, _ check: String, _ detail: String, fix: TheoDoctorFix? = nil) {
         self.level = level
         self.check = check
         self.detail = detail
+        self.fix = level == .ok ? nil : fix
+    }
+}
+
+/// The button beside a problem, like `openclaw doctor --fix` but one problem at a time and only when pressed.
+public enum TheoDoctorFix: Equatable, Sendable {
+    /// Opens a Settings page by its section id ("keys", "coding", "permissions", "link", …).
+    case openSettings(section: String)
+    /// Asks macOS for a privilege, or opens its page in System Settings: "accessibility", "screenRecording", "microphone".
+    case askPermission(String)
+    /// Signs in to one app on the Connectors list, on this computer.
+    case signInApp(id: String)
+    /// Opens the Connectors page.
+    case openConnectors
+    /// Installs the update that's ready.
+    case installUpdate
+
+    public var buttonTitle: String {
+        switch self {
+        case .openSettings(let section):
+            switch section {
+            case "keys": return "Add key"
+            case "coding": return "Set up"
+            case "link": return "Open"
+            default: return "Open"
+            }
+        case .askPermission: return "Allow"
+        case .signInApp: return "Sign in"
+        case .openConnectors: return "Open Connectors"
+        case .installUpdate: return "Update"
+        }
+    }
+
+    /// One word for the control inbox and the local API: "settings:keys", "permission:microphone", "app:gmail", "connectors", "update".
+    public var wire: String {
+        switch self {
+        case .openSettings(let section): return "settings:" + section
+        case .askPermission(let kind): return "permission:" + kind
+        case .signInApp(let id): return "app:" + id
+        case .openConnectors: return "connectors"
+        case .installUpdate: return "update"
+        }
+    }
+
+    public init?(wire: String) {
+        if wire == "connectors" { self = .openConnectors; return }
+        if wire == "update" { self = .installUpdate; return }
+        let parts = wire.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[1].isEmpty else { return nil }
+        switch parts[0] {
+        case "settings": self = .openSettings(section: parts[1])
+        case "permission": self = .askPermission(parts[1])
+        case "app": self = .signInApp(id: parts[1])
+        default: return nil
+        }
     }
 }
 
@@ -409,7 +466,20 @@ public enum TheoDoctor {
         let head = fails + warns == 0 ? "Vello's health check: all \(findings.count) checks pass." :
             "Vello's health check: \(fails) problem\(fails == 1 ? "" : "s") and \(warns) warning\(warns == 1 ? "" : "s") out of \(findings.count) checks."
         let mark: [TheoDoctorFinding.Level: String] = [.ok: "✓", .warn: "!", .fail: "✗"]
-        return head + "\n\n" + sorted.map { "\(mark[$0.level]!) **\($0.check)**: \($0.detail)" }.joined(separator: "\n")
+        let foot = sorted.contains { $0.fix != nil } ? "\n\nEach one has a button in Settings › Health." : ""
+        return head + "\n\n" + sorted.map { "\(mark[$0.level]!) **\($0.check)**: \($0.detail)" }.joined(separator: "\n") + foot
+    }
+
+    /// What's left to set up: problems first, then warnings, each only once and only the ones with a button.
+    public static func leftToSetUp(_ findings: [TheoDoctorFinding]) -> [TheoDoctorFinding] {
+        let withFix = findings.filter { $0.level != .ok && $0.fix != nil }
+        var seen = Set<String>()
+        return (withFix.filter { $0.level == .fail } + withFix.filter { $0.level == .warn }).filter { seen.insert($0.check).inserted }
+    }
+
+    /// Home's card title: "1 thing left to set up", "3 things left to set up".
+    public static func leftToSetUpTitle(count: Int) -> String {
+        "\(count) thing\(count == 1 ? "" : "s") left to set up"
     }
 
     public static func asksForDoctor(_ text: String) -> Bool {
