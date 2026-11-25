@@ -119,9 +119,9 @@ struct SignReadingTests {
         #expect(!facts.looksLikeFingerSpelling(settings: settings))
 
         facts = Self.spellingFacts
-        facts.busierHandWristTravelInBodySizes = 0.6
+        facts.busierHandWristTravelInBodySizes = 1.5
         #expect(facts.looksLikeFingerSpelling(settings: settings))
-        facts.busierHandWristTravelInBodySizes = 0.61
+        facts.busierHandWristTravelInBodySizes = 1.51
         #expect(!facts.looksLikeFingerSpelling(settings: settings))
 
         facts = Self.spellingFacts
@@ -145,7 +145,7 @@ struct SignReadingTests {
         labelsAndProbabilities.map { SignWordGuess(label: $0.0, probability: $0.1) }
     }
 
-    private static let confidentSpelling = SignSpelledGuess(text: "bob", confidence: 0.7)
+    private static let confidentSpelling = SignSpelledGuess(text: "bob", confidence: 0.9)
 
     @Test func fingerSpellingWinsWhenEverythingPointsToIt() {
         let token = SignStretchReading.token(
@@ -153,7 +153,7 @@ struct SignReadingTests {
             spelling: Self.confidentSpelling,
             facts: Self.spellingFacts
         )
-        #expect(token == .spelled(text: "bob", confidence: 0.7))
+        #expect(token == .spelled(text: "bob", confidence: 0.9))
         #expect(token?.text == "bob")
     }
 
@@ -175,13 +175,13 @@ struct SignReadingTests {
     @Test func fingerSpellingNeedsEnoughConfidence() {
         let atTheLeast = SignStretchReading.token(
             wordGuesses: Self.guesses([("hello", 0.4)]),
-            spelling: SignSpelledGuess(text: "bob", confidence: 0.7),
+            spelling: SignSpelledGuess(text: "bob", confidence: 0.85),
             facts: Self.spellingFacts
         )
-        #expect(atTheLeast == .spelled(text: "bob", confidence: 0.7))
+        #expect(atTheLeast == .spelled(text: "bob", confidence: 0.85))
         let underIt = SignStretchReading.token(
             wordGuesses: Self.guesses([("hello", 0.4)]),
-            spelling: SignSpelledGuess(text: "bob", confidence: 0.69),
+            spelling: SignSpelledGuess(text: "bob", confidence: 0.84),
             facts: Self.spellingFacts
         )
         #expect(underIt?.text == "hello")

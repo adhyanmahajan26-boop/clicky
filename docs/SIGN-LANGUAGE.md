@@ -103,17 +103,19 @@ PopSign and FSboard split their recordings by person, so every ASL number here i
 | What | Measured on | Result |
 | --- | --- | --- |
 | Word model, whole clip (Python) | PopSign's 10 test signers, 4,477 clips of the 562 signs (sweep 1: 24 train / 4 val / 8 test clips a sign) | 76.4% right first guess, 94.4% in the top 5 |
-| **Words as the app reads them** (both ASL models running, threshold 0.95) | The same clips read as the camera would (`sign-eval clips`) | **Answers 45.6% of signs (the rest show "?") and is right on 91.4% of those it answers**; 1.8% of signs are read as a spelled word |
+| **Words as the app reads them** (both ASL models running, threshold 0.95) | The same clips read as the camera would (`sign-eval clips`) | **Answers 45.3% of signs (the rest show "?") and is right on 92.1% of those it answers** |
 | Words, word model alone | The same clips | Threshold off: 71.7% right (the stretch finder finds no sign in 1.5% of PopSign's game clips and splits 5.5% in two); threshold on: 44.4% answered, 93.8% right when answered |
 | With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (12,088 taught and 1,343 never-taught test clips) | Taught signs: 43% answered, 96.4% right when answered; never-taught signs wrongly given a word 9.2% of the time |
 | Finger-spelling, whole clip (Python) | FSboard's 15 test signers, 600 phrases (addresses, phone numbers, web addresses, names) | 7.2% of characters wrong |
-| **Finger-spelling as the app reads it** | The same 600 phrases (`sign-eval clips`, both ASL models) | 33.4% of characters wrong, 37.8% of phrases exactly right: the stretch finder splits long phrases at pauses and some parts are read as signs |
+| **Finger-spelling as the app reads it** | The same 600 phrases (`sign-eval clips`, both ASL models) | **11.7% of characters wrong, 48.2% of phrases exactly right**; most of the rest of the gap to 7.2% is the 6% of phrases cut into more than one stretch at a pause |
 
 When a stretch counts as finger-spelling was tuned on the validation signers only (PopSign val for signs wrongly read
-as spelling, FSboard val for spelling read as signs): a spelled stretch must last at least 1 second and be at least
-70% sure (before: 0.6 s and 50%). On the test signers that took words from 48.8% answered / 85.3% right to 45.6% /
-91.4%, with finger-spelling unchanged (33.2% → 33.4% of characters wrong, 37.8% of phrases exactly right both times)
-and ISL unchanged.
+as spelling, FSboard val for spelling read as signs). A stretch is now read by the spelling model when one hand is up
+and its wrist travels up to 1.5 body sizes (was 0.6: a long phrase drifts across as it is spelled, so a fifth of
+FSboard's phrases never reached the spelling model and showed "?"); the spelling then wins only if it lasts at least
+1 second and is at least 85% sure (was 0.6 s and 50%). On the test signers that took finger-spelling from 33.4% to
+11.7% of characters wrong (37.8% to 48.2% of phrases exactly right), ASL words from 48.8% answered / 85.3% right to
+45.3% / 92.1%, and left ISL unchanged (78.9% answered / 98.4% right; built streams 7.5% word error rate).
 
 What ASL can't read: signs outside PopSign's 562 (a vocabulary chosen for a children's game, so many everyday
 words are missing); sentences (no ASL sentence model: each stretch is one sign); facial grammar; and it was trained

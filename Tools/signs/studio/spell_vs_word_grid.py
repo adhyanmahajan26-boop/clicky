@@ -32,8 +32,24 @@ for folder in (P, F):
         truth[r["clip_id"]] = r["label"]
 words = {w.lower().replace("_", " ") for w in labels} | {w.lower() for w in labels}
 print("seconds\tconfidence\twordBeats\tpopsign_answered\tpopsign_right\tpopsign_read_as_spelling\tfsboard_cer\tfsboard_exact", flush=True)
-for seconds, confidence, beats in grid:
-    settings = {"shortestSpellingSeconds": seconds, "leastSpellingConfidence": confidence, "wordProbabilityThatBeatsSpelling": beats}
+import os
+GATE = os.environ.get("GATE") == "1"
+SETTINGS = json.loads(os.environ["SETTINGS"]) if os.environ.get("SETTINGS") else None
+if SETTINGS:
+    grid = SETTINGS
+    print("settings", flush=True)
+if GATE:
+    grid = list(itertools.product([0.6, 1.0, 1.5, 3.0], [0.15, 0.3, 0.5], [0.8, 0.6])) if len(sys.argv) <= 2 else [tuple(json.loads(a)) for a in sys.argv[2:]]
+    print("travel\totherHand\tspellHand\t", flush=True)
+for combo in grid:
+    if SETTINGS:
+        settings = combo; seconds, confidence, beats = json.dumps(combo), "", ""
+    elif GATE:
+        settings = {"mostSpellingWristTravelInBodySizes": combo[0], "mostShareOfFramesWithTheOtherHand": combo[1], "leastShareOfFramesWithTheSpellingHand": combo[2]}
+        seconds, confidence, beats = combo
+    else:
+        seconds, confidence, beats = combo
+        settings = {"shortestSpellingSeconds": seconds, "leastSpellingConfidence": confidence, "wordProbabilityThatBeatsSpelling": beats}
     p_answered, p_right = run(P, settings, "/tmp/grid_p.tsv")
     spelled = total = 0
     for line in open("/tmp/grid_p.tsv"):

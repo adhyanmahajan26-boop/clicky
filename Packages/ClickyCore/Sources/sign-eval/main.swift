@@ -69,6 +69,9 @@ struct EvaluationOptions {
     /// `--reads <file>`: clips also writes, per clip, `clip_id<TAB>what was read` (words, ? for unclear), for
     /// measuring against labels sign-eval can't compare itself (an English sentence for a continuous clip).
     var readsOutputPath: String?
+    /// `--stretches <file>`: clips also writes one line per stretch read (times, kind, text, the spelling model's guess
+    /// and confidence, the top word's probability), to see where a clip was cut.
+    var stretchesOutputPath: String?
 }
 
 /// Sets one stretch-finding number by name, as `--stretch` gives it. Unknown names stop the run.
@@ -106,6 +109,7 @@ func applyReadingSetting(_ assignment: String, to settings: inout SignReadingSet
     case "wordProbabilityThatBeatsSpelling": settings.wordProbabilityThatBeatsSpelling = Float(value)
     case "leastShareOfFramesWithTheSpellingHand": settings.leastShareOfFramesWithTheSpellingHand = value
     case "mostSpellingWristTravelInBodySizes": settings.mostSpellingWristTravelInBodySizes = value
+    case "mostShareOfFramesWithTheOtherHand": settings.mostShareOfFramesWithTheOtherHand = value
     case "shortestSpellingSeconds": settings.shortestSpellingSeconds = value
     default:
         print("unknown reading setting \(parts[0])")
@@ -129,6 +133,9 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
     var usesSentenceModel = true
     var readingSettings = SignReadingSettings()
     var readsOutputPath: String?
+    /// `--stretches <file>`: clips also writes one line per stretch read (times, kind, text, the spelling model's guess
+    /// and confidence, the top word's probability), to see where a clip was cut.
+    var stretchesOutputPath: String?
     var argumentIndex = 1
     func nextValue() -> String {
         argumentIndex += 1
@@ -156,6 +163,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
             seed = parsedSeed
         case "--no-sentence-model": usesSentenceModel = false
         case "--reads": readsOutputPath = nextValue()
+        case "--stretches": stretchesOutputPath = nextValue()
         case "--least-sentence-confidence":
             guard let parsedConfidence = Float(nextValue()) else { printUsageAndExit() }
             readingSettings.leastSentenceWordConfidence = parsedConfidence
@@ -190,7 +198,8 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         seed: seed,
         usesSentenceModel: usesSentenceModel,
         readingSettings: readingSettings,
-        readsOutputPath: readsOutputPath
+        readsOutputPath: readsOutputPath,
+        stretchesOutputPath: stretchesOutputPath
     )
 }
 
@@ -378,6 +387,7 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
     var clipsReadAsMoreThanOneSign = 0
     var mixUpCounts: [String: Int] = [:]
     var readLines: [String] = []
+    var stretchLines: [String] = ["clip_id\tframes\tfps\tindex\tstart\tend\tkind\ttext\tspelling\tspelling_confidence\ttop_word_probability"]
     let startTime = Date()
 
     for row in rows {
@@ -395,6 +405,12 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
 
         let line = SignedLine(tokens: entries.compactMap { $0.token })
         readLines.append("\(row.clipID)\t\(entries.map { $0.displayText }.joined(separator: " "))")
+        for (index, entry) in entries.enumerated() {
+            let topWord = entry.wordGuesses.map(\.probability).max() ?? 0
+            stretchLines.append([row.clipID, String(frames.count), String(framesPerSecond), String(index), String(format: "%.3f", entry.startTime),
+                                 String(format: "%.3f", entry.endTime), entry.kind.rawValue, entry.displayText, entry.spelling?.text ?? "",
+                                 String(format: "%.3f", entry.spelling?.confidence ?? 0), String(format: "%.3f", topWord)].joined(separator: "\t"))
+        }
         if entries.count > 1 { clipsReadAsMoreThanOneSign += 1 }
         if line.isEmpty {
             if entries.isEmpty {
@@ -413,6 +429,9 @@ func evaluateClips(options: EvaluationOptions, scorer: SignCoreMLScorer) throws 
         }
     }
 
+    if let stretchesOutputPath = options.stretchesOutputPath {
+        try (stretchLines.joined(separator: "\n") + "\n").write(toFile: (stretchesOutputPath as NSString).expandingTildeInPath, atomically: true, encoding: .utf8)
+    }
     if let readsOutputPath = options.readsOutputPath {
         try (readLines.joined(separator: "\n") + "\n").write(toFile: (readsOutputPath as NSString).expandingTildeInPath, atomically: true, encoding: .utf8)
     }

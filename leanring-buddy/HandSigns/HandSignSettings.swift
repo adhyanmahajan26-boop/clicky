@@ -127,7 +127,7 @@ struct HandSignSettingsSection: View {
         case .isl:
             return "Reads 261 ISL signs and short runs of them. So far it has only been shown to work for the signers it learned from, so expect it to show ? often."
         case .asl:
-            return "Reads 562 ASL signs, one at a time, and finger-spelling. On people it never saw it answers a little under half of signs and is right on about 9 in 10 of those, so expect it to show ? often."
+            return "Reads 562 ASL signs, one at a time, and finger-spelling. On people it never saw it answers a little under half of signs and is right on about 9 in 10 of those, and gets about 9 in 10 finger-spelled letters right. Expect it to show ? often."
         }
     }
 
