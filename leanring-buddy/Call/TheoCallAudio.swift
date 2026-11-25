@@ -8,6 +8,9 @@
 //
 //  In the test profile there's no mic: a sound file goes in through `feed` and the voice plays at zero volume.
 //
+//  A Space on Vello's own X account has no mic either: it hears only the bot's browser (`BotBrowserAudioTap`) and speaks
+//  to the virtual mic (`DeviceVoicePlayer` on BlackHole), and to this Mac's speakers too when the owner wants to listen.
+//
 
 import AudioToolbox
 import AVFoundation
@@ -242,6 +245,16 @@ final class CallAudio {
     private var scheduled = 0
     private var segmentOpen = false
     private(set) var isOpen = false
+    /// A Space on Vello's own X account: what it hears and where its voice goes.
+    private let ownAccount: XAccountSetup?
+    private var browserTap: BotBrowserAudioTap?
+    private var browserScreenAudio: BotBrowserScreenAudio?
+    private var virtualMic: DeviceVoicePlayer?
+    private var monitor: DeviceVoicePlayer?
+    private var monitorSegmentOpen = false
+    /// In own-account mode: why the voice can't reach the Space (no BlackHole), or the hearing can't start.
+    private(set) var ownAccountProblem: String?
+    var onOwnAccountProblem: ((String) -> Void)?
 
     /// Mic blocks, on the main actor.
     var onBlock: ((CallAudioBlock) -> Void)?
@@ -250,10 +263,14 @@ final class CallAudio {
     /// How loud the voice is right now, for the avatar.
     private(set) var voiceLevel: CGFloat = 0
 
-    init(hub: AudioEngineHub, isLive: Bool) {
+    init(hub: AudioEngineHub, isLive: Bool, ownAccount: XAccountSetup? = nil) {
         self.hub = hub
         self.isLive = isLive
-        if isLive {
+        self.ownAccount = ownAccount
+        if ownAccount != nil {
+            // Its own player on its own engine: the hub's echo-cancelling engine and the Mac's speakers stay out of it.
+            channel = SharedEnginePlayerChannel()
+        } else if isLive {
             // One player for every call: the hub keeps each channel it makes.
             let shared = Self.liveChannel ?? hub.makePlayerChannel()
             Self.liveChannel = shared
@@ -270,7 +287,9 @@ final class CallAudio {
 
     func open() throws {
         guard !isOpen else { return }
-        if isLive {
+        if let ownAccount {
+            openOwnAccount(ownAccount)
+        } else if isLive {
             let converter = self.converter
             do {
                 _ = try hub.startVoiceProcessingCapture(keepsDistanceInLoudness: true) { buffer, _ in converter.append(buffer) }
@@ -303,8 +322,82 @@ final class CallAudio {
         plainEngine = engine
     }
 
+    /// Hearing the bot's browser and speaking to the virtual mic. Either can fail on its own (no BlackHole yet): the call
+    /// still runs, and says why.
+    private func openOwnAccount(_ setup: XAccountSetup) {
+        if let deviceUID = setup.outputDeviceUID {
+            let player = DeviceVoicePlayer(channel: channel)
+            do {
+                try player.start(deviceUID: deviceUID, fullVolume: true)
+                virtualMic = player
+                callLog("📞 Space: Vello's voice goes to \(player.deviceName)")
+            } catch {
+                reportOwnAccountProblem("Vello's voice can't reach the Space: \(error.localizedDescription)")
+            }
+        } else {
+            reportOwnAccountProblem("BlackHole isn't installed, so the Space can't hear Vello. Install BlackHole 2ch and pick it in Settings › Voice › Vello's X account.")
+        }
+        if setup.monitors {
+            let player = DeviceVoicePlayer(channel: SharedEnginePlayerChannel())
+            do {
+                try player.start(deviceUID: nil, fullVolume: false)
+                monitor = player
+            } catch {
+                callLog("📞 Space: couldn't also play Vello on this Mac: \(error.localizedDescription)")
+            }
+        }
+        guard let browser = setup.browser else {
+            reportOwnAccountProblem("No bot's browser is picked, so Vello can't hear the Space.")
+            return
+        }
+        let converter = self.converter
+        switch BotBrowserHearing.method {
+        case .processTap:
+            let tap = BotBrowserAudioTap(browserBundleID: browser.bundleID, browserAppPath: setup.browserAppURL?.path)
+            tap.onSamples = { buffer in converter.append(buffer) }
+            tap.onProblem = { [weak self] message in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.reportOwnAccountProblem(message) } }
+            }
+            tap.start()
+            browserTap = tap
+        case .screenCapture:
+            let screenAudio = BotBrowserScreenAudio(browserBundleID: browser.bundleID, browserAppPath: setup.browserAppURL?.path)
+            screenAudio.onSamples = { buffer in converter.append(buffer) }
+            screenAudio.onProblem = { [weak self] message in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.reportOwnAccountProblem(message) } }
+            }
+            browserScreenAudio = screenAudio
+            Task { await screenAudio.start() }
+            callLog("📞 Space: hearing the bot's browser through screen capture audio")
+        }
+    }
+
+    private func reportOwnAccountProblem(_ message: String) {
+        ownAccountProblem = message
+        callLog("📞 Space: \(message)")
+        onOwnAccountProblem?(message)
+    }
+
+    /// What the own-account sound is doing, for `ownAccountStatus`.
+    var ownAccountReport: [String: Any] {
+        ["hearingMethod": BotBrowserHearing.method.rawValue,
+         "hearing": browserTap?.tappedProcessNames ?? browserScreenAudio?.capturedAppNames ?? [],
+         "buffersHeard": browserTap?.buffersHeard ?? browserScreenAudio?.buffersHeard ?? 0,
+         "loudestHeardDecibels": browserTap?.loudestDecibels ?? browserScreenAudio?.loudestDecibels ?? -100,
+         "hearingProblem": browserTap?.lastError ?? browserScreenAudio?.lastError ?? "",
+         "voiceDevice": virtualMic?.deviceName ?? "", "monitor": monitor != nil, "problem": ownAccountProblem ?? ""]
+    }
+
     func close() {
         stopVoice()
+        browserTap?.stop()
+        browserTap = nil
+        browserScreenAudio?.stop()
+        browserScreenAudio = nil
+        virtualMic?.stop()
+        virtualMic = nil
+        monitor?.stop()
+        monitor = nil
         if isEchoCancelled { hub.stopVoiceProcessingCapture() }
         plainEngine?.inputNode.removeTap(onBus: 0)
         plainEngine?.stop()
@@ -329,6 +422,14 @@ final class CallAudio {
         let turn = generation
         scheduled += 1
         voiceLevel = Self.level(of: buffer)
+        // The owner listening along on this Mac: the same voice, on its own player, not counted for when the turn ends.
+        if let monitor {
+            if !monitorSegmentOpen {
+                monitor.channel.startSegment(rate: 1)
+                monitorSegmentOpen = true
+            }
+            _ = monitor.channel.schedule(buffer) {}
+        }
         let accepted = channel.schedule(buffer) { [weak self] in
             guard let self, self.generation == turn else { return }
             self.scheduled -= 1
@@ -350,6 +451,8 @@ final class CallAudio {
         segmentOpen = false
         voiceLevel = 0
         channel.stop()
+        monitorSegmentOpen = false
+        monitor?.channel.stop()
     }
 
     private static func level(of buffer: AVAudioPCMBuffer) -> CGFloat {

@@ -155,6 +155,22 @@ enum CallPrompt {
                                        recentChat: Array(recent), carriedOverLimit: carriedOverCharacters)
     }
 
+    /// A Space on Vello's own X account: Vello's persona and the Space's rules, and nothing from the owner's chats, team,
+    /// runs or memory, since everything it knows it could say in public (ClickyCore `CallOwnAccount`).
+    @MainActor
+    static func ownAccount(store: BotsStore, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+        let theo = store.primary
+        let fixedLanguage: String?
+        switch language {
+        case .english: fixedLanguage = "English"
+        case .hindi: fixedLanguage = "Hindi, in Devanagari"
+        case .auto, .hinglish: fixedLanguage = nil
+        }
+        let rule = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: language.meansHinglish ? usesSarvamVoice : nil, fixedLanguage: fixedLanguage)
+        return CallOwnAccount.systemPrompt(personaHead: theo?.personaHead ?? "You are Vello.", handle: handle, owner: BotPrompts.ownerName,
+                                           botName: theo?.name ?? "Vello", languageRule: rule)
+    }
+
     /// Which language to answer in.
     static func languageRule(owner: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
         switch language {
@@ -270,7 +286,19 @@ final class TheoCallSession: ObservableObject {
     /// lines are marked by who they sounded like, other people's words never throw an answer away, and Vello answers only
     /// when spoken to or when it has something to add.
     @Published private(set) var isGroupMode = false
+    /// In a Space on Vello's own X account, who the Space's screen shows talking now (`SpaceSpeakerWatcher`).
+    @Published private(set) var currentSpeaker: String?
     let startedAt = Date()
+    /// A Space joined on Vello's own X account: heard only from the bot's browser, spoken into its virtual mic, in group
+    /// mode for good, with nobody at the mic counted as the owner (ClickyCore `CallOwnAccount`).
+    let ownAccount: XAccountSetup?
+    var isOwnAccount: Bool { ownAccount != nil }
+    /// Vello's call controls (its hands on the screen, orders, routines, switches): only on its own call with the owner.
+    /// In a Space on its own account everyone it hears is a stranger, so it only talks.
+    private var hasCallControls: Bool { isVellosOwnBot && !isOwnAccount }
+    private var speakerWatcher: SpaceSpeakerWatcher?
+    /// When the last words were given a speaker: the next words' name is the one seen most since then.
+    private var wordsLastNamedAt: Date?
 
     private let audio: CallAudio
     private let isLive: Bool
@@ -386,11 +414,13 @@ final class TheoCallSession: ObservableObject {
     private var turnPassed = false
 
     /// `botID` nil, or Vello's own bot's id: the call with Vello. Any other bot: a call with that bot.
-    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil) {
+    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil, ownAccount: XAccountSetup? = nil) {
         self.store = store
         self.isLive = isLive
-        audio = CallAudio(hub: hub, isLive: isLive)
-        if let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
+        self.ownAccount = ownAccount
+        audio = CallAudio(hub: hub, isLive: isLive, ownAccount: ownAccount)
+        // A Space on Vello's own account is always Vello's own bot.
+        if ownAccount == nil, let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
             bot = chosen
             isVellosOwnBot = false
         } else {
@@ -407,14 +437,30 @@ final class TheoCallSession: ObservableObject {
         liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with \(botName)")
         audio.onBlock = { [weak self] block in self?.handle(block) }
         audio.onDrained = { [weak self] in self?.voiceDrained() }
+        audio.onOwnAccountProblem = { [weak self] message in self?.problem = message }
         do {
             try audio.open()
         } catch {
             problem = "The microphone didn't start."
             callLog("📞 Call audio: \(error)")
         }
-        // Theo's voice reaches the mic with no echo cancelling: it takes a much louder voice to count as a cut-in.
-        if isLive && !audio.isEchoCancelled { gate.bargeInMarginDecibels = 34 }
+        if let ownAccount {
+            problem = audio.ownAccountProblem
+            if let browser = ownAccount.browser {
+                let watcher = SpaceSpeakerWatcher(browserBundleID: browser.bundleID, handle: ownAccount.handle, botName: botName)
+                watcher.onCurrentSpeaker = { [weak self] name in
+                    if self?.currentSpeaker != name { self?.currentSpeaker = name }
+                }
+                speakerWatcher = watcher
+                // The first look loads Vision and finds the window, which took 17 s on the Studio: done now, while the
+                // Space is quiet, so the first speaker is named.
+                Task { await watcher.lookOnce() }
+            }
+            callLog("📞 Space: joined as \(ownAccount.handle.isEmpty ? "Vello's own account" : ownAccount.handle), hearing \(ownAccount.browser?.name ?? "no browser")")
+        }
+        // Theo's voice reaches the mic with no echo cancelling: it takes a much louder voice to count as a cut-in. The
+        // bot's browser never hears Vello's voice, so a Space on its own account needs no margin.
+        if isLive && !audio.isEchoCancelled && !isOwnAccount { gate.bargeInMarginDecibels = 34 }
         startVoice()
         startEars()
         // Any other bot thinks with its own engine and model. One that can't take a call says why and what fixes it.
@@ -433,9 +479,10 @@ final class TheoCallSession: ObservableObject {
             }
         }
         brainNameForWords = BrainAvailability.name(of: brainSetting)
-        // The call starts with as much of the chat as its brain has room for.
-        let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
-                                       carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
+        // The call starts with as much of the chat as its brain has room for. A public Space gets none of it.
+        let prompt = ownAccount.map { CallPrompt.ownAccount(store: store, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language) }
+            ?? CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
+                                 carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
         let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
                                             promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low")
         brain.onEnded = { [weak self] message in self?.problem = message }
@@ -446,6 +493,13 @@ final class TheoCallSession: ObservableObject {
             problem = error.localizedDescription
         }
         state = .listening
+        if isOwnAccount {
+            // Group mode for good. No hello: Vello may not be a speaker yet, and nobody asked. A first turn it lets pass
+            // warms up the brain, so the first answer in the Space is as quick as the rest.
+            setGroupMode(true)
+            ask("(You just joined the Space. Nobody has spoken to you yet: write only \(CallGroupMode.passMarker).)")
+            return
+        }
         // Called with "hey vello, …": the words said with the name are the first turn, answered straight away.
         if !openingWords.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             takeWordsSaidBeforeTheCall(openingWords)
@@ -473,7 +527,8 @@ final class TheoCallSession: ObservableObject {
         state = .ended
         heldTurnTask?.cancel()
         screenTurnPump?.cancel()
-        if isVellosOwnBot { CompanionManager.current?.actionTaskController.endCallTask() }
+        speakerWatcher?.stop()
+        if hasCallControls { CompanionManager.current?.actionTaskController.endCallTask() }
         if let liveActivity { ProcessInfo.processInfo.endActivity(liveActivity) }
         liveActivity = nil
         ears?.stop()
@@ -481,7 +536,7 @@ final class TheoCallSession: ObservableObject {
         brain?.stop()
         audio.close()
         store.recordCall(lines.filter { !$0.text.isEmpty }.map { line in
-                             let prefix = line.wasOnlyHeard ? "(heard in listen mode) " : (line.isGroupTalk ? "(in the group) " : "")
+                             let prefix = line.wasOnlyHeard ? "(heard in listen mode) " : (line.isGroupTalk ? (isOwnAccount ? "(in the X Space) " : "(in the group) ") : "")
                              return (line.who == .addy, prefix + line.text)
                          },
                          startedAt: startedAt, botID: isVellosOwnBot ? nil : bot?.id)
@@ -608,7 +663,9 @@ final class TheoCallSession: ObservableObject {
             return
         }
         micLevel = CGFloat(min(max((block.levelDecibels + 55) / 40, 0), 1))
-        let voiceIsOn = state == .speaking || audio.isVoicePlaying
+        // The bot's browser never hears Vello's own voice, so in a Space on its own account the gate needn't wait for a
+        // voice above it.
+        let voiceIsOn = (state == .speaking || audio.isVoicePlaying) && !isOwnAccount
         let now = Date()
         recentBlockLevels.append(block.levelDecibels)
         if recentBlockLevels.count > Self.onsetBlockCount { recentBlockLevels.removeFirst(recentBlockLevels.count - Self.onsetBlockCount) }
@@ -618,7 +675,8 @@ final class TheoCallSession: ObservableObject {
         switch event {
         case .speechStarted:
             stretchBlockLevels = recentBlockLevels
-            stretchSoundsLikeOwner = nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
+            // On its own account nobody heard is the owner, however loud.
+            stretchSoundsLikeOwner = !isOwnAccount && nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
             // In group mode every voice counts: the other people in the Space come out of a phone's speaker well below the
             // owner's level, and turning them away left Vello deaf to everyone but the owner (Air, 24 Nov).
             stretchIsNear = !nearVoiceOnly || isGroupMode || stretchSoundsLikeOwner
@@ -631,7 +689,7 @@ final class TheoCallSession: ObservableObject {
         case .speechEnded, nil:
             if gate.isSpeaking { stretchBlockLevels.append(block.levelDecibels) }
             // Someone far away was talking and the owner joined in, louder: from here it's the owner's.
-            if gate.isSpeaking, !stretchSoundsLikeOwner, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
+            if gate.isSpeaking, !isOwnAccount, !stretchSoundsLikeOwner, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
                 stretchSoundsLikeOwner = true
                 if !stretchIsNear {
                     stretchIsNear = true
@@ -644,6 +702,8 @@ final class TheoCallSession: ObservableObject {
         if isOwnerSpeaking && isTheOwnersOwnVoice { nearVoice.heardNearSpeech(at: now) }
         // The ears get the audio before the event is acted on, so the first words aren't missing.
         ears?.feed(block, isSpeech: isOwnerSpeaking)
+        // Who's talking is looked for on the Space's screen only while someone is.
+        speakerWatcher?.setSpeechGoingOn(gate.isSpeaking)
         if ownerStartedTalking { speechStarted() }
         if event == .speechEnded {
             let wasTheOwner = stretchIsNear
@@ -729,7 +789,7 @@ final class TheoCallSession: ObservableObject {
         if replyInProgress { brain?.interrupt() }
         replyInProgress = false
         // A screen turn cut off before its steps came: the task isn't left waiting for an answer that won't arrive.
-        if screenReplyWasCut, isVellosOwnBot { screenReplyEnded(failed: !replyHadBlock) }
+        if screenReplyWasCut, hasCallControls { screenReplyEnded(failed: !replyHadBlock) }
         flushTimer?.cancel()
         chunker = CallSpeechChunker()
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
@@ -827,7 +887,11 @@ final class TheoCallSession: ObservableObject {
         if isGroupMode {
             // Only the part that's new goes on the speaker's line (`CallHeldWords` leaves a repeat out).
             let added = heldTurnWords.hasPrefix(wordsHeldBefore) ? String(heldTurnWords.dropFirst(wordsHeldBefore.count)) : words
-            heldGroupLines = CallGroupMode.adding(added, isOwner: wordsSoundLikeTheOwner(), to: heldGroupLines)
+            if isOwnAccount {
+                heldGroupLines = CallGroupMode.adding(added, isOwner: false, speaker: speakerOfWordsJustHeard(), to: heldGroupLines)
+            } else {
+                heldGroupLines = CallGroupMode.adding(added, isOwner: wordsSoundLikeTheOwner(), to: heldGroupLines)
+            }
         }
         if let liveIndex {
             lines[liveIndex].text = heldTurnWords
@@ -844,6 +908,16 @@ final class TheoCallSession: ObservableObject {
         waitForTheEndOfTheTurn()
     }
 
+    /// In a Space on Vello's own account, the name seen speaking most since the last words were named, or nil ("Someone").
+    private func speakerOfWordsJustHeard() -> String? {
+        let now = Date()
+        let from = wordsLastNamedAt ?? startedAt
+        wordsLastNamedAt = now
+        let name = speakerWatcher?.speaker(from: from, to: now)
+        callLog("📞 Space: words from \(SpaceSpeakerVotes.label(name))")
+        return name
+    }
+
     /// In group mode, whether words the ears just gave were the owner's: their voice right at the Mac was going a moment ago.
     /// A guess from loudness, said as one to the brain.
     private func wordsSoundLikeTheOwner() -> Bool {
@@ -858,6 +932,11 @@ final class TheoCallSession: ObservableObject {
     /// speakers. Just after the voice stops, the ears can still hand over its last words: those are told by how much of them
     /// Vello had just said.
     private func isVellosOwnVoiceComingBack(_ heard: String) -> Bool {
+        // The bot's browser doesn't play Vello's own voice back, so only words that are mostly what it just said are its
+        // own (someone's phone in the Space playing it back).
+        if isOwnAccount {
+            return CallEcho.soundsLikeVello(heard, vellosRecentWords: lines.last(where: { $0.who == .theo })?.text ?? "")
+        }
         let voiceIsOn = audio.isVoicePlaying || state == .speaking
         if voiceIsOn { return !isOwnerSpeaking }
         guard let voiceLastStoppedAt, Date().timeIntervalSince(voiceLastStoppedAt) < 2.0 else { return false }
@@ -951,7 +1030,7 @@ final class TheoCallSession: ObservableObject {
     private func releaseHeldTurn(quietSeconds: TimeInterval) {
         let words = heldTurnWords
         let lineID = heldTurnLineID
-        let groupLines = isGroupMode ? (heldGroupLines.isEmpty ? [CallGroupMode.HeardLine(isOwner: true, text: words)] : heldGroupLines) : nil
+        let groupLines = isGroupMode ? (heldGroupLines.isEmpty ? [CallGroupMode.HeardLine(isOwner: !isOwnAccount, text: words)] : heldGroupLines) : nil
         heldTurnWords = ""
         heldGroupLines = []
         heldTurnStartedAt = nil
@@ -988,7 +1067,9 @@ final class TheoCallSession: ObservableObject {
     /// for one), taken once Vello isn't in the middle of writing an answer so none are lost.
     func takeOwnerWordsFromOutside(_ words: String) {
         let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard state != .ended, !words.isEmpty else { return }
+        // A Space on Vello's own account only takes what's said in the Space: the owner's words at the Mac would be
+        // spoken into it as a stranger's.
+        guard state != .ended, !words.isEmpty, !isOwnAccount else { return }
         Task { @MainActor [weak self] in
             for _ in 0..<200 {
                 guard let self, self.state != .ended else { return }
@@ -1002,9 +1083,10 @@ final class TheoCallSession: ObservableObject {
 
     /// The owner's whole turn: a Listen mode switch, something heard in Listen mode, or a question for Vello.
     private func takeTurn(_ words: String, lineID: UUID?, groupLines: [CallGroupMode.HeardLine]? = nil) {
-        // Only the owner switches group mode by voice: someone else in the Space saying "group mode off" doesn't.
-        let saidByTheOwner = groupLines.map { lines in lines.contains(where: \.isOwner) } ?? true
-        if saidByTheOwner, let groupCommand = CallGroupMode.command(in: words) {
+        // Only the owner switches group mode by voice: someone else in the Space saying "group mode off" doesn't. On
+        // Vello's own account nobody heard is the owner, so nothing said there switches anything.
+        let saidByTheOwner = !isOwnAccount && (groupLines.map { lines in lines.contains(where: \.isOwner) } ?? true)
+        if CallOwnAccount.acceptsSpokenSwitches(isOwnAccount: isOwnAccount, saidByTheOwner: saidByTheOwner), let groupCommand = CallGroupMode.command(in: words) {
             let turnOn = groupCommand == .start
             if turnOn != isGroupMode {
                 setGroupMode(turnOn)
@@ -1015,7 +1097,7 @@ final class TheoCallSession: ObservableObject {
                 return
             }
         }
-        switch CallListenMode.command(in: words) {
+        switch isOwnAccount ? nil : CallListenMode.command(in: words) {
         case .start?:
             startListenMode(announce: true)
             return
@@ -1043,7 +1125,15 @@ final class TheoCallSession: ObservableObject {
         }
         // Vello is working on screen: a yes or no to a step is answered at once, and anything else pauses the steps and
         // reaches the brain with what was done and the screen as it is now. In a group only the owner's words do that.
-        if isVellosOwnBot, saidByTheOwner, ownerWordsReachTheScreenWork(words) { return }
+        if hasCallControls, saidByTheOwner, ownerWordsReachTheScreenWork(words) { return }
+        // A Space on Vello's own account: what was said, by the names on the Space's screen.
+        if isOwnAccount {
+            let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: false, text: words)]
+            let isAddressed = CallGroupMode.isAddressed(words, assistantNames: assistantNames)
+            ask(CallOwnAccount.message(lines: heard, handle: ownAccount?.handle ?? "", botName: botName, isAddressed: isAddressed, passesInARow: groupPassesInARow),
+                acknowledgesIfSlow: isAddressed)
+            return
+        }
         // A group: what was heard, by who it sounded like, and Vello answers only when it fits ([PASS] otherwise).
         if isGroupMode {
             let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: true, text: words)]
@@ -1067,12 +1157,14 @@ final class TheoCallSession: ObservableObject {
     }
 
     func setListenMode(_ on: Bool) {
+        // A Space on Vello's own account is always in group mode, never Listen mode.
+        if on, isOwnAccount { return }
         if on { startListenMode(announce: false) } else { stopListenMode(announce: false) }
     }
 
     /// Group mode on or off: from the call window, the owner's words, or Vello's own [GROUP: on].
     func setGroupMode(_ on: Bool) {
-        guard on != isGroupMode else { return }
+        guard on != isGroupMode, on || !isOwnAccount else { return }
         isGroupMode = on
         callLog("📞 Call: group mode \(on ? "on" : "off")")
         // What's held so far was all taken as one voice: from here it's marked by speaker.
@@ -1165,7 +1257,7 @@ final class TheoCallSession: ObservableObject {
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
         }
         let delta: String
-        if isVellosOwnBot {
+        if hasCallControls {
             let looked = screenPieces.feed(rawDelta)
             looked.pieces.forEach(takeScreenPiece)
             let switched = controls.feed(looked.speech)
@@ -1202,7 +1294,7 @@ final class TheoCallSession: ObservableObject {
         let neverStreamed = firstTextAt == nil
         var unstreamed = ""
         let restSpeech: String
-        if isVellosOwnBot {
+        if hasCallControls {
             if case .success(let whole) = result, neverStreamed {
                 let looked = CallScreenStream.extract(from: whole)
                 looked.pieces.forEach(takeScreenPiece)
@@ -1274,7 +1366,7 @@ final class TheoCallSession: ObservableObject {
             if state == .thinking { state = .listening }
             sayTheBrainFailed(error.localizedDescription)
         }
-        if isVellosOwnBot {
+        if hasCallControls {
             var failed = false
             if case .failure = result { failed = true }
             screenReplyEnded(failed: failed)
@@ -1287,8 +1379,11 @@ final class TheoCallSession: ObservableObject {
         guard state != .ended, !CallBrainFailure.isTheCallsOwnDoing(detail) else { return }
         callLog("📞 Call: \(brainNameForWords) gave no answer: \(CallBrainFailure.shortReason(detail))")
         let speaksHindi = language == .hindi || language.meansHinglish
-        let words = CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
-                                                 speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
+        // In a public Space the brain's name and error mean nothing to anyone: a short sorry, the reason in the window.
+        let words = isOwnAccount
+            ? CallOwnAccount.brainFailureWords(speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice, failuresSoFar: brainFailures)
+            : CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
+                                           speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
         brainFailures += 1
         sayWithoutThinking(words)
     }
@@ -1580,6 +1675,24 @@ final class TheoCallSession: ObservableObject {
         return true
     }
 
+    /// A Space on Vello's own account: its handle, what it hears and where its voice goes, and who it has seen talking.
+    private var ownAccountReport: [String: Any]? {
+        guard let ownAccount else { return nil }
+        var report = audio.ownAccountReport
+        report["handle"] = ownAccount.handle
+        report["browser"] = ownAccount.browser?.bundleID ?? ""
+        report["currentSpeaker"] = currentSpeaker ?? ""
+        report["speakers"] = speakerWatcher?.report() ?? [:]
+        return report
+    }
+
+    /// `ownAccountLook`: one frame of the speaker watcher now, whoever is talking.
+    func lookForSpeakerNow() async -> [String: Any] {
+        guard let speakerWatcher else { return ["error": "No speaker watcher."] }
+        await speakerWatcher.lookOnce()
+        return speakerWatcher.report()
+    }
+
     /// What `uiCallStatus` shows.
     func report() -> [String: Any] {
         [
@@ -1601,6 +1714,7 @@ final class TheoCallSession: ObservableObject {
             "listenMode": isListenMode,
             "groupMode": isGroupMode,
             "holdingTurn": isHoldingTurn,
+            "ownAccount": ownAccountReport as Any? ?? NSNull(),
             "lines": lines.map { ["who": $0.who == .addy ? "addy" : "theo", "text": $0.text, "live": $0.isLive, "cut": $0.wasCut, "heard": $0.wasOnlyHeard, "group": $0.isGroupTalk] as [String: Any] },
         ]
     }

@@ -181,6 +181,9 @@ final class SharedEnginePlayerChannel {
 
     private var shouldStartOnNextBuffer = false
     private var sampleRateConverter: AVAudioConverter?
+    /// Always this loud, even in a test profile: a voice going to the virtual mic of a Space joined on Vello's own X
+    /// account, which only the bot's browser hears (`DeviceVoicePlayer`). Nil: silent in a test profile as usual.
+    var fixedVolume: Float?
 
     var isEngineRunning: Bool { playerNode.engine?.isRunning == true }
     /// Never attached (hands-free hasn't run with AEC yet): nothing to stop.
@@ -204,7 +207,7 @@ final class SharedEnginePlayerChannel {
                                   completionHandler: Self.makeCompletionHandler(onPlayedBack: onPlayedBack))
         if shouldStartOnNextBuffer {
             shouldStartOnNextBuffer = false
-            playerNode.volume = CompanionSpeechOutput.isZeroVolumeForTests ? 0 : 1
+            playerNode.volume = fixedVolume ?? (CompanionSpeechOutput.isZeroVolumeForTests ? 0 : 1)
             playerNode.play()
         }
         return true

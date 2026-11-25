@@ -21,7 +21,7 @@ enum TheoCallController {
     /// bot gets a call of its own. One call at a time: asking for another while one runs brings up the running one.
     /// `activates` false leaves focus alone. `openingWords`: what the owner already said ("hey vello, find my mails from
     /// Sam" → "find my mails from Sam"), the call's first turn instead of the hello.
-    static func start(botID: String? = nil, activates: Bool = true, openingWords: String = "") {
+    static func start(botID: String? = nil, activates: Bool = true, openingWords: String = "", ownAccount: XAccountSetup? = nil) {
         if let window, isActive {
             if activates { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
             window.orderFrontRegardless()
@@ -30,7 +30,8 @@ enum TheoCallController {
         }
         guard let manager = CompanionManager.current else { return }
         let isLive = !TheoProfile.isTest
-        if isLive, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+        // A Space on Vello's own account never uses the mic.
+        if isLive, ownAccount == nil, AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 DispatchQueue.main.async { MainActor.assumeIsolated { if granted { start(botID: botID, activates: activates, openingWords: openingWords) } } }
             }
@@ -40,11 +41,12 @@ enum TheoCallController {
         manager.speechOutputClient.stopPlayback()
         manager.speechOutputClient.audioEngineHub.claimMicrophone(for: .call)
         CompanionSpeechOutput.isZeroVolumeForTests = TheoProfile.isTest || CompanionSpeechOutput.isZeroVolumeForTests
-        let session = TheoCallSession(store: BotsStore.shared, hub: manager.speechOutputClient.audioEngineHub, isLive: isLive, botID: botID)
+        let session = TheoCallSession(store: BotsStore.shared, hub: manager.speechOutputClient.audioEngineHub, isLive: isLive, botID: botID,
+                                      ownAccount: ownAccount)
         self.session = session
         let created = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 660),
                                styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-        created.title = "Call with \(session.botName)"
+        created.title = session.isOwnAccount ? "\(session.botName) in an X Space" : "Call with \(session.botName)"
         created.titleVisibility = .hidden
         created.titlebarAppearsTransparent = true
         created.isReleasedWhenClosed = false
@@ -59,6 +61,24 @@ enum TheoCallController {
         if activates { NSApp.activate(ignoringOtherApps: true); created.makeKeyAndOrderFront(nil) }
         created.orderFrontRegardless()
         session.start(openingWords: openingWords)
+    }
+
+    /// "Join a Space as Vello": opens the Space's link (if one was pasted) in the bot's browser, then runs the call on
+    /// Vello's own X account, hearing only that browser and speaking into its virtual mic. A person taps Join and Request
+    /// to speak there; Vello never touches the page. Nil when it started, else why it didn't.
+    @discardableResult
+    static func joinSpaceAsVello(link: URL?, activates: Bool = true) -> String? {
+        if isActive {
+            if let window { window.orderFrontRegardless() }
+            return session?.isOwnAccount == true ? nil : "A call is going on now. End it first."
+        }
+        let setup = XAccountSettings.setup()
+        guard setup.browser != nil, setup.browserAppURL != nil else {
+            return "Pick the bot's browser in Settings › Voice › Vello's X account first."
+        }
+        if let link { XAccountSettings.openBotBrowser(link: link) }
+        start(activates: activates, ownAccount: setup)
+        return nil
     }
 
     static func end() {
@@ -87,7 +107,9 @@ struct TheoCallView: View {
             CallAvatar(session: session, theo: session.bot ?? store.primary).frame(height: 214)
             Text(stateLine).font(.system(size: 14, weight: .medium)).foregroundColor(DS.Colors.textSecondary).animation(nil, value: session.state)
                 .lineLimit(1)
-            if session.isGroupMode {
+            if session.isOwnAccount {
+                OwnAccountStrip(session: session)
+            } else if session.isGroupMode {
                 Text("Group mode: everyone counts, and \(session.botName) joins in when it fits")
                     .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1).padding(.top, 2)
             } else if session.isListenMode {
@@ -169,11 +191,14 @@ struct TheoCallView: View {
         switch session.state {
         case .connecting: return "Connecting…"
         case .listening:
-            if session.isMuted { return "You're muted" }
+            if session.isMuted { return session.isOwnAccount ? "Not hearing the Space" : "You're muted" }
+            if session.isOwnAccount { return "Listening to the Space" }
             return session.isListenMode ? "Just listening" : "Listening"
-        case .userSpeaking: return session.isListenMode ? "Just listening" : "Go on"
+        case .userSpeaking:
+            if session.isOwnAccount { return "\(session.currentSpeaker ?? "Someone") is talking" }
+            return session.isListenMode ? "Just listening" : "Go on"
         case .thinking: return "Thinking"
-        case .speaking: return "\(session.botName) is talking. Just talk to cut in."
+        case .speaking: return session.isOwnAccount ? "\(session.botName) is talking in the Space" : "\(session.botName) is talking. Just talk to cut in."
         case .ended: return "Call ended"
         }
     }
@@ -183,7 +208,7 @@ struct TheoCallView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(session.lines) { line in
-                        CallLineView(line: line, botName: session.botName).id(line.id)
+                        CallLineView(line: line, botName: session.botName, isOwnAccount: session.isOwnAccount).id(line.id)
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
@@ -207,43 +232,48 @@ struct TheoCallView: View {
                         .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
                         .contentShape(Circle())
                 }
-                .buttonStyle(.plain).help(session.isMuted ? "Unmute" : "Mute").keyboardShortcut("m", modifiers: .command)
+                .buttonStyle(.plain).help(session.isOwnAccount ? (session.isMuted ? "Hear the Space again" : "Stop hearing the Space") : (session.isMuted ? "Unmute" : "Mute"))
+                .keyboardShortcut("m", modifiers: .command)
                 .pointerCursor()
-                Button { session.setListenMode(!session.isListenMode) } label: {
-                    Image(systemName: "ear").font(.system(size: 19, weight: .semibold))
-                        .foregroundColor(session.isListenMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
-                        .frame(width: 58, height: 58)
-                        .background(Circle().fill(session.isListenMode ? Color.white : DS.Colors.hover))
-                        .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-                        .contentShape(Circle())
+                // A Space on Vello's own account is always in group mode, and never in Listen mode.
+                if !session.isOwnAccount {
+                    Button { session.setListenMode(!session.isListenMode) } label: {
+                        Image(systemName: "ear").font(.system(size: 19, weight: .semibold))
+                            .foregroundColor(session.isListenMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
+                            .frame(width: 58, height: 58)
+                            .background(Circle().fill(session.isListenMode ? Color.white : DS.Colors.hover))
+                            .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(session.isListenMode
+                          ? "Listen mode is on: \(session.botName) only listens until you ask it something. Click to talk normally."
+                          : "Listen mode: \(session.botName) only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
+                    .keyboardShortcut("l", modifiers: .command)
+                    .pointerCursor()
+                    Button { session.setGroupMode(!session.isGroupMode) } label: {
+                        Image(systemName: "person.3").font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(session.isGroupMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
+                            .frame(width: 58, height: 58)
+                            .background(Circle().fill(session.isGroupMode ? Color.white : DS.Colors.hover))
+                            .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(session.isGroupMode
+                          ? "Group mode is on: \(session.botName) hears everyone and joins in when it fits. Click for just the two of you."
+                          : "Group mode, for an X Space or a room with other people: \(session.botName) hears everyone and joins in when it fits. You can also say “group mode”.")
+                    .keyboardShortcut("g", modifiers: .command)
+                    .pointerCursor()
                 }
-                .buttonStyle(.plain)
-                .help(session.isListenMode
-                      ? "Listen mode is on: \(session.botName) only listens until you ask it something. Click to talk normally."
-                      : "Listen mode: \(session.botName) only listens and keeps track, and answers when you ask. You can also say “listen mode”.")
-                .keyboardShortcut("l", modifiers: .command)
-                .pointerCursor()
-                Button { session.setGroupMode(!session.isGroupMode) } label: {
-                    Image(systemName: "person.3").font(.system(size: 17, weight: .semibold))
-                        .foregroundColor(session.isGroupMode ? Color(hex: 0x17181C) : DS.Colors.textPrimary)
-                        .frame(width: 58, height: 58)
-                        .background(Circle().fill(session.isGroupMode ? Color.white : DS.Colors.hover))
-                        .overlay(Circle().strokeBorder(DS.Colors.borderSubtle, lineWidth: 1))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(session.isGroupMode
-                      ? "Group mode is on: \(session.botName) hears everyone and joins in when it fits. Click for just the two of you."
-                      : "Group mode, for an X Space or a room with other people: \(session.botName) hears everyone and joins in when it fits. You can also say “group mode”.")
-                .keyboardShortcut("g", modifiers: .command)
-                .pointerCursor()
                 Button(action: onEnd) {
                     Image(systemName: "phone.down.fill").font(.system(size: 20, weight: .semibold)).foregroundColor(.white)
                         .frame(width: 58, height: 58)
                         .background(Circle().fill(Color(hex: 0xE5484D)))
                         .contentShape(Circle())
                 }
-                .buttonStyle(.plain).help("End the call").keyboardShortcut(.cancelAction)
+                .buttonStyle(.plain).help(session.isOwnAccount ? "Leave the Space: Vello stops hearing and speaking" : "End the call").keyboardShortcut(.cancelAction)
+                .pointerCursor()
             }
             HStack(spacing: 6) {
                 Text("Ears: \(session.earsName)")
@@ -260,13 +290,42 @@ struct TheoCallView: View {
     }
 }
 
+/// A Space on Vello's own account: which account, how loud the bot's browser is, who's talking, and the two taps that
+/// are the owner's to make.
+private struct OwnAccountStrip: View {
+    @ObservedObject var session: TheoCallSession
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 10))
+                Text("In the Space as \(session.ownAccount?.handle.isEmpty == false ? session.ownAccount!.handle : "Vello's own account")")
+                Text("·")
+                Text("Hearing")
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(DS.Colors.hover)
+                        Capsule().fill(Color(hex: 0x6EE7A0)).frame(width: proxy.size.width * (session.isMuted ? 0 : session.micLevel))
+                    }
+                }
+                .frame(width: 54, height: 5)
+            }
+            .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+            Text(session.currentSpeaker.map { "Talking now: \($0)" } ?? CallOwnAccount.joinNote)
+                .font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
+        }
+        .padding(.top, 2)
+    }
+}
+
 private struct CallLineView: View {
     let line: TheoCallSession.Line
     let botName: String
+    var isOwnAccount = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : (line.isGroupTalk ? "The group" : "You")) : botName).font(.system(size: 10.5, weight: .semibold))
+            Text(line.who == .addy ? (line.wasOnlyHeard ? "Heard" : (line.isGroupTalk ? (isOwnAccount ? "The Space" : "The group") : "You")) : botName).font(.system(size: 10.5, weight: .semibold))
                 .foregroundColor(line.who == .addy ? DS.Colors.textTertiary : DS.Colors.accentText)
             if line.text.isEmpty && line.isLive {
                 TypingDots()

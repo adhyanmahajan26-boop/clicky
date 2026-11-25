@@ -152,6 +152,10 @@ final class TheoAppDelegate: NSObject, NSApplicationDelegate {
             debugCommandInbox?.start()
         }
 
+        // Vello's X account is set up: the reader for speaker names loads now, in the background, since its first load
+        // can take half a minute and would leave the first speakers of a Space unnamed.
+        if !XAccountSettings.handle.isEmpty { AccurateTextReading.warmUp() }
+
         // T3 Code talks to the running Theo through the control inbox (MCP) and the local page server.
         let inbox = ClaudiaControlInbox(companionManager: companionManager)
         inbox.start()
