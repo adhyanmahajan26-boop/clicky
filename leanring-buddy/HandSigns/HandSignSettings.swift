@@ -125,7 +125,7 @@ struct HandSignSettingsSection: View {
     static func signsHonestLine(for language: SignLanguage) -> String {
         switch language {
         case .isl:
-            return "Reads 261 ISL signs and short runs of them. So far it has only been shown to work for the signers it learned from, so expect it to show ? often."
+            return "Reads 261 ISL signs and short runs of them. For new people signing the same signs it gets about 7 in 10 right; signs from other regions often differ. Expect it to show ? often."
         case .asl:
             return "Reads 562 ASL signs, one at a time, and finger-spelling. On people it never saw it answers a little under half of signs and is right on about 9 in 10 of those, and gets about 9 in 10 finger-spelled letters right. Expect it to show ? often."
         }

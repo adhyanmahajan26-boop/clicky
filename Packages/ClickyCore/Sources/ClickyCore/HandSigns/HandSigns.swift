@@ -314,7 +314,7 @@ public enum HandSignMode: String, CaseIterable, Codable, Sendable {
     /// Signs drive Pointer Assistant.
     case control
 
-    /// Shown with the word "Experimental" beside its name: it has only been shown to work for the signers it learned from.
+    /// Shown with the word "Experimental" beside its name: about 7 in 10 right for new people, and other regions' signs differ.
     public var isExperimental: Bool { self == .signs }
 
     public var displayName: String {

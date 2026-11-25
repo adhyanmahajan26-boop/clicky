@@ -62,9 +62,11 @@ Settings › Accessibility › What signs do › **Sign to text**. The camera re
 gives each frame's hands and body (61 landmarks, Tools/signs/SPEC.md); a stretch of signing between rests is read by
 small Core ML models and becomes a line of words, sent to Vello's chat, Pointer Assistant or the app in front.
 
-**ISL reading has only been shown to work for the signers it learned from.** Every number below that is high was
-measured on the same people the models were trained on. On INCLUDE signers it never saw it gets about 7 in 10 words
-right, and on another dataset's signers (ISL-CSLTR) almost none, so expect "?" often.
+**ISL reading works best for the signers it learned from.** Every number below that is high was measured on the same
+people the models were trained on. For new people signing the same signs (INCLUDE signers it never saw) it gets about
+7 in 10 words right; signs from other regions often differ, and on another dataset's signers (ISL-CSLTR) it reads
+almost none. Expect "?" often. Settings says: "Reads 261 ISL signs and short runs of them. For new people signing the
+same signs it gets about 7 in 10 right; signs from other regions often differ. Expect it to show ? often."
 
 What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels in the repo; a model in the data folder
 `~/Library/Application Support/Theo/SignModels` is taken first), float16, 23 MB in all:
@@ -149,6 +151,28 @@ so much: see the learning curve in Tools/signs/README.md when it's measured.
   found in 78% of frames, INCLUDE 69%); its 240x320 phone videos are weaker (51%), and upscaling them 4x before Vision
   finds more hands (60% → 67% of raised-wrist frames on 6 clips) with under a third of the jitter. Cutting INCLUDE's clips to their signing part
   (no rise from rest, no drop back) still reads 94.5%.
+
+### Tried, not shipped: ISL word model trained with hand turns and camera height (November 2026)
+
+The `--person-changes hand_turn,perspective` recipe reads new people better (leave-one-signer-out above), so the full
+ISL word model was retrained with it (same data, 200 epochs, threshold from the same 3 held-out-word folds) and
+compared with the shipped one on every row. It is not shipped: it is more confident on signs it was never taught, so
+its threshold rule (never-taught signs wrongly given a word at most 10% of the time) needs 0.97 instead of 0.95, and
+there it answers far fewer signs.
+
+| Row | Shipped | Retrained |
+| --- | --- | --- |
+| Same-signer test, whole clip (813 clips) | 96.9% / 99.5% top-5 | 96.9% / 99.4% |
+| Unseen signers, leave-one-signer-out (4 signers, 3 seeds) | 70.8% ± 1.2 | 72.6% ± 0.5 |
+| App pipeline, threshold off (815 clips) | 95.3% | 95.6% |
+| Threshold chosen | 0.95 | 0.97 |
+| App pipeline with its threshold | 78.9% answered, 98.4% right | **57.3% answered**, 98.7% right |
+| Held-out-word folds at that threshold | taught answered 80.2%, never-taught wrongly answered 8.8% | 67.1%, 6.0% |
+| At 0.95 for both | never-taught wrongly answered 8.8% | 13.1% (over the 10% rule) |
+| Built streams word error rate | 7.5% | 7.7% |
+
+What might make it shippable: training with "not a sign" examples, or calibrating on never-taught signs, so the gain
+on new people doesn't cost the "not sure" behaviour.
 
 ### What it can't read
 
