@@ -39,6 +39,11 @@ public enum CallOwnAccount {
     /// The quiet on the Space's audio before the bot answers, named or not. A group call's 0.7 to 1 s had it starting
     /// over people catching a breath in a busy public Space (25 Nov).
     public static let pauseBeforeAnswering = 1.3
+    /// The X Space bot's Sarvam voice when none is picked for it: an even, conversational Hinglish voice. The "companion"
+    /// voices it fell back to before sounded breathy and stretched in a public Space (25 Nov).
+    public static let defaultSarvamSpeaker = "simran_enhi_customer"
+    /// The voice's pace in a Space: neutral.
+    public static let sarvamPace = 1.0
 
     /// Shown when a Space is joined: the two taps only a person may make.
     public static let joinNote = "In the bot's browser: tap Join, then Request to speak."

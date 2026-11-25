@@ -262,8 +262,39 @@ final class DeviceVoicePlayer {
     private let engine = AVAudioEngine()
     private(set) var deviceName = "this Mac's speakers"
 
+    private var deviceUID: String?
+    private var configurationObserver: NSObjectProtocol?
+
     init(channel: SharedEnginePlayerChannel) {
         self.channel = channel
+    }
+
+    /// Back on its device after Core Audio changed something under it. AVAudioEngine stops itself when the device's
+    /// format changes (the bot's browser starting to use BlackHole as its mic can do it) and doesn't start again, so the
+    /// bot went on "speaking" into an engine that played nothing (Studio, 25 Nov).
+    func ensureRunning() {
+        guard !engine.isRunning else { return }
+        do {
+            try applyDevice()
+            engine.prepare()
+            try engine.start()
+            callLog("📞 Space: the voice's output started again on \(deviceName)")
+        } catch {
+            callLog("📞 Space: the voice's output couldn't start again: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyDevice() throws {
+        guard let deviceUID else { return }
+        guard let device = AudioDevices.device(uid: deviceUID) else {
+            throw HandsFreeListeningSessionError(message: "The output for Vello's voice isn't connected.")
+        }
+        guard let unit = engine.outputNode.audioUnit else { throw HandsFreeListeningSessionError(message: "No output unit.") }
+        var deviceID = device.id
+        let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else { throw HandsFreeListeningSessionError(message: "Couldn't play to \(device.name) (\(status)).") }
+        deviceName = device.name
     }
 
     /// `deviceUID` nil: the Mac's default output. `fullVolume`: always heard, even in a test profile (the virtual mic,
@@ -274,22 +305,21 @@ final class DeviceVoicePlayer {
         engine.attach(channel.timePitchUnit)
         engine.connect(channel.playerNode, to: channel.timePitchUnit, format: SharedEnginePlayerChannel.playbackFormat)
         engine.connect(channel.timePitchUnit, to: engine.mainMixerNode, format: SharedEnginePlayerChannel.playbackFormat)
-        if let deviceUID {
-            guard let device = AudioDevices.device(uid: deviceUID) else {
-                throw HandsFreeListeningSessionError(message: "The output for Vello's voice isn't connected.")
-            }
-            guard let unit = engine.outputNode.audioUnit else { throw HandsFreeListeningSessionError(message: "No output unit.") }
-            var deviceID = device.id
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID,
-                                              UInt32(MemoryLayout<AudioDeviceID>.size))
-            guard status == noErr else { throw HandsFreeListeningSessionError(message: "Couldn't play to \(device.name) (\(status)).") }
-            deviceName = device.name
-        }
+        self.deviceUID = deviceUID
+        try applyDevice()
         engine.prepare()
         try engine.start()
+        configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                callLog("📞 Space: the voice's output device changed")
+                self?.ensureRunning()
+            }
+        }
     }
 
     func stop() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
         channel.stop()
         engine.stop()
     }
@@ -320,16 +350,18 @@ enum DeviceInputCheck {
               let format = AVAudioFormat(streamDescription: &streamDescription) else {
             return ["error": "Couldn't read \(device.name)'s input format.", "microphonePermission": microphone]
         }
-        let file = fileURL.flatMap { try? AVAudioFile(forWriting: $0, settings: format.settings) }
+        // The first channel, mono: AVAudioFile writes only buffers in its own (non-interleaved) processing format.
+        let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)
+        let file = fileURL.flatMap { url in monoFormat.flatMap { try? AVAudioFile(forWriting: url, settings: $0.settings, commonFormat: .pcmFormatFloat32, interleaved: false) } }
         var status = AudioDeviceCreateIOProcIDWithBlock(&procID, device.id, queue) { _, inputData, _, _, _ in
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: inputData, deallocator: nil), buffer.frameLength > 0 else { return }
-            try? file?.write(from: buffer)
             guard let samples = buffer.floatChannelData?[0],
                   let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false),
                   let copy = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buffer.frameLength), let target = copy.floatChannelData?[0] else { return }
             let stride = buffer.stride
             for frame in 0..<Int(buffer.frameLength) { target[frame] = samples[frame * stride] }
             copy.frameLength = buffer.frameLength
+            try? file?.write(from: copy)
             counters.heard(copy)
         }
         guard status == noErr, let procID else { return ["error": "Couldn't listen to \(device.name) (\(status)).", "microphonePermission": microphone] }

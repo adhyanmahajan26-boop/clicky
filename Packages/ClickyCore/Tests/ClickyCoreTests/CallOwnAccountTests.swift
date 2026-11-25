@@ -560,3 +560,59 @@ struct SpaceSpeechTests {
         #expect(CallBracketLineStream.strip("Done. [TONE: chill]").trimmingCharacters(in: .whitespacesAndNewlines) == "Done.")
     }
 }
+
+struct SpaceFloorTests {
+    @Test func itYieldsOnlyToAVoiceThatKeepsGoing() {
+        #expect(!SpaceFloor.yields(otherVoiceSeconds: 0.6))   // a laugh
+        #expect(!SpaceFloor.yields(otherVoiceSeconds: 1.9))   // "haan haan, sahi"
+        #expect(!SpaceFloor.yields(otherVoiceSeconds: 2.0))
+        #expect(SpaceFloor.yields(otherVoiceSeconds: 2.1))
+    }
+
+    @Test func itNeverStartsOverSomeoneAndDropsAStaleReply() {
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: true, quietSeconds: 0, secondsWaiting: 1, talkMovedOn: false) == .wait)
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 0.2, secondsWaiting: 1, talkMovedOn: false) == .wait)
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 0.5, secondsWaiting: 1, talkMovedOn: false) == .start)
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: true, quietSeconds: 0, secondsWaiting: 4.5, talkMovedOn: false) == .drop)
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 1, secondsWaiting: 1, talkMovedOn: true) == .drop)
+    }
+
+    @Test func stopWordsStopItFromAnyone() {
+        for words in ["stop", "Stop!", "ruko", "ruk jao", "bas", "bas karo", "chup", "chup karo", "shut up", "be quiet", "रुको", "चुप करो", "बस",
+                      "ਚੁੱਪ ਕਰ", "ਰੁਕੋ", "arre ruko yaar"] {
+            #expect(SpaceStopWords.isStop(words, isAddressed: false), "\(words)")
+        }
+        #expect(SpaceStopWords.isStop("Chotta Tirri, please stop talking now about this", isAddressed: true))
+        // Ordinary talk that holds a stop word isn't one.
+        for words in ["bas yahi baat hai ki economy badhegi", "we can't stop innovation in this country", "chup chaap sunte raho sab log yahan", "hello everyone"] {
+            #expect(!SpaceStopWords.isStop(words, isAddressed: false), "\(words)")
+        }
+    }
+}
+
+struct SpaceVoiceTextTests {
+    @Test func oddSoundsAreTakenOut() {
+        #expect(SpaceVoiceText.sanitized("Haaaa yaar, sooo funny!") == "Haa yaar, soo funny!")
+        #expect(SpaceVoiceText.sanitized("Mmm, that's a fair point.") == "that's a fair point.")
+        #expect(SpaceVoiceText.sanitized("Hmmm... okay") == "okay")
+        #expect(SpaceVoiceText.sanitized("*laughs* Bilkul sahi 😂🔥") == "Bilkul sahi")
+        #expect(SpaceVoiceText.sanitized("(laughs) Nice one") == "Nice one")
+        #expect(SpaceVoiceText.sanitized("हाँ भाई, बिल्कुल!") == "हाँ भाई, बिल्कुल!")
+        #expect(SpaceVoiceText.sanitized("Summer is coming, hmm, maybe.") == "Summer is coming, maybe.")
+        #expect(SpaceVoiceText.sanitized("Good point [BOSS]") == "Good point")
+    }
+
+    @Test func theVoiceGetsWholeSentences() {
+        var gatherer = SpaceSentenceGatherer()
+        #expect(gatherer.add("Investor nahi mil raha, ") == [])
+        #expect(gatherer.add("shayad isliye. Aur ") == ["Investor nahi mil raha, shayad isliye."])
+        #expect(gatherer.add("energy 3.5 percent badhi? Haan") == ["Aur energy 3.5 percent badhi?"])
+        #expect(gatherer.add(" bhai।") == ["Haan bhai।"])
+        #expect(gatherer.finish() == nil)
+        _ = gatherer.add("No end here")
+        #expect(gatherer.finish() == "No end here")
+        var long = SpaceSentenceGatherer()
+        let sentences = long.add(String(repeating: "word, ", count: 60))
+        #expect(sentences.count == 1 && sentences[0].count <= SpaceSentenceGatherer.longestSentence)
+    }
+}

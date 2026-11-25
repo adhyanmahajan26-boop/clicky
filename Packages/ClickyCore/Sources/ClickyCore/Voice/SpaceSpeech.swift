@@ -172,3 +172,123 @@ public enum SpaceTone: String, CaseIterable, Sendable {
         return (tone, parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "")
     }
 }
+
+/// The owner's rules for talking over and being talked over in a Space (25 Nov, after a public Space):
+/// while the bot speaks it yields only to another voice that keeps going for more than 2 s, and then at once; it never
+/// starts over someone, and drops a reply whose moment has passed; and a stop word from anyone stops it at once, and it
+/// stays quiet until it's named again or its boss tells it to talk.
+public enum SpaceFloor {
+    /// Another voice on the Space's audio this long while the bot talks makes it stop. Laughs and "haan" are shorter.
+    public static let yieldAfterOtherVoiceSeconds = 2.0
+    /// Quiet needed before a reply that waited starts.
+    public static let quietBeforeStartingSeconds = 0.4
+    /// A reply that couldn't start within this long of being ready is dropped: the moment has passed.
+    public static let dropAfterWaitingSeconds = 4.0
+
+    /// Whether the bot stops talking now: another voice has gone on for `otherVoiceSeconds` while it speaks.
+    public static func yields(otherVoiceSeconds: Double) -> Bool {
+        otherVoiceSeconds > yieldAfterOtherVoiceSeconds
+    }
+
+    public enum StartDecision: Equatable, Sendable {
+        case start
+        case wait
+        case drop
+    }
+
+    /// Whether a reply that's ready starts now. `someoneIsSpeaking`: a voice on the Space's audio now. `quietSeconds`:
+    /// since it stopped. `secondsWaiting`: since the reply was ready. `talkMovedOn`: new words were heard since the turn
+    /// this answers.
+    public static func startDecision(someoneIsSpeaking: Bool, quietSeconds: Double, secondsWaiting: Double, talkMovedOn: Bool) -> StartDecision {
+        if talkMovedOn || secondsWaiting > dropAfterWaitingSeconds { return .drop }
+        if someoneIsSpeaking || quietSeconds < quietBeforeStartingSeconds { return .wait }
+        return .start
+    }
+}
+
+public enum SpaceStopWords {
+    /// Said alone (a short utterance), any of these stops the bot.
+    static let phrases = [
+        "stop", "stop it", "stop talking", "please stop", "ruko", "ruk", "ruk jao", "ruko yaar", "bas", "bas karo", "bas kar", "bas bas",
+        "chup", "chup karo", "chup kar", "chup ho jao", "shut up", "be quiet", "quiet", "enough", "khamosh",
+        "रुको", "रुक जाओ", "बस", "बस करो", "चुप", "चुप करो", "चुप हो जाओ", "ख़ामोश", "खामोश",
+        "ਰੁਕੋ", "ਰੁਕ ਜਾ", "ਬੱਸ", "ਬਸ ਕਰ", "ਚੁੱਪ", "ਚੁੱਪ ਕਰ", "ਚੁੱਪ ਕਰੋ",
+    ]
+    /// Words longer than this are talk that happens to hold a stop word ("bas yahi baat hai"), unless the bot is named.
+    static let longestStopUtteranceWords = 4
+
+    /// Whether words heard (a partial is enough) tell the bot to stop: a stop phrase said on its own, or anywhere when the
+    /// bot is named in them ("Chotta Tirri, stop").
+    public static func isStop(_ words: String, isAddressed: Bool) -> Bool {
+        let simplified = " " + CallTurnEnd.simplifiedWords(words).joined(separator: " ") + " "
+        let count = simplified.split(separator: " ").count
+        guard count > 0 else { return false }
+        let hasPhrase = phrases.contains { simplified.contains(" " + CallTurnEnd.simplifiedWords($0).joined(separator: " ") + " ") }
+        guard hasPhrase else { return false }
+        return isAddressed || count <= longestStopUtteranceWords
+    }
+}
+
+/// Text for the Space bot's voice. Sent clause by clause with a flush after each, every fragment came out with its own
+/// tone, sometimes mid-word, and stretched letters ("haaaa", "mmm") came out as long odd sounds (a public Space, 25 Nov).
+/// So the voice gets whole sentences, cleaned of what makes it vocalise oddly.
+public enum SpaceVoiceText {
+    /// What the voice shouldn't try to say: emoji, *stage directions*, (laughs), [anything], letters held for effect
+    /// ("haaaa" → "haa", "nooo" → "noo"), and humming ("mmm", "hmm").
+    public static func sanitized(_ text: String) -> String {
+        var cleaned = text
+        for pattern in [#"\*[^*]{1,40}\*"#, #"\((?:laughs?|laughing|sighs?|chuckles?|smiles?|pause|haha)[^)]{0,20}\)"#, #"\[[^\]]{0,40}\]"#] {
+            cleaned = cleaned.replacingOccurrences(of: pattern, with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        cleaned = String(cleaned.unicodeScalars.filter { scalar in
+            !(scalar.properties.isEmojiPresentation || (scalar.properties.isEmoji && scalar.value > 0x238C) || scalar.value == 0xFE0F || scalar.value == 0x200D)
+        }.map(Character.init))
+        // A letter three or more times in a row is held: two is enough ("haaaa" → "haa", "sooo" → "soo").
+        cleaned = cleaned.replacingOccurrences(of: #"(\p{L})\1{2,}"#, with: "$1$1", options: .regularExpression)
+        // Humming on its own.
+        cleaned = cleaned.replacingOccurrences(of: #"(?i)(?<![\p{L}])(?:m{2,}|h+m+|u+h+m*)(?![\p{L}])[,.!…]*"#, with: " ", options: .regularExpression)
+        cleaned = cleaned.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return cleaned.trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// Gathers streamed reply text into whole sentences for the voice, still one sentence at a time.
+public struct SpaceSentenceGatherer: Sendable {
+    private var held = ""
+    /// A sentence this long with no end in sight goes anyway, at its last comma or space, so a run-on doesn't keep
+    /// the Space waiting.
+    public static let longestSentence = 220
+
+    public init() {}
+
+    /// The sentences finished by this piece of text.
+    public mutating func add(_ piece: String) -> [String] {
+        held += piece
+        var sentences: [String] = []
+        while let end = held.firstIndex(where: { ".?!।\n".contains($0) }) {
+            var cut = held.index(after: end)
+            // "3.5" or "Mr." mid-sentence: a stop with a letter or digit right after isn't an end.
+            if held[end] == ".", cut < held.endIndex, held[cut].isLetter || held[cut].isNumber {
+                guard let next = held[cut...].firstIndex(where: { ".?!।\n".contains($0) }) else { break }
+                cut = held.index(after: next)
+            }
+            let sentence = String(held[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+            held = String(held[cut...])
+            if !sentence.isEmpty { sentences.append(sentence) }
+        }
+        if held.count > Self.longestSentence {
+            let window = held.prefix(Self.longestSentence)
+            let cut = window.lastIndex(of: ",") ?? window.lastIndex(of: " ") ?? window.endIndex
+            sentences.append(String(held[..<cut]).trimmingCharacters(in: .whitespaces))
+            held = String(held[cut...]).trimmingCharacters(in: CharacterSet(charactersIn: ", "))
+        }
+        return sentences
+    }
+
+    /// What's left at the end of the reply.
+    public mutating func finish() -> String? {
+        let rest = held.trimmingCharacters(in: .whitespacesAndNewlines)
+        held = ""
+        return rest.isEmpty ? nil : rest
+    }
+}

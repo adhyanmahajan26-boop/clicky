@@ -361,6 +361,14 @@ final class DebugCommandInbox {
                 }
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
             }
+        case "ownAccountSay":
+            // TEST ONLY {text}: said in the Space through the reply's own path (sentences, clean-up, the floor rules).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount, let text = commandObject["text"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile, a Space and text only.")
+                return
+            }
+            session.sayInTheSpaceForTest(text)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["said": text], errorMessage: nil)
         case "ownAccountNote":
             // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
             guard let session = TheoCallController.session, session.isOwnAccount else {

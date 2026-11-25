@@ -395,7 +395,8 @@ final class CallAudio {
          "buffersHeard": browserTap?.buffersHeard ?? browserScreenAudio?.buffersHeard ?? 0,
          "loudestHeardDecibels": browserTap?.loudestDecibels ?? browserScreenAudio?.loudestDecibels ?? -100,
          "hearingProblem": browserTap?.lastError ?? browserScreenAudio?.lastError ?? "",
-         "voiceDevice": virtualMic?.deviceName ?? "", "monitor": monitor != nil, "problem": ownAccountProblem ?? ""]
+         "voiceDevice": virtualMic?.deviceName ?? "", "monitor": monitor != nil, "problem": ownAccountProblem ?? "",
+         "voiceEngineRunning": channel.isEngineRunning, "loudestVoiceDecibels": loudestDecibelsSinceReset]
     }
 
     func close() {
@@ -425,6 +426,9 @@ final class CallAudio {
 
     /// Plays this after what's already queued.
     func play(_ buffer: AVAudioPCMBuffer) {
+        // A Space's virtual mic engine can stop under a device change: started again before anything is lost.
+        virtualMic?.ensureRunning()
+        monitor?.ensureRunning()
         if !segmentOpen {
             channel.startSegment(rate: 1)
             segmentOpen = true
