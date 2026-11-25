@@ -73,12 +73,28 @@ struct StudioPanel: View {
         .ignoresSafeArea(.container, edges: .top)
     }
 
+    private var offTitle: String {
+        guard studio.isEnabled else { return "Hidden screens for your bots are off." }
+        return studio.isAsleepForPlayback ? "Asleep while a video plays" : "Screens asleep"
+    }
+
+    private var offExplanation: String {
+        guard studio.isEnabled else { return "Invisible screens your bots work on while you watch small views here." }
+        if studio.isAsleepForPlayback {
+            return "Something is playing on this Mac. Waking the screens moves a monitor for a moment and can black out the video, so bots wait. They wake for the next job once it stops, or press Wake anyway."
+        }
+        return "They wake when a bot needs one and sleep after 15 quiet minutes. Waking moves your left monitor for a moment."
+    }
+
     private var off: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(studio.problem ?? (studio.isEnabled ? "Screens asleep" : "Hidden screens for your bots are off.")).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
-            Text(studio.isEnabled ? "They wake when a bot needs one and sleep after 15 quiet minutes. Waking moves your left monitor for a moment." : "Invisible screens your bots work on while you watch small views here.")
+            Text(studio.problem ?? offTitle).font(.system(size: 13, weight: .medium)).foregroundColor(DS.Colors.textPrimary)
+            Text(offExplanation)
                 .font(.system(size: 12)).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
-            if studio.isEnabled {
+            if studio.isEnabled, studio.isAsleepForPlayback {
+                // Waking moves a monitor for a moment, which can black out the video, so this is the owner's call.
+                Button("Wake anyway") { Task { _ = await studio.wakeForWork(evenWhilePlaying: true) } }.buttonStyle(.theoSecondary).padding(.top, 4)
+            } else if studio.isEnabled {
                 Button("Wake") { Task { _ = await studio.wakeForWork() } }.buttonStyle(.theoSecondary).padding(.top, 4)
             } else {
                 Button("Turn on in Settings") { selection.openSettings(.studio) }.buttonStyle(.theoSecondary).padding(.top, 4)
