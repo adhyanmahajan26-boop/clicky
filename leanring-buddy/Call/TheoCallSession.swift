@@ -447,7 +447,8 @@ final class TheoCallSession: ObservableObject {
         if let ownAccount {
             problem = audio.ownAccountProblem
             if let browser = ownAccount.browser {
-                let watcher = SpaceSpeakerWatcher(browserBundleID: browser.bundleID, handle: ownAccount.handle, botName: botName)
+                let watcher = SpaceSpeakerWatcher(browserBundleID: browser.bundleID, handle: ownAccount.handle, botName: botName,
+                                                  displayName: ownAccount.displayName)
                 watcher.onCurrentSpeaker = { [weak self] name in
                     if self?.currentSpeaker != name { self?.currentSpeaker = name }
                 }

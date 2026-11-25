@@ -301,6 +301,7 @@ final class DebugCommandInbox {
         case "ownAccountStart":
             let defaults = UserDefaults.standard
             if let handle = commandObject["handle"] as? String { defaults.set(handle, forKey: XAccountSettings.handleKey) }
+            if let displayName = commandObject["displayName"] as? String { defaults.set(displayName, forKey: XAccountSettings.displayNameKey) }
             if let browser = commandObject["browser"] as? String { defaults.set(browser, forKey: XAccountSettings.browserKey) }
             if let output = commandObject["output"] as? String {
                 // A device's name or its unique id.

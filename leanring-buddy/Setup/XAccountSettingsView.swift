@@ -15,6 +15,7 @@ import SwiftUI
 
 struct XAccountSettingsSection: View {
     @AppStorage(XAccountSettings.handleKey) private var handle = ""
+    @AppStorage(XAccountSettings.displayNameKey) private var displayName = ""
     @AppStorage(XAccountSettings.browserKey) private var browserBundleID = ""
     @AppStorage(XAccountSettings.outputDeviceKey) private var outputDeviceUID = ""
     @AppStorage(XAccountSettings.monitorKey) private var monitors = false
@@ -30,6 +31,10 @@ struct XAccountSettingsSection: View {
             SettingRow(title: "The bot's handle", detail: "Vello says this is its account when asked.") {
                 TextField("@vello_ai", text: $handle).textFieldStyle(.roundedBorder).frame(width: 180)
                     .onChange(of: handle) { _, _ in AccurateTextReading.warmUp() }
+            }
+            RowDivider()
+            SettingRow(title: "Its display name on X", detail: "Optional. A Space shows this under the bot's own picture, so Vello never takes itself for someone talking.") {
+                TextField("Vello (AI)", text: $displayName).textFieldStyle(.roundedBorder).frame(width: 180)
             }
             RowDivider()
             SettingRow(title: "The bot's browser", detail: "A browser that isn't your everyday Chrome, signed in to the bot's X account.") {

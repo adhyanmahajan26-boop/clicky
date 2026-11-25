@@ -234,12 +234,15 @@ public enum SpaceSpeakerLayout {
         return beside.min { ($0.box.x, $0.box.y) < ($1.box.x, $1.box.y) }
     }
 
-    /// Every name with a speaking ring on a frame, the bot's own left out.
-    public static func speakingNames(rings: [SpaceSpeakingRing], lines: [SpaceTextLine], handle: String, botName: String) -> [String] {
+    /// Every name with a speaking ring on a frame, the bot's own left out. `ownDisplayNames`: what the bot's account is
+    /// called on X when that isn't its bot name ("Chotta Tirri"), since a Space shows display names, not handles.
+    public static func speakingNames(rings: [SpaceSpeakingRing], lines: [SpaceTextLine], handle: String, botName: String,
+                                     ownDisplayNames: [String] = []) -> [String] {
         var names: [String] = []
         for ring in rings {
             guard let line = nameLine(for: ring, among: lines), let name = SpaceSpeakerName.cleaned(line.text) else { continue }
             if SpaceSpeakerName.isTheBot(name, handle: handle, botName: botName) { continue }
+            if ownDisplayNames.contains(where: { SpaceSpeakerName.isTheBot(name, handle: "", botName: $0) }) { continue }
             if !names.contains(name) { names.append(name) }
         }
         return names

@@ -233,6 +233,11 @@ struct CallOwnAccountTests {
         #expect(SpaceSpeakerLayout.speakingNames(rings: [ring], lines: lines, handle: "@vello_ai", botName: "Vello") == ["Priya"])
         let botLines = [SpaceTextLine(text: "Vello", box: SpaceBox(x: 0.45, y: 0.53, width: 0.1, height: 0.05))]
         #expect(SpaceSpeakerLayout.speakingNames(rings: [ring], lines: botLines, handle: "@vello_ai", botName: "Vello").isEmpty)
+        // The account's display name on X is left out too.
+        let displayLines = [SpaceTextLine(text: "Chotta Tirri", box: SpaceBox(x: 0.45, y: 0.53, width: 0.1, height: 0.05))]
+        #expect(SpaceSpeakerLayout.speakingNames(rings: [ring], lines: displayLines, handle: "@KPKPKP9828", botName: "Vello",
+                                                 ownDisplayNames: ["Chotta Tirri"]).isEmpty)
+        #expect(SpaceSpeakerLayout.speakingNames(rings: [ring], lines: displayLines, handle: "@KPKPKP9828", botName: "Vello") == ["Chotta Tirri"])
         // A list: the name beside the avatar.
         let listRing = SpaceSpeakingRing(box: SpaceBox(x: 0.05, y: 0.4, width: 0.08, height: 0.12), score: 1)
         let listLines = [SpaceTextLine(text: "Anjali", box: SpaceBox(x: 0.15, y: 0.42, width: 0.2, height: 0.05))]

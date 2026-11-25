@@ -48,7 +48,12 @@ final class SpaceSpeakerWatcher {
     /// The picture's width for finding the ring: enough to see a 2-point ring on a big window.
     nonisolated static let analysisWidth = 900
 
-    init(browserBundleID: String, handle: String, botName: String) {
+    /// The bot account's display name on X, when it's set (its own tile shows that, not the handle).
+    private var ownDisplayNames: [String] = []
+
+    init(browserBundleID: String, handle: String, botName: String, displayName: String = "") {
+        let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDisplayName.isEmpty { ownDisplayNames = [trimmedDisplayName] }
         self.browserBundleID = browserBundleID
         self.handle = handle
         self.botName = botName
@@ -108,13 +113,14 @@ final class SpaceSpeakerWatcher {
         let analysisStarted = Date()
         defer { analysisSeconds = Date().timeIntervalSince(analysisStarted) }
         let previous = previousFrame
-        let handle = self.handle, botName = self.botName
+        let handle = self.handle, botName = self.botName, ownDisplayNames = self.ownDisplayNames
         let result = await Task.detached(priority: .userInitiated) { () -> (RGBAFrame?, [String], Bool) in
             guard let frame = Self.frame(from: image, width: Self.analysisWidth) else { return (nil, [], false) }
             let rings = SpaceSpeakingIndicator.rings(in: frame, previous: previous)
             guard !rings.isEmpty else { return (frame, [], false) }
             let lines = Self.readText(in: image, near: rings)
-            return (frame, SpaceSpeakerLayout.speakingNames(rings: rings, lines: lines, handle: handle, botName: botName), true)
+            return (frame, SpaceSpeakerLayout.speakingNames(rings: rings, lines: lines, handle: handle, botName: botName,
+                                                                     ownDisplayNames: ownDisplayNames), true)
         }.value
         previousFrame = result.0
         if result.2 { framesWithRing += 1 }

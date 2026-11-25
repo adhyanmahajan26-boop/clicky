@@ -22,6 +22,9 @@ enum XAccountSettings {
     static let browserKey = "v5.xAccount.browser"
     static let outputDeviceKey = "v5.xAccount.outputDevice"
     static let monitorKey = "v5.xAccount.monitor"
+    /// The bot account's display name on X ("Chotta Tirri"): its own tile in a Space shows this, so it's never taken for
+    /// someone talking.
+    static let displayNameKey = "v5.xAccount.displayName"
 
     /// "@vello_ai", or empty.
     static var handle: String { XHandle.normalized(UserDefaults.standard.string(forKey: handleKey) ?? "") }
@@ -63,7 +66,8 @@ enum XAccountSettings {
     /// What a Space joined now uses, read once at the start.
     static func setup() -> XAccountSetup {
         let browser = browser
-        return XAccountSetup(handle: handle, browser: browser, browserAppURL: browser.flatMap { appURL(bundleID: $0.bundleID) },
+        return XAccountSetup(handle: handle, displayName: UserDefaults.standard.string(forKey: displayNameKey) ?? "",
+                             browser: browser, browserAppURL: browser.flatMap { appURL(bundleID: $0.bundleID) },
                              outputDeviceUID: outputDeviceUID, monitors: monitors)
     }
 
@@ -97,6 +101,7 @@ enum XAccountSettings {
 /// What one own-account Space uses.
 struct XAccountSetup {
     var handle: String
+    var displayName: String = ""
     var browser: BotBrowserApp?
     var browserAppURL: URL?
     var outputDeviceUID: String?
