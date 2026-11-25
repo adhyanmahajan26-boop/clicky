@@ -72,7 +72,7 @@ struct HandSignSettingsSection: View {
                 .pointerCursor()
             }
             RowDivider()
-            SettingRow(title: "Sign to text (Experimental): what it reads", detail: Self.signsHonestLine) {
+            SettingRow(title: "Sign to text (Experimental): what it reads", detail: Self.signsHonestLine(for: controller.signLanguage)) {
                 EmptyView()
             }
             RowDivider()
@@ -121,7 +121,15 @@ struct HandSignSettingsSection: View {
         destination == .pointerAssistant && !TheoProducts.isOn(.clicky) ? "\(destination.displayName) (off)" : destination.displayName
     }
 
-    static let signsHonestLine = "Reads 261 ISL signs and short runs of them. So far it has only been shown to work for the signers it learned from, so expect it to show ? often."
+    /// What Sign to text can read in each language, measured on signers the models never saw (docs/SIGN-LANGUAGE.md).
+    static func signsHonestLine(for language: SignLanguage) -> String {
+        switch language {
+        case .isl:
+            return "Reads 261 ISL signs and short runs of them. For new people signing the same signs it gets about 7 in 10 right; signs from other regions often differ. Expect it to show ? often."
+        case .asl:
+            return "Reads 562 ASL signs, one at a time, and finger-spelling. On people it never saw it answers a little under half of signs and is right on about 9 in 10 of those, and gets about 9 in 10 finger-spelled letters right. Expect it to show ? often."
+        }
+    }
 
     /// "Sign to text (Experimental)": the word beside the names of what has only been shown on a few signers.
     static func experimentalName(_ name: String, _ isExperimental: Bool) -> String {

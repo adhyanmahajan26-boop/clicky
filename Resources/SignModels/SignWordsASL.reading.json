@@ -1,0 +1,18 @@
+{
+ "leastWordProbability": 0.95,
+ "rightWhenAnsweredOnValidation": 0.9479768786127167,
+ "answeredOnValidation": 0.38963963963963966,
+ "temperature": 0.9014803222848445,
+ "leastWordProbabilityChosenFrom": {
+  "rule": "lowest top-probability threshold where never-taught signs are wrongly answered at most 10% of the time",
+  "folds": 3,
+  "fractionHeldOut": 0.1,
+  "seed": 0,
+  "testTaughtClips": 12088,
+  "testNeverTaughtClips": 1343,
+  "neverTaughtWronglyAnswered": 0.09233060312732688,
+  "taughtAnswered": 0.4304268696227664,
+  "taughtRightWhenAnswered": 0.9642513934268692,
+  "reached": true
+ }
+}

@@ -51,7 +51,12 @@ final class HandSignController: ObservableObject {
     static let defaultSignsAutoSendSeconds = 2.5
 
     static var savedSignLanguage: SignLanguage {
-        get { UserDefaults.standard.string(forKey: Keys.signsLanguage).flatMap(SignLanguage.init(rawValue:)) ?? SignLanguage.defaultChoice(hasModels: SignModelFolders.hasModels(for:)) }
+        get {
+            if let saved = UserDefaults.standard.string(forKey: Keys.signsLanguage).flatMap(SignLanguage.init(rawValue:)) { return saved }
+            // Nobody chose: follow the Mac when the build has both languages (ISL on an Indian region or Hindi).
+            return SignLanguage.defaultChoice(hasModels: SignModelFolders.hasModels(for:),
+                                              computerIsIndian: ComputerLanguage.isIndian(preferredLanguage: Locale.preferredLanguages.first))
+        }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.signsLanguage) }
     }
 

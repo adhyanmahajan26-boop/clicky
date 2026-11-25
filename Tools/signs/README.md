@@ -222,8 +222,17 @@ Detached jobs (each resumable: run the same line again after a stop; stop one wi
 # INCLUDE (ISL words, Zenodo 4010759, CC BY 4.0): 44 zips, one at a time; splits from AI4Bharat/INCLUDE's lists
 nohup ~/sign-data/tools/include_run.sh > ~/sign-data/logs/include.log 2>&1 &
 # PopSign ASL v2.1 (CC BY 4.0): balanced sweeps (per sign 24 train / 4 val / 8 test a sweep, round the participants)
-nohup /usr/bin/python3 ~/sign-data/tools/popsign_sweeps.py > ~/sign-data/logs/popsign.log 2>&1 &
+# Only with Addy's yes for the sweeps and the budget (its listing puts the whole set at 1.57 TB; a sweep is ~133 GB)
+nohup /usr/bin/python3 ~/sign-data/tools/popsign_sweeps.py --max-sweeps 1 --max-download-gb 40 > ~/sign-data/logs/popsign.log 2>&1 &
 ```
+
+Every download sweep keeps the limits in `studio/sweep_guard.py` (tested in `tests/test_sweep_guard.py`): it stops
+cleanly under 60 GB free; batches are cut to at most 12 GB of video and a batch never starts while an earlier one's
+videos are on disk; `--max-sweeps` and `--max-download-gb` are required (no "all") and the job stops before a batch
+would pass the budget; it prints and writes (`logs/<job>-state/plan.json`) the planned download first; and a ledger
+(`logs/<job>-state/read.tsv`) lists everything already read, which is never downloaded again. `--finish-batch all`
+closes a batch left on disk by a stop (extracts what's missing, writes the manifest rows, deletes the videos) with no
+download.
 
 `fetch.py` downloads one big file over many range requests (Zenodo gives one connection ~0.2 MB/s);
 `fetch_many.py` downloads many small files at once. The line here tops out near 10 MB/s in all (4 connections to
@@ -235,7 +244,8 @@ is read from `video_clips/` with `sign-extract` instead, as a sample in sweeps:
 
 ```bash
 # needs the four metadata files in ~/sign-data/downloads/fsboard/ (daun_v3-{train,validation,test}.json, dmk_v3-train.json)
-nohup /usr/bin/python3 ~/sign-data/tools/fsboard_sweeps.py --sweeps 5 > ~/sign-data/logs/fsboard.log 2>&1 &
+# Only with Addy's yes (about 150,000 usable clips, ~1.3 TB in all; a sweep is ~81 GB)
+nohup /usr/bin/python3 ~/sign-data/tools/fsboard_sweeps.py --max-sweeps 1 --max-download-gb 40 > ~/sign-data/logs/fsboard.log 2>&1 &
 ```
 
 Sweep k is 8,000 train clips (4,000 daun_v3, 4,000 dmk_v3), 600 daun_v3 validation and 600 test, picked with a
