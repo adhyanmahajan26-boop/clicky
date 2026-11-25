@@ -11,7 +11,7 @@
       "composio": {
         "userId": "vello"
       },
-      "description": "Recommended. One key for hundreds of apps: Gmail, Google Drive, Docs, Sheets, Slack, GitHub, Notion, Google Calendar, Linear and more, for every bot whatever its brain. No Claude or ChatGPT plan needed. Paste your Composio API key, then connect each app once with a link.",
+      "description": "One key for hundreds of apps: Gmail, Google Drive, Docs, Sheets, Slack, GitHub, Notion, Google Calendar, Linear and more, for every bot whatever its brain. No Claude or ChatGPT plan needed. Paste your Composio API key, then connect each app once with a link.",
       "via": "Your Composio API key (composio.dev, free plan available)",
       "tested": "Built 19 November 2026 against Composio's documented tool-router API (POST /api/v3.1/tool_router/session, its MCP address with x-api-key, and /link) and a local stand-in (crossplatform/tests/composio_stub.py)."
     },
