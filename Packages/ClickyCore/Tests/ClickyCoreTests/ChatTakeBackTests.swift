@@ -75,6 +75,6 @@ final class BusyMessagesTests: XCTestCase {
         XCTAssertEqual(BusyMessages.combined(["just this"], owner: "Addy"), "just this")
         XCTAssertEqual(BusyMessages.combined(["first", " ", "second\n"], owner: "Addy"),
                        "(Addy sent these 2 messages while you were answering. Answer them together, in one reply.)\n\nfirst\n\nsecond")
-        XCTAssertTrue(BusyMessages.combined(["a", "b"], owner: "").hasPrefix("(The owner sent these 2"))
+        XCTAssertTrue(BusyMessages.combined(["a", "b"], owner: OwnerName.unset).hasPrefix("(The owner sent these 2"))
     }
 }

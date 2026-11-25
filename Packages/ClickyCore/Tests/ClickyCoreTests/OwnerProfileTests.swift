@@ -8,7 +8,7 @@ final class OwnerProfileTests: XCTestCase {
         XCTAssertTrue(section.contains("<about-owner>\n- Runs a studio in Pune\n</about-owner>"))
         XCTAssertFalse(section.contains("<!--"))
         XCTAssertTrue(section.contains(OwnerProfile.tagExample))
-        let empty = OwnerProfile.section(OwnerProfile.newFile, path: "/m/about-you.md", owner: "")
+        let empty = OwnerProfile.section(OwnerProfile.newFile, path: "/m/about-you.md", owner: OwnerName.unset)
         XCTAssertTrue(empty.hasPrefix("About the owner: nothing is saved yet"))
         XCTAssertFalse(empty.contains("Addy"))
     }
