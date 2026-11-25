@@ -174,6 +174,7 @@ When the owner asks Clicky to *do* something ("open chrome and google this", "op
 | `ClickyAnalytics.swift` | ~45 | No-op analytics stubs (tracking removed in the personal build). |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
+| `Link/ConnectorLinkSync.swift` | ~120 | Keeps the connector hub's list of apps the same on both linked Macs (link key `connectors`): merges the other Mac's list and adds, removes or switches apps on and off here. Never a sign-in. Rules in ClickyCore `Link/LinkConnectorApps.swift`. |
 
 ## Build & Run
 
