@@ -83,7 +83,7 @@ public struct SignReadingSettings: Equatable, Sendable {
     /// The top word needs at least this probability to be read at all; under it the stretch is not read.
     public var leastWordProbability: Float
     /// Finger-spelling needs at least this confidence to be used. 0.85, tuned on PopSign and FSboard validation
-    /// signers together with the wrist travel below: lower, the ASL spelling model reads some one-handed signs as words.
+    /// signers together with the wrist travel below: lower, the ASL spelling model reads some one-handed signs as spelled words.
     public var leastSpellingConfidence: Float
     /// A top word at least this likely is used even when the stretch looks like finger-spelling.
     public var wordProbabilityThatBeatsSpelling: Float
