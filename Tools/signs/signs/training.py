@@ -172,7 +172,7 @@ def spelling_ctc_loss(
             )
             if device_type == "cpu" or not operator_is_missing_on_device:
                 raise
-            print(f"ctc_loss is not implemented on {device_type}; computing only the loss on the CPU", flush=True)
+            print(f"ctc_loss is not implemented on {device_type}; computing only the loss on the CPU", file=sys.stderr, flush=True)
             _ctc_loss_runs_on_this_device[device_type] = False
     loss_on_cpu = functional.ctc_loss(
         time_major_log_probabilities.float().cpu(),
