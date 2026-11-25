@@ -67,13 +67,16 @@ measured on the same people the models were trained on. On INCLUDE signers it ne
 right, and on another dataset's signers (ISL-CSLTR) almost none, so expect "?" often.
 
 What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels in the repo; a model in the data folder
-`~/Library/Application Support/Theo/SignModels` is taken first), float16, 12 MB in all:
+`~/Library/Application Support/Theo/SignModels` is taken first), float16, 23 MB in all:
 
 - `SignWordsISL`: 261 ISL words from INCLUDE, with a "not sure" threshold of 0.95.
 - `SignSentencesISL`: the same words in short runs without rests between them.
 - `SignSpellISL`: ISL letters (not J and Z), also used by Spell to text.
-- No ASL models yet: choosing ASL says "ASL isn't in this build yet. It arrives in an update." With no saved choice the
-  language starts as one the build has models for (ISL today).
+- `SignWordsASL`: 562 ASL signs from PopSign, with a "not sure" threshold of 0.95.
+- `SignSpellASL`: ASL finger-spelling on the move (phrases, letters and digits), from FSboard.
+- No ASL sentence model yet, so every ASL stretch is read as one sign or one spelled word. With no saved choice the
+  language starts as the first that has models (ASL now that both do); a language without models says "<language> isn't
+  in this build yet. It arrives in an update."
 
 ### Today's numbers (November 2026), each with what it was measured on
 
@@ -92,6 +95,25 @@ What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels i
 
 Float16 and float32 read exactly alike on the INCLUDE test clips and the built streams, and on the unseen signer's
 letters; on 455 multimodal photos 454 got the same top letter.
+
+### ASL (Experimental), measured on signers it never saw
+
+PopSign and FSboard split their recordings by person, so every ASL number here is on people the models never saw.
+
+| What | Measured on | Result |
+| --- | --- | --- |
+| Word model, whole clip (Python) | PopSign's 10 test signers, 4,477 clips of the 562 signs (sweep 1: 24 train / 4 val / 8 test clips a sign) | 76.4% right first guess, 94.4% in the top 5 |
+| Through the app's own pipeline, threshold off | The same clips read as the camera would (`sign-eval clips`, word model only) | 71.7% right (the stretch finder finds no sign in 1.5% of PopSign's game clips and splits 5.5% in two) |
+| With the 0.95 threshold | The same clips, word model only | **Answers only 44% of signs** (56% are shown as "?"), and is right on 93.8% of those it answers |
+| With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (12,088 taught and 1,343 never-taught test clips) | Taught signs: 43% answered, 96.4% right when answered; never-taught signs wrongly given a word 9.2% of the time |
+| Both ASL models together, as the app runs them | PopSign's test clips | 48.8% answered, 85.2% right when answered: the spelling model reads some signs as spelled words |
+| Finger-spelling, whole clip (Python) | FSboard's 15 test signers, 600 phrases | 7.2% of characters wrong |
+| Finger-spelling through the app's pipeline | The same 600 phrases (`sign-eval clips`, both ASL models) | 41.2% of phrases exactly right |
+
+What ASL can't read: signs outside PopSign's 562 (a vocabulary chosen for a children's game, so many everyday
+words are missing); sentences (no ASL sentence model: each stretch is one sign); facial grammar; and it was trained
+on phone videos held at arm's length, not a laptop camera, so expect less on your own camera. More data helps only
+so much: see the learning curve in Tools/signs/README.md when it's measured.
 
 ### Why it doesn't carry over to other signers yet (round 7 findings)
 
@@ -154,3 +176,11 @@ The models were trained on (and ISL-CSLTR is used only to measure), each under C
   Rutuja Kadam, Ved Mishra, Gagandeep Kaur, Grishma Y. Bobhate, Ghanshyam Tejani, David Bassir. 2026. *A Multimodal
   Indian Sign Language Dataset for English and Marathi Alphabet Signs and Numerical Digits with Pose and Skin
   Segmentation Representations.* Mendeley Data, V2, doi:10.17632/2tj6c7pzfk.2. CC BY 4.0.
+- **PopSign ASL v2.1** (ASL words): Georgia Tech and Google; described in *PopSign ASL v1.0: An Isolated American Sign
+  Language Dataset Collected via Smartphones* (Thad Starner et al., NeurIPS 2023 Datasets and Benchmarks; full author
+  list not re-checked here). Data: signdata.cc.gatech.edu/data/popsign_v2_1, CC BY 4.0 as stated there when it was
+  downloaded (November 2026).
+- **FSboard** (ASL finger-spelling): Manfred Georg, Garrett Tanzer, Saad Hassan, Maximus Shengelia, Esha Uboweja, Sam
+  Sepah, Sean Forbes, Thad Starner. 2024. *FSboard: Over 3 million characters of ASL fingerspelling collected via
+  smartphones.* arXiv:2407.15806. Data: signdata.cc.gatech.edu/data/fsboard (also kaggle.com/datasets/googleai/fsboard),
+  CC BY 4.0 as stated where it was downloaded (November 2026).
