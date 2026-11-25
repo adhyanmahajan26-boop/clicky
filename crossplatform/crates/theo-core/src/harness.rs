@@ -729,7 +729,9 @@ impl Harness {
                 let Some((newest_id, _)) = waiting.last().cloned() else { return me.release(&bot.id) };
                 let Some(bot) = me.bot(&bot.id) else { return me.release(&bot.id) };
                 let together = protocol::combined_busy_messages(&waiting.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(), &me.owner());
-                me.start_own_turn(bot, &together, &newest_id).await;
+                // The others are in `together` already: the catch-up mustn't tell them twice.
+                let sent_together: Vec<String> = waiting.iter().map(|(id, _)| id.clone()).collect();
+                me.start_own_turn(bot, &together, &newest_id, &sent_together).await;
             });
             return;
         }
@@ -737,7 +739,7 @@ impl Harness {
             me.wait_in_line(&bot.id, &bot.id).await;
             // It may have been changed or turned off while the message waited.
             let Some(bot) = me.bot(&bot.id) else { return me.release(&bot.id) };
-            me.start_own_turn(bot, &text, &owner_message_id).await;
+            me.start_own_turn(bot, &text, &owner_message_id, &[]).await;
         });
     }
 
@@ -820,7 +822,7 @@ impl Harness {
         }
     }
 
-    async fn start_own_turn(self: &Arc<Self>, bot: Bot, text: &str, owner_message_id: &str) {
+    async fn start_own_turn(self: &Arc<Self>, bot: Bot, text: &str, owner_message_id: &str, sent_together: &[String]) {
         let record = self.conversation(&bot.id);
         let session = record.sessions.get(&bot.id).cloned();
         let first_turn = session.is_none();
@@ -833,7 +835,8 @@ impl Harness {
             let names: Vec<String> = tagged.iter().filter_map(|id| self.bot(id).map(|b| b.name)).collect();
             prompt.push_str(&format!("\n\n({} tagged {}: message them with a [TELL:] line.)", self.owner(), names.join(" and ")));
         }
-        let (reports, taken) = self.take_waiting_reports(&bot);
+        let (reports, mut taken) = self.take_waiting_reports(&bot);
+        taken.extend(sent_together.iter().cloned());
         prompt = self.catch_up(&record, &bot, owner_message_id, &taken) + &reports + &self.ceo_turn_note(&bot) + &prompt;
         if !bot.primary {
             prompt = format!("({})\n\n{}", self.reach_note(&bot), prompt);

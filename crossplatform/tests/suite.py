@@ -387,7 +387,7 @@ def f01():
     return answered, {"retry_started": bool(retried), "answered_in_the_end": answered, "tail": [(m["author"], m["text"][:100]) for m in rest[-5:]]}
 
 
-@test("F02", "Theo is SIGKILLed with 1 message running and 4 queued behind it", "durability+")
+@test("F02", "Theo is SIGKILLed with 1 message running and 4 queued behind it: every message is answered once, the queued ones together", "durability+")
 def f02():
     T.fake("hang"); b = bid("Forge"); n = T.nonce()
     texts = ["q%d %s" % (k, n) for k in range(5)]
@@ -401,7 +401,10 @@ def f02():
     _, rest = after(msgs, texts[0]); first = len(replies(rest, b))
     T.restart(); time.sleep(3); T.wait_idle(seconds=60)
     _, rest2 = after(T.disk_chat(b), texts[0]); second = len(replies(rest2, b))
-    return order == texts and first == 5 and second == 5, {"order_kept": order == texts, "replies_after_crash": first, "replies_after_normal_restart": second}
+    _, after_last = after(msgs, texts[-1])
+    # Messages sent while a bot answers go to it together (P_busy_collect), so 4 queued ones take 1 to 4 turns, never more.
+    answered = len(replies(after_last, b)) >= 1
+    return order == texts and 2 <= first <= 5 and answered and second == first, {"order_kept": order == texts, "replies_after_crash": first, "last_answered": answered, "replies_after_normal_restart": second}
 
 
 @test("F03", "Theo is SIGKILLed a fifth of a second after the owner sends", "durability+")
@@ -639,10 +642,12 @@ def t18():
         m = T.chat(i, 400)
         first = next((k for k, x in enumerate(m) if x["text"] == "storm %s #0" % n), len(m)); m = m[first:]
         owner = [x["text"] for x in m if x["author"] == "user" and x["text"].startswith("storm " + n)]
-        per[name] = {"owner": len(owner), "in_order": owner == ["storm %s #%d" % (n, k) for k in range(5)], "replies": len(replies(m, i))}
+        _, after_last = after(m, "storm %s #4" % n)
+        per[name] = {"owner": len(owner), "in_order": owner == ["storm %s #%d" % (n, k) for k in range(5)], "replies": len(replies(m, i)), "last_answered": len(replies(after_last, i)) >= 1}
     valid = all(json.loads(f.read_text(encoding="utf-8")) is not None for f in (T.BOTS / "chats").glob("*.json"))
     T.fake("ok")
-    return idle and valid and all(v["owner"] == 5 and v["in_order"] and v["replies"] == 5 for v in per.values()), {"seconds": secs, "per_bot": per, "peak_at_once": peak["n"]}
+    # What comes while a bot answers goes to it together (P_busy_collect): 2 to 5 replies each, the newest message always answered.
+    return idle and valid and all(v["owner"] == 5 and v["in_order"] and 2 <= v["replies"] <= 5 and v["last_answered"] for v in per.values()), {"seconds": secs, "per_bot": per, "peak_at_once": peak["n"]}
 
 
 @test("T19", "Stop in the middle of a streaming reply", "concurrency")
@@ -1008,7 +1013,7 @@ def p_busy_collect():
     T.say(b, "also this"); T.say(b, "and this")
     T.fake("ok"); T.wait_idle(seconds=60)
     cs = [c for c in T.calls(mark) if re.search(r"You are Courier\b", c["system"])]
-    together = len(cs) == 1 and "also this" in cs[0]["prompt"] and "and this" in cs[0]["prompt"] and "2 messages" in cs[0]["prompt"]
+    together = len(cs) == 1 and cs[0]["prompt"].count("also this") == 1 and "and this" in cs[0]["prompt"] and "2 messages" in cs[0]["prompt"]
     return together, {"turns_after": len(cs), "prompt": cs[0]["prompt"][-200:] if cs else None}
 
 
