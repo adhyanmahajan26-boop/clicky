@@ -123,3 +123,38 @@ public enum ConnectorListing {
         return "worked \(Int(seconds / 86400)) d ago"
     }
 }
+
+// MARK: - Chrome and plugin servers
+
+extension ConnectorListing {
+    /// Claude Code's Chrome tools ("claude-in-chrome") are built in and never appear in `claude mcp list`, so the listing
+    /// alone always said Chrome wasn't connected. They are there when Claude Code has its Chrome helper installed or
+    /// Chrome turned on by default (`~/.claude.json`); a bot with Chrome is then started with `--chrome`.
+    public static let claudeChromeServer = "claude-in-chrome"
+
+    public static func claudeHasChrome(claudeJSON: Data?, nativeHostInstalled: Bool) -> Bool {
+        if nativeHostInstalled { return true }
+        guard let claudeJSON, let settings = try? JSONSerialization.jsonObject(with: claudeJSON) as? [String: Any] else { return false }
+        return settings["claudeInChromeDefaultEnabled"] as? Bool == true
+    }
+
+    /// The listing with Chrome added as connected when Claude Code has it built in and the listing didn't say otherwise.
+    public static func addingBuiltInChrome(_ statuses: [String: ConnectorState], claudeHasChrome: Bool) -> [String: ConnectorState] {
+        guard claudeHasChrome, statuses[claudeChromeServer] == nil else { return statuses }
+        var added = statuses
+        added[claudeChromeServer] = .connected
+        return added
+    }
+
+    /// A server's name as the Connectors screen shows it: "claude.ai Runway (runway.team)" as "Runway (runway.team)", and a
+    /// plugin's "plugin:hostinger:hostinger" as "Hostinger (plugin)" ("plugin:theo:notes" as "Notes (theo plugin)").
+    public static func displayName(_ server: String) -> String {
+        if server.hasPrefix("claude.ai ") { return String(server.dropFirst("claude.ai ".count)) }
+        let parts = server.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        if parts.count == 3, parts[0] == "plugin", !parts[1].isEmpty, !parts[2].isEmpty {
+            let name = parts[2].prefix(1).uppercased() + parts[2].dropFirst()
+            return parts[1].lowercased() == parts[2].lowercased() ? "\(name) (plugin)" : "\(name) (\(parts[1]) plugin)"
+        }
+        return server
+    }
+}

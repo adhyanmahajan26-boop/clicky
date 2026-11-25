@@ -1783,7 +1783,8 @@ struct ConnectorsScreen: View {
                 }
             }
             Spacer(minLength: 12)
-            StatusPill(text: pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
+            // Composio waits for an API key, not a sign-in.
+            StatusPill(text: hubRecord?.isComposio == true && state == .needsSignIn ? "Needs your key" : pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
             Group {
                 switch state {
                 case .needsSignIn where hubRecord?.takesPastedToken == true:

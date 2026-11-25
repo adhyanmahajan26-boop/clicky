@@ -101,6 +101,15 @@ enum BotConnectors {
                      claudeToolPrefix: "mcp__claude-in-chrome", openCodeServer: "claude-in-chrome", openCodeURL: nil),
     ]
 
+    /// Whether Claude Code on this Mac has its Chrome tools (built in, so never in `claude mcp list`): its Chrome helper is
+    /// installed, or Chrome is on by default. Read from the owner's real home, which a test profile shares through symlinks.
+    static var claudeHasChrome: Bool {
+        let home = URL(fileURLWithPath: TheoProfile.realHome, isDirectory: true)
+        let nativeHost = home.appendingPathComponent(".claude/chrome/chrome-native-host").path
+        return ConnectorListing.claudeHasChrome(claudeJSON: try? Data(contentsOf: home.appendingPathComponent(".claude.json")),
+                                                nativeHostInstalled: FileManager.default.fileExists(atPath: nativeHost))
+    }
+
     /// Apps bots on OpenCode and Grok reach through Theo's claudia_app tool (ConnectorBridge), while the helper is missing.
     static let bridgedApps: Set<String> = ["gmail", "notion", "calendar", "drive", "docs", "sheets"]
 
