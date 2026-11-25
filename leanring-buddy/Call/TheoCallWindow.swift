@@ -63,11 +63,11 @@ enum TheoCallController {
         session.start(openingWords: openingWords)
     }
 
-    /// "Join a Space as Vello": opens the Space's link (if one was pasted) in the bot's browser, then runs the call on
-    /// Vello's own X account, hearing only that browser and speaking into its virtual mic. A person taps Join and Request
-    /// to speak there; Vello never touches the page. Nil when it started, else why it didn't.
+    /// "Join a Space": opens the Space's link (if one was pasted) in the bot's browser, then runs the X Space bot's call on
+    /// its own X account, hearing only that browser and speaking into its virtual mic. A person taps Join and Request to
+    /// speak there; the bot never touches the page. Nil when it started, else why it didn't.
     @discardableResult
-    static func joinSpaceAsVello(link: URL?, activates: Bool = true) -> String? {
+    static func joinSpace(link: URL?, activates: Bool = true) -> String? {
         if isActive {
             if let window { window.orderFrontRegardless() }
             return session?.isOwnAccount == true ? nil : "A call is going on now. End it first."
@@ -299,7 +299,7 @@ private struct OwnAccountStrip: View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 10))
-                Text("In the Space as \(session.ownAccount?.handle.isEmpty == false ? session.ownAccount!.handle : "Vello's own account")")
+                Text("In the Space as \(session.ownAccount?.handle.isEmpty == false ? session.ownAccount!.handle : "its own account")")
                 Text("·")
                 Text("Hearing")
                 GeometryReader { proxy in

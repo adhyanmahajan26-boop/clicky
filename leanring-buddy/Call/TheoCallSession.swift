@@ -158,8 +158,8 @@ enum CallPrompt {
     /// A Space on Vello's own X account: Vello's persona and the Space's rules, and nothing from the owner's chats, team,
     /// runs or memory, since everything it knows it could say in public (ClickyCore `CallOwnAccount`).
     @MainActor
-    static func ownAccount(store: BotsStore, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
-        let theo = store.primary
+    static func ownAccount(bot: NativeBot?, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+        let theo = bot
         let fixedLanguage: String?
         switch language {
         case .english: fixedLanguage = "English"
@@ -419,8 +419,11 @@ final class TheoCallSession: ObservableObject {
         self.isLive = isLive
         self.ownAccount = ownAccount
         audio = CallAudio(hub: hub, isLive: isLive, ownAccount: ownAccount)
-        // A Space on Vello's own account is always Vello's own bot.
-        if ownAccount == nil, let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
+        // A Space on the X account is always the X Space bot, a bot of its own apart from Vello.
+        if ownAccount != nil {
+            bot = store.ensureXSpaceBot()
+            isVellosOwnBot = false
+        } else if let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
             bot = chosen
             isVellosOwnBot = false
         } else {
@@ -481,7 +484,7 @@ final class TheoCallSession: ObservableObject {
         }
         brainNameForWords = BrainAvailability.name(of: brainSetting)
         // The call starts with as much of the chat as its brain has room for. A public Space gets none of it.
-        let prompt = ownAccount.map { CallPrompt.ownAccount(store: store, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language) }
+        let prompt = ownAccount.map { CallPrompt.ownAccount(bot: bot, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language) }
             ?? CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
                                  carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
         let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
@@ -1131,7 +1134,8 @@ final class TheoCallSession: ObservableObject {
         if isOwnAccount {
             let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: false, text: words)]
             let isAddressed = CallGroupMode.isAddressed(words, assistantNames: assistantNames)
-            ask(CallOwnAccount.message(lines: heard, handle: ownAccount?.handle ?? "", botName: botName, isAddressed: isAddressed, passesInARow: groupPassesInARow),
+            ask(CallOwnAccount.message(lines: heard, handle: ownAccount?.handle ?? "", botName: botName, isAddressed: isAddressed, passesInARow: groupPassesInARow,
+                                       onStage: speakerWatcher?.onStage ?? []),
                 acknowledgesIfSlow: isAddressed)
             return
         }
@@ -1683,6 +1687,7 @@ final class TheoCallSession: ObservableObject {
         report["handle"] = ownAccount.handle
         report["browser"] = ownAccount.browser?.bundleID ?? ""
         report["currentSpeaker"] = currentSpeaker ?? ""
+        report["bot"] = bot?.id ?? ""
         report["speakers"] = speakerWatcher?.report() ?? [:]
         return report
     }

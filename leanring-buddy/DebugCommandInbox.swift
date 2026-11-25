@@ -310,7 +310,7 @@ final class DebugCommandInbox {
             }
             if let monitor = commandObject["monitor"] as? Bool { defaults.set(monitor, forKey: XAccountSettings.monitorKey) }
             let link = (commandObject["link"] as? String).flatMap { XAccountSettings.spaceLink(from: $0) }
-            let problem = TheoCallController.joinSpaceAsVello(link: link, activates: false)
+            let problem = TheoCallController.joinSpace(link: link, activates: false)
             reply(commandIdentifier: commandIdentifier, isSuccess: problem == nil,
                   result: ["started": problem == nil, "problem": problem ?? "", "status": TheoCallController.session?.report() ?? [:]], errorMessage: problem)
         case "ownAccountStop":

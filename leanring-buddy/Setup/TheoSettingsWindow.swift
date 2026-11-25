@@ -666,7 +666,7 @@ struct VoiceSettingsContent: View {
                     Button { TheoCallController.start() } label: { Label("Call Vello", systemImage: "phone.fill") }.buttonStyle(.theoPrimary)
                 }
             }
-            XAccountSettingsSection()
+            XSpaceBotLinkSection()
         }
     }
 

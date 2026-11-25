@@ -169,6 +169,89 @@ struct CallOwnAccountTests {
         #expect(!SpaceSpeakerName.isMisreading("ana", of: "anu"))
     }
 
+    @Test func lookAlikeLettersAreReadAsLatin() {
+        // Text reading wrote the bot's handle "@KPKPKP9828" in Cyrillic look-alikes (Studio, 25 Nov).
+        #expect(SpaceSpeakerName.cleaned("@КРКРКР9828") == "KPKPKP9828")
+        #expect(SpaceSpeakerName.latinized("Рriуа") == "Priya")
+        #expect(SpaceSpeakerName.latinized("ΚΑΤΕ") == "KATE")
+        // A real Cyrillic or Greek name stays as it is.
+        #expect(SpaceSpeakerName.latinized("Иван") == "Иван")
+        #expect(SpaceSpeakerName.latinized("Δήμητρα") == "Δήμητρα")
+        #expect(SpaceSpeakerName.isTheBot("КРКРКР9828", handle: "@KPKPKP9828", botName: "Chotta Tirri"))
+    }
+
+    @Test func namesInOtherScriptsAndWithEmojiAreKept() {
+        #expect(SpaceSpeakerName.cleaned("प्रिया शर्मा") == "प्रिया शर्मा")
+        #expect(SpaceSpeakerName.cleaned("🚀 Aarav ✨") == "Aarav")
+        #expect(SpaceSpeakerName.cleaned("@aarav_k · Speaker") == "aarav_k")
+    }
+
+    @Test func misreadingsShareASkeleton() {
+        #expect(SpaceSpeakerName.skeleton("Prlya") == SpaceSpeakerName.skeleton("Priya"))
+        #expect(SpaceSpeakerName.skeleton("rnohan") == SpaceSpeakerName.skeleton("Mohan"))
+        #expect(SpaceSpeakerName.skeleton("R0hit") == SpaceSpeakerName.skeleton("Rohit"))
+        #expect(SpaceSpeakerName.skeleton("Rahul") != SpaceSpeakerName.skeleton("Rohan"))
+    }
+
+    @Test func theRosterSnapsMisreadingsToThePersonSeenMost() {
+        let start = Date(timeIntervalSince1970: 2000)
+        var roster = SpaceSpeakerRoster()
+        for frame in 0..<5 { #expect(roster.observe("Priya", at: start.addingTimeInterval(Double(frame))) == "Priya") }
+        #expect(roster.observe("Prlya", at: start.addingTimeInterval(6)) == "Priya")
+        #expect(roster.observe("Priy", at: start.addingTimeInterval(7)) == "Priya")
+        #expect(roster.canonical("PRIYA") == "Priya")
+        // Someone else stays someone else, and is on stage only once seen twice.
+        #expect(roster.observe("Rohan", at: start.addingTimeInterval(8)) == "Rohan")
+        #expect(roster.onStage == ["Priya"])
+        _ = roster.observe("Rohan", at: start.addingTimeInterval(9))
+        _ = roster.observe("Rahul", at: start.addingTimeInterval(10))
+        _ = roster.observe("Rahul", at: start.addingTimeInterval(11))
+        #expect(roster.onStage == ["Priya", "Rohan", "Rahul"])
+        #expect(roster.canonical("Anjali") == nil)
+    }
+
+    @Test func aLineGetsANameOnlyWhenTheFramesAgree() {
+        let start = Date(timeIntervalSince1970: 3000)
+        // One frame is not enough.
+        var single = SpaceSpeakerVotes()
+        single.record(names: ["Priya"], at: start)
+        #expect(single.speaker(from: start, to: start.addingTimeInterval(2)) == nil)
+        // Split frames: no name.
+        var split = SpaceSpeakerVotes()
+        for (offset, name) in [(0.0, "Priya"), (0.3, "Rahul"), (0.6, "Priya"), (0.9, "Rahul"), (1.2, "Anjali")] {
+            split.record(names: [name], at: start.addingTimeInterval(offset))
+        }
+        #expect(split.speaker(from: start, to: start.addingTimeInterval(2)) == nil)
+        #expect(split.verdict(from: start, to: start.addingTimeInterval(2)).share < SpaceSpeakerVotes.leastShareForAName)
+        // Frames that agree, with a few that found no ring: the name.
+        var agreed = SpaceSpeakerVotes()
+        for (offset, names) in [(0.0, ["Priya"]), (0.3, []), (0.6, ["Priya"]), (0.9, ["Priya"]), (1.2, ["Rahul"])] {
+            agreed.record(names: names, at: start.addingTimeInterval(offset))
+        }
+        #expect(agreed.speaker(from: start, to: start.addingTimeInterval(2)) == "Priya")
+    }
+
+    @Test func theBrainIsToldWhoIsOnStage() {
+        let lines = [CallGroupMode.HeardLine(isOwner: false, text: "Chotta, what do you think?", speaker: "Priya")]
+        let message = CallOwnAccount.message(lines: lines, handle: "@KPKPKP9828", botName: "Chotta Tirri", isAddressed: true, onStage: ["Priya", "Rahul"])
+        #expect(message.contains("On stage so far, by the names the Space shows: Priya, Rahul."))
+        #expect(message.contains("Priya: Chotta, what do you think?"))
+        let nobody = CallOwnAccount.message(lines: lines, handle: "@KPKPKP9828", botName: "Chotta Tirri", isAddressed: true)
+        #expect(!nobody.contains("On stage so far"))
+    }
+
+    @Test func theSpaceBotIsNotCalledByEveryMentionOfASpace() {
+        #expect(!CallListenMode.names(forBotNamed: "X Space bot").contains("space"))
+        #expect(CallListenMode.names(forBotNamed: "Chotta Tirri").contains("tirri"))
+    }
+
+    @Test func theSpaceBotNeverHosts() {
+        let prompt = CallOwnAccount.systemPrompt(personaHead: "You are Chotta Tirri.", handle: "@KPKPKP9828", owner: "Addy", botName: "Chotta Tirri", languageRule: "")
+        #expect(prompt.contains("You only ever join Spaces"))
+        #expect(prompt.contains("never host, start, schedule or co-host"))
+        #expect(prompt.contains("You are an AI, made and run by Addy"))
+    }
+
     // MARK: Finding the speaking ring
 
     /// A dark Space page with three avatars: the middle one has a violet ring.

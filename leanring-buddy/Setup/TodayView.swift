@@ -26,7 +26,6 @@ struct TodayView: View {
                     HStack(alignment: .center) {
                         Text(greeting).font(TheoType.title).foregroundColor(DS.Colors.textPrimary)
                         Spacer()
-                        JoinSpaceButton()
                         Button { TheoCallController.start() } label: {
                             HStack(spacing: 7) {
                                 Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))

@@ -287,7 +287,7 @@ final class ClaudiaControlInbox {
             store.save(bot)
             reply(identifier, ok: true, result: ["id": bot.id], error: nil)
         case "botUpdate":
-            // {id, enabled?, authority?, canMessage?, primary?: true}
+            // {id, enabled?, authority?, canMessage?, primary?: true, name?}
             let store = BotsStore.shared
             guard let id = command["id"] as? String, var bot = store.bot(id) else { reply(identifier, ok: false, result: nil, error: "No such bot."); return }
             if command["primary"] as? Bool == true { store.makePrimary(id); bot = store.bot(id) ?? bot }
@@ -298,6 +298,7 @@ final class ClaudiaControlInbox {
             if let model = command["model"] as? String, !model.isEmpty { bot.model = model; bot.effort = nil }
             if let apps = command["apps"] as? [String] { bot.apps = apps }
             if let instructions = command["instructions"] as? String, !instructions.isEmpty { bot.instructions = instructions }
+            if let name = command["name"] as? String, !name.trimmingCharacters(in: .whitespaces).isEmpty { bot.name = name }
             // "sarvam:<speaker>" or "apple:<voice id>"; "" goes back to the usual call voice.
             if let callVoice = command["callVoice"] as? String { bot.callVoice = callVoice.isEmpty ? nil : callVoice }
             // "instructions" or "nature": makes the bot's own file the way its settings' Open button does, without opening it.

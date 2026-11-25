@@ -23,6 +23,8 @@ final class SpaceSpeakerWatcher {
     private let handle: String
     private let botName: String
     private(set) var votes = SpaceSpeakerVotes()
+    /// Everyone seen speaking this session: readings snap to it ("Prlya" → "Priya"), and it's who is on stage.
+    private(set) var roster = SpaceSpeakerRoster()
     private var loop: Task<Void, Never>?
     private var isSpeechGoingOn = false
     private var previousFrame: RGBAFrame?
@@ -75,6 +77,9 @@ final class SpaceSpeakerWatcher {
     /// The name seen most while the words just heard were said, or nil ("Someone").
     func speaker(from start: Date, to end: Date) -> String? { votes.speaker(from: start, to: end) }
 
+    /// Who has been seen speaking more than once, in the order they first spoke.
+    var onStage: [String] { roster.onStage }
+
     private func startLoop() {
         callLog("📞 Space: looking for who's talking")
         loop = Task { @MainActor [weak self] in
@@ -125,8 +130,10 @@ final class SpaceSpeakerWatcher {
         previousFrame = result.0
         if result.2 { framesWithRing += 1 }
         if !result.1.isEmpty { framesWithName += 1 }
-        lastNames = result.1
-        votes.record(names: result.1, at: capturedAt)
+        // Each reading as the roster knows it, so the votes count one person once however it was misread.
+        let names = result.1.map { roster.observe($0, at: capturedAt) }
+        lastNames = names
+        votes.record(names: names, at: capturedAt)
         onCurrentSpeaker?(votes.current(at: Date()))
     }
 
@@ -234,6 +241,9 @@ final class SpaceSpeakerWatcher {
         // The accurate reader once it's loaded: the fast one read "Priya" as "Prlya" every time (Studio, 25 Nov).
         request.recognitionLevel = AccurateTextReading.isReady ? .accurate : .fast
         request.usesLanguageCorrection = false
+        // Latin scripts first: with automatic languages the reader wrote "@KPKPKP9828" in Cyrillic look-alikes.
+        request.automaticallyDetectsLanguage = false
+        request.recognitionLanguages = latinFirstLanguages(for: request)
         try? VNImageRequestHandler(cgImage: enlarged, options: [:]).perform([request])
         // The crop as it really was, after clipping to the picture.
         let cropBox = SpaceBox(x: pixelRect.minX / Double(image.width), y: pixelRect.minY / Double(image.height),
@@ -249,6 +259,14 @@ final class SpaceSpeakerWatcher {
 
     /// The strip at twice the size, with every vivid pixel (the speaking ring, a badge) painted the strip's background
     /// colour, so only the name's plain text is left to read.
+    /// English and the other Latin-script languages Vision reads, English first.
+    private nonisolated static func latinFirstLanguages(for request: VNRecognizeTextRequest) -> [String] {
+        let supported = (try? request.supportedRecognitionLanguages()) ?? ["en-US"]
+        let wanted = ["en-US", "en-GB", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-BR", "nl-NL", "id-ID", "ms-MY", "tr-TR", "vi-VT", "pl-PL"]
+        let chosen = wanted.filter(supported.contains)
+        return chosen.isEmpty ? ["en-US"] : chosen
+    }
+
     private nonisolated static func doubledWithoutVividColour(_ image: CGImage) -> CGImage? {
         let width = image.width * 2, height = image.height * 2
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -278,7 +296,7 @@ final class SpaceSpeakerWatcher {
     }
 
     func report() -> [String: Any] {
-        ["framesLooked": framesLooked, "framesWithRing": framesWithRing, "framesWithName": framesWithName, "lastNames": lastNames,
+        ["framesLooked": framesLooked, "framesWithRing": framesWithRing, "framesWithName": framesWithName, "lastNames": lastNames, "onStage": roster.onStage,
          "problem": lastProblem ?? "", "window": windowTitle, "current": votes.current(at: Date()) ?? "",
          "accurateReading": AccurateTextReading.isReady, "lookupSeconds": lookupSeconds, "captureSeconds": captureSeconds, "analysisSeconds": analysisSeconds]
     }

@@ -271,9 +271,42 @@ public enum SpaceSpeakerName {
         var words = kept.split(separator: " ").map(String.init)
         while let last = words.last, notNames.contains(last.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))) { words.removeLast() }
         while let first = words.first, notNames.contains(first.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))) { words.removeFirst() }
-        let name = words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " .-_'"))
+        let name = latinized(words.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " .-_'")))
         guard name.count >= 2, name.contains(where: \.isLetter) else { return nil }
         return String(name.prefix(longestName)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Cyrillic and Greek letters that look like Latin ones. Text reading wrote "@KPKPKP9828" as "@КРКРКР9828" (Studio,
+    /// 25 Nov): every letter Cyrillic, every one a look-alike.
+    static let latinLookAlikes: [Character: Character] = [
+        "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y",
+        "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s", "І": "I", "Ј": "J", "Ѕ": "S",
+        "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T",
+        "Υ": "Y", "Χ": "X", "ο": "o", "ν": "v", "ι": "i", "κ": "k", "α": "a", "τ": "t",
+    ]
+
+    /// A name with its Cyrillic and Greek look-alikes written in Latin, when every such letter in it has one. A real
+    /// Cyrillic or Greek name ("Иван", "Δήμητρα") has letters with no look-alike and stays as it is.
+    public static func latinized(_ name: String) -> String {
+        let foreign = name.filter { character in
+            character.unicodeScalars.contains { (0x0370...0x03FF).contains($0.value) || (0x0400...0x04FF).contains($0.value) }
+        }
+        guard !foreign.isEmpty, foreign.allSatisfy({ latinLookAlikes[$0] != nil }) else { return name }
+        return String(name.map { latinLookAlikes[$0] ?? $0 })
+    }
+
+    /// A name for matching readings of it: Latin look-alikes, lower case, letters and digits only, and the letters text
+    /// reading swaps for each other made one ("prlya" and "priya", "rnohan" and "mohan").
+    public static func skeleton(_ name: String) -> String {
+        var text = plain(latinized(name))
+        for (from, to) in [("rn", "m"), ("vv", "w"), ("cl", "d")] { text = text.replacingOccurrences(of: from, with: to) }
+        return String(text.map { character -> Character in
+            switch character {
+            case "l", "1", "|", "!": return "i"
+            case "0": return "o"
+            default: return character
+            }
+        })
     }
 
     /// The bot's own tile: its handle, or its display name with the bot's name in it ("Vello (AI)").
@@ -312,7 +345,7 @@ public enum SpaceSpeakerName {
 
     /// Letters and digits only, lower case: "Priya K." and "priya k" are the same person to a vote.
     static func plain(_ text: String) -> String {
-        String(text.lowercased().filter { $0.isLetter || $0.isNumber })
+        String(latinized(text).lowercased().filter { $0.isLetter || $0.isNumber })
     }
 }
 
@@ -340,14 +373,35 @@ public struct SpaceSpeakerVotes: Sendable {
         votes.removeAll { time.timeIntervalSince($0.time) > Self.longestStretchSeconds * 2 }
     }
 
-    /// The name seen in the most frames between `start` and `end`; a tie goes to the one seen last. Nil: no name in
-    /// any frame then ("Someone").
+    /// A line is labelled with a name only when this many frames showed it...
+    public static let leastFramesForAName = 2
+    /// ...and it was this share of the frames that showed any name. Otherwise the line says "Someone": a wrong name is
+    /// worse than none, since the bot answers people by it.
+    public static let leastShareForAName = 0.6
+
+    /// The name for words said between `start` and `end`, only when the frames agree on it (`leastFramesForAName`,
+    /// `leastShareForAName`); nil ("Someone") otherwise.
     public func speaker(from start: Date, to end: Date) -> String? {
+        let verdict = self.verdict(from: start, to: end)
+        guard let name = verdict.name, verdict.frames >= Self.leastFramesForAName, verdict.share >= Self.leastShareForAName else { return nil }
+        return name
+    }
+
+    /// The name seen in the most frames between `start` and `end` (a tie goes to the one seen last), how many frames
+    /// showed it, and what share of the frames with any name that was.
+    public func verdict(from start: Date, to end: Date) -> (name: String?, frames: Int, share: Double) {
+        let leader = leadingName(from: start, to: end)
+        return (leader.name, leader.frames, leader.framesWithAnyName == 0 ? 0 : Double(leader.frames) / Double(leader.framesWithAnyName))
+    }
+
+    private func leadingName(from start: Date, to end: Date) -> (name: String?, frames: Int, framesWithAnyName: Int) {
         let from = max(start.addingTimeInterval(-Self.leadSeconds), end.addingTimeInterval(-Self.longestStretchSeconds))
         var counts: [String: (count: Int, last: Date, spellings: [String: Int])] = [:]
+        var framesWithAnyName = 0
         for vote in votes where vote.time >= from && vote.time <= end {
+            if !vote.names.isEmpty { framesWithAnyName += 1 }
             for name in vote.names {
-                var key = SpaceSpeakerName.plain(name)
+                var key = SpaceSpeakerName.skeleton(name)
                 guard !key.isEmpty else { continue }
                 // A misread of a name already counted is the same person ("Prly" for "Priya", "Rhul" for "Rahul").
                 if counts[key] == nil, let near = counts.keys.first(where: { SpaceSpeakerName.isMisreading(key, of: $0) }) { key = near }
@@ -358,16 +412,66 @@ public struct SpaceSpeakerVotes: Sendable {
                 counts[key] = entry
             }
         }
-        guard let best = counts.max(by: { ($0.value.count, $0.value.last) < ($1.value.count, $1.value.last) }) else { return nil }
+        guard let best = counts.max(by: { ($0.value.count, $0.value.last) < ($1.value.count, $1.value.last) }) else { return (nil, 0, framesWithAnyName) }
         // The spelling read most often ("Priya" over a misread "Priva").
-        return best.value.spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+        return (best.value.spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key, best.value.count, framesWithAnyName)
     }
 
     /// Who's talking now, for the call window: the name seen most in the last couple of seconds.
     public func current(at now: Date) -> String? {
-        speaker(from: now.addingTimeInterval(-2 + Self.leadSeconds), to: now)
+        leadingName(from: now.addingTimeInterval(-2 + Self.leadSeconds), to: now).name
     }
 
     /// The label for a line: the name, or "Someone".
     public static func label(_ name: String?) -> String { name ?? "Someone" }
+}
+
+/// Who has been seen speaking in this Space, kept for the whole session, so a misreading in one frame ("Prlya") snaps to
+/// the name read right in the others ("Priya"), and the bot knows who is on stage.
+public struct SpaceSpeakerRoster: Sendable {
+    struct Entry: Sendable {
+        var spellings: [String: Int] = [:]
+        var sightings = 0
+        var firstSeen: Date
+    }
+
+    private var entries: [String: Entry] = [:]
+    /// Seen this many times before a name counts as on stage: one frame can be a misreading.
+    public static let sightingsToBeOnStage = 2
+
+    public init() {}
+
+    /// A reading of a name, recorded, and the name it is: the roster's spelling of the same person when it's close enough
+    /// ("Prlya" → "Priya"), else the reading itself.
+    public mutating func observe(_ reading: String, at time: Date) -> String {
+        let key = matchingKey(for: reading) ?? SpaceSpeakerName.skeleton(reading)
+        guard !key.isEmpty else { return reading }
+        var entry = entries[key] ?? Entry(firstSeen: time)
+        entry.sightings += 1
+        entry.spellings[reading, default: 0] += 1
+        entries[key] = entry
+        return Self.bestSpelling(entry)
+    }
+
+    /// The roster's name for a reading, without recording it; nil when it's nobody seen yet.
+    public func canonical(_ reading: String) -> String? {
+        matchingKey(for: reading).flatMap { entries[$0] }.map(Self.bestSpelling)
+    }
+
+    /// Everyone seen speaking at least `sightingsToBeOnStage` times, in the order they first appeared.
+    public var onStage: [String] {
+        entries.values.filter { $0.sightings >= Self.sightingsToBeOnStage }.sorted { $0.firstSeen < $1.firstSeen }.map(Self.bestSpelling)
+    }
+
+    /// The entry a reading belongs to: the same skeleton, else the most-seen entry one letter away (two for long names).
+    private func matchingKey(for reading: String) -> String? {
+        let key = SpaceSpeakerName.skeleton(reading)
+        guard !key.isEmpty else { return nil }
+        if entries[key] != nil { return key }
+        return entries.filter { SpaceSpeakerName.isMisreading(key, of: $0.key) }.max { $0.value.sightings < $1.value.sightings }?.key
+    }
+
+    private static func bestSpelling(_ entry: Entry) -> String {
+        entry.spellings.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? ""
+    }
 }

@@ -2,8 +2,9 @@
 //  XAccountSettingsView.swift
 //  leanring-buddy
 //
-//  Settings › Voice › Vello's X account: the bot's handle, its browser, where its voice goes, the monitor switch, a setup
-//  checklist that updates by itself, and "Join a Space as Vello" (also on Home). Vello never touches the X page: it opens
+//  The X Space bot's account, in that bot's settings: the handle, its browser, where its voice goes, the monitor switch, a
+//  setup checklist that updates by itself, and "Join a Space" (also in the bot's chat header). The bot never touches the X
+//  page: it opens
 //  a link in the bot's browser, and a person taps Join and Request to speak there.
 //
 
@@ -26,14 +27,14 @@ struct XAccountSettingsSection: View {
     private let ticker = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        TheoSection(title: "Vello's X account",
-                    hint: "Vello joins X Spaces as itself on its own account, in a second browser signed in to that account. It hears only that browser and speaks into it through BlackHole, and it never clicks or types on X: you tap Join and Request to speak. Turn on X's Automated label for the account (Settings › Your account › Account information › Automation).") {
-            SettingRow(title: "The bot's handle", detail: "Vello says this is its account when asked.") {
+        TheoSection(title: "Its X account",
+                    hint: "This bot joins X Spaces as itself on its own account, as a listener or speaker (never as host), in a second browser signed in to that account. It hears only that browser and speaks into it through BlackHole, and it never clicks or types on X: you tap Join and Request to speak. Turn on X's Automated label for the account (Settings › Your account › Account information › Automation).") {
+            SettingRow(title: "The account's handle", detail: "The bot says this is its account when asked.") {
                 TextField("@vello_ai", text: $handle).textFieldStyle(.roundedBorder).frame(width: 180)
                     .onChange(of: handle) { _, _ in AccurateTextReading.warmUp() }
             }
             RowDivider()
-            SettingRow(title: "Its display name on X", detail: "Optional. A Space shows this under the bot's own picture, so Vello never takes itself for someone talking.") {
+            SettingRow(title: "Its display name on X", detail: "Optional. A Space shows this under the bot's own picture, so the bot never takes itself for someone talking.") {
                 TextField("Vello (AI)", text: $displayName).textFieldStyle(.roundedBorder).frame(width: 180)
             }
             RowDivider()
@@ -45,16 +46,16 @@ struct XAccountSettingsSection: View {
                 .labelsHidden().frame(width: 220).disabled(browsers.isEmpty)
             }
             RowDivider()
-            SettingRow(title: "Vello's voice goes to", detail: "Set the bot's browser's microphone to this device once (in X's or the browser's mic settings).") {
-                Picker("Vello's voice goes to", selection: outputSelection) {
+            SettingRow(title: "Its voice goes to", detail: "Set the bot's browser's microphone to this device once (in the browser's mic settings).") {
+                Picker("Its voice goes to", selection: outputSelection) {
                     if outputs.isEmpty { Text("No output devices").tag("") }
                     ForEach(outputs, id: \.uid) { Text($0.name).tag($0.uid) }
                 }
                 .labelsHidden().frame(width: 220)
             }
             RowDivider()
-            SettingRow(title: "Also play Vello on this Mac", detail: "Hear what Vello says in the Space through this Mac's speakers.") {
-                Toggle("Also play Vello on this Mac", isOn: $monitors).toggleStyle(.switch).labelsHidden()
+            SettingRow(title: "Also play it on this Mac", detail: "Hear what the bot says in the Space through this Mac's speakers.") {
+                Toggle("Also play it on this Mac", isOn: $monitors).toggleStyle(.switch).labelsHidden()
             }
             RowDivider()
             checklist
@@ -71,7 +72,7 @@ struct XAccountSettingsSection: View {
         .onReceive(ticker) { _ in refresh() }
     }
 
-    /// The picked browser, or the one Vello would use when none was picked.
+    /// The picked browser, or the one the bot would use when none was picked.
     private var browserSelection: Binding<String> {
         Binding(get: { browsers.contains { $0.bundleID == browserBundleID } ? browserBundleID : (XAccountSettings.browser?.bundleID ?? "") },
                 set: { browserBundleID = $0 })
@@ -118,7 +119,7 @@ struct XAccountSettingsSection: View {
     }
 }
 
-/// "Join a Space as Vello": an optional Space link, opened in the bot's browser, and the call on Vello's own account.
+/// "Join a Space": an optional Space link, opened in the bot's browser, and the X Space bot's call on its own account.
 struct JoinSpaceForm: View {
     @State private var link = ""
     @State private var problem: String?
@@ -128,7 +129,7 @@ struct JoinSpaceForm: View {
             HStack(spacing: 8) {
                 TextField("Space link (optional), x.com/i/spaces/…", text: $link).textFieldStyle(.roundedBorder)
                     .onSubmit(join)
-                Button(action: join) { Label("Join a Space as Vello", systemImage: "dot.radiowaves.left.and.right") }
+                Button(action: join) { Label("Join a Space", systemImage: "dot.radiowaves.left.and.right") }
                     .buttonStyle(.theoPrimary).pointerCursor()
             }
             Text(problem ?? CallOwnAccount.joinNote).font(TheoType.caption)
@@ -143,11 +144,11 @@ struct JoinSpaceForm: View {
             problem = "That isn't an X link. Paste the Space's link, or leave it empty."
             return
         }
-        problem = TheoCallController.joinSpaceAsVello(link: url)
+        problem = TheoCallController.joinSpace(link: url)
     }
 }
 
-/// Home's "Join a Space" button: the same form in a popover.
+/// The X Space bot's "Join a Space" button: the same form in a popover.
 struct JoinSpaceButton: View {
     @State private var showsForm = false
 
@@ -161,9 +162,27 @@ struct JoinSpaceButton: View {
             .background(Capsule().fill(DS.Colors.hover))
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain).help("Join an X Space as Vello, on its own X account").pointerCursor()
+        .buttonStyle(.plain).help("Join an X Space with the X Space bot, on its own X account").pointerCursor()
         .popover(isPresented: $showsForm, arrowEdge: .bottom) {
             JoinSpaceForm().padding(14).frame(width: 520)
+        }
+    }
+}
+
+/// Settings › Voice: X Spaces have a bot of their own now. This makes it if needed and opens it.
+struct XSpaceBotLinkSection: View {
+    @ObservedObject private var store = BotsStore.shared
+
+    var body: some View {
+        TheoSection(title: "X Spaces", hint: "Joining X Spaces on its own X account is a bot of its own, apart from Vello: its account, browser and voice are in its settings, and Join a Space is in its chat.") {
+            SettingRow(title: store.xSpaceBot?.name ?? "X Space bot", detail: store.xSpaceBot == nil ? "Not made yet." : "Joins Spaces as a listener or speaker, never as host.") {
+                Button(store.xSpaceBot == nil ? "Make the X Space bot" : "Open its chat") {
+                    let bot = store.ensureXSpaceBot()
+                    BotsSelection.shared.pane = .bot(bot.id)
+                    if let manager = CompanionManager.current { TheoHomeWindowController.show(companionManager: manager) }
+                }
+                .buttonStyle(.theo(.secondary, .small)).pointerCursor()
+            }
         }
     }
 }

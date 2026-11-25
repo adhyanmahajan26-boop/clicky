@@ -200,7 +200,9 @@ public enum CallListenMode {
         let whole = botName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !whole.isEmpty else { return names }
         names.append(whole)
-        let everydayWords: Set<String> = ["super", "the", "bot", "mister", "miss", "doctor", "agent", "assistant", "helper", "buddy", "hello"]
+        let everydayWords: Set<String> = ["super", "the", "bot", "mister", "miss", "doctor", "agent", "assistant", "helper", "buddy", "hello",
+                                          // "X Space bot": people in a Space say "space" all the time.
+                                          "space", "spaces"]
         for word in CallTurnEnd.simplifiedWords(whole) where word.count >= 4 && !everydayWords.contains(word) && !names.contains(word) {
             names.append(word)
         }

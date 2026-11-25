@@ -436,6 +436,14 @@ final class BotsStore: ObservableObject {
         return bot
     }
 
+    /// A bot made whole elsewhere with an id of its own (the X Space bot, `ensureXSpaceBot`), added with an empty chat.
+    func addMadeBot(_ bot: NativeBot) {
+        guard self.bot(bot.id) == nil else { return }
+        bots.append(bot)
+        writeBots()
+        conversations[bot.id] = BotConversationRecord()
+    }
+
     /// Removes a bot from Theo (its chat file stays on disk). Theo, the CEO, stays.
     func deleteBot(_ id: String) {
         guard id != Self.clickyID, let bot = bot(id), !bot.primary else { return }
