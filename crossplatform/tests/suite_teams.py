@@ -476,3 +476,54 @@ def add_cases(S):
                   "note_says_missing": any("no ready-made team called \"Moon Base\"" in t for t in notes),
                   "block_hidden": not any("```team" in t for t in shown), "ceo_told_the_teams": told}
         return idle and all(checks.values()), {"settled": idle, "seconds": secs, **checks, "notes": notes[-1:]}
+
+    @test("TM15", "From chat: a group chat with a head, a long playbook, an 80-character name, a bot renamed with new instructions, and memory set and added once", "teams")
+    def tm15():
+        n = T.nonce()
+        lead = "Global Super Digger Squad Lead for Commodities and Trade Data %s" % n
+        scout, old = "Scout %s" % n, "Ledger %s" % n
+        renamed, room = "Tally %s" % n, "Dig room %s" % n
+        playbook = "You are the lead. Check the exchange's own data first, then two other sources.\n" * 300
+        first = json.dumps({"bots": [{"name": lead, "does": "Leads the dig", "instructions": playbook, "memory": "Use NSE bhavcopy first."},
+                                     {"name": scout, "does": "Scouts"}, {"name": old, "does": "Keeps the books"}],
+                            "groups": [{"name": room, "head": lead, "members": [scout, old, "Nobody %s" % n]}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Setting it up.\n```team\n%s\n```" % first}, {"reply": "ok"}])
+        start = len(T.chat("theo", 5000))
+        T.say("theo", "Make a group chat %s with %s at its head, plus %s and %s." % (room, lead, scout, old))
+        idle, secs = T.wait_idle(seconds=90, quiet=3)
+        notes = [m["text"] for m in T.chat("theo", 5000)[start:] if m["author"] == "note"]
+        second = json.dumps({"bots": [{"name": old, "rename": renamed, "instructions": "You are %s. Count everything twice." % renamed},
+                                      {"name": lead, "memory": "Use NSE bhavcopy first."}, {"name": scout, "memory": "Prefer official sources."}]})
+        T.fake_script([{"system": sys_has("Vello"), "reply": "Done.\n```team\n%s\n```" % second}, {"reply": "ok"}])
+        start2 = len(T.chat("theo", 5000))
+        T.say("theo", "Rename %s to %s, change its instructions, and save the sources to their memory." % (old, renamed))
+        idle2, _ = T.wait_idle(seconds=90, quiet=3)
+        notes2 = [m["text"] for m in T.chat("theo", 5000)[start2:] if m["author"] == "note"]
+        st = T.state()
+        bots = {b["name"]: b for b in st["bots"] if n in b["name"]}
+        group = next((g for g in st["groups"] if g["name"] == room), None)
+        try:
+            saved = {b["id"]: b for b in json.loads((T.BOTS / "bots.json").read_text(encoding="utf-8"))}
+        except (OSError, ValueError):
+            saved = {}
+        def memory(name):
+            bot = bots.get(name)
+            try:
+                return (T.BOTS / "memory" / bot["id"] / "memory.md").read_text(encoding="utf-8") if bot else ""
+            except OSError:
+                return ""
+        lead_memory, scout_memory = memory(lead), memory(scout)
+        if group: P({"cmd": "groupDelete", "id": group["id"]})
+        for b in bots.values(): P({"cmd": "botDelete", "id": b["id"]})
+        T.fake("ok")
+        def bid(name): return (bots.get(name) or {}).get("id")
+        checks = {"long_name_kept": lead in bots,
+                  "playbook_whole": (saved.get(bid(lead)) or {}).get("instructions") == playbook.strip(),
+                  "group_made": group is not None and group["head"] == bid(lead) and set(group["members"]) == {bid(scout), bid(renamed)},
+                  "note_says_group": any(("New group chat: %s, with %s at its head and %s and %s (Vello couldn't find Nobody %s to add)" % (room, lead, scout, old, n)) in t for t in notes) and any(("Vello made 3 bots: %s, %s and %s." % (lead, scout, old)) in t for t in notes),
+                  "renamed": renamed in bots and old not in bots,
+                  "new_instructions": (saved.get(bid(renamed)) or {}).get("instructions") == "You are %s. Count everything twice." % renamed,
+                  "note_says_rename": any(("%s is called %s now" % (old, renamed)) in t and ("%s has new instructions" % renamed) in t for t in notes2),
+                  "memory_once": lead_memory.count("Use NSE bhavcopy first.") == 1 and any(("%s's memory already had that" % lead) in t for t in notes2),
+                  "memory_added": "Prefer official sources." in scout_memory and any(("Vello added that to %s's memory" % scout) in t for t in notes2)}
+        return idle and idle2 and all(checks.values()), {"settled": idle and idle2, "seconds": secs, **checks, "notes": (notes + notes2)[-2:]}

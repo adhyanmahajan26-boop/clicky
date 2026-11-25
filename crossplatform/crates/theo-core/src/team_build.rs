@@ -1,9 +1,10 @@
-//! The CEO makes new bots and categories, picks their managers and moves bots between them, when the owner asks in chat (the Mac's ClickyCore `TeamBuildOrder` and
+//! The CEO makes new bots, categories and group chats, picks managers, moves bots, and renames a bot or changes its
+//! instructions, description, model or memory, when the owner asks in chat (the Mac's ClickyCore `TeamBuildOrder` and
 //! `BotsStore.buildTeamFromChat`). The CEO writes one ```team block with JSON; Theo takes it out of the shown answer, checks
 //! the owner's own words asked for new bots or categories, and makes them as the New bot dialog and New category row do.
 
 use crate::harness::Harness;
-use crate::model::{Bot, ChatMessage};
+use crate::model::{Bot, ChatMessage, Group};
 use crate::protocol;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -15,10 +16,16 @@ use std::sync::Arc;
 /// manager and a squad of workers in one go.
 pub const MOST_BOTS: usize = 20;
 pub const MOST_CATEGORIES: usize = 6;
-const LONGEST_BOT_NAME: usize = 40;
+pub const MOST_GROUPS: usize = 6;
+/// A group chat's bots, its head included: two to six, as the New group dialog allows.
+pub const MOST_GROUP_MEMBERS: usize = 6;
+pub const FEWEST_GROUP_MEMBERS: usize = 2;
+const LONGEST_BOT_NAME: usize = 80;
 const LONGEST_CATEGORY_NAME: usize = 80;
 const LONGEST_DOES: usize = 200;
-const LONGEST_INSTRUCTIONS: usize = 4000;
+/// Long enough for a whole playbook: a bot's instructions go into its prompt as they are.
+pub const LONGEST_INSTRUCTIONS: usize = 30000;
+pub const LONGEST_MEMORY: usize = 20000;
 const LONGEST_MODEL_WORDS: usize = 80;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -38,7 +45,7 @@ pub struct NewBot {
     pub name: String,
     /// One line on what it does: its description in the sidebar.
     pub does: String,
-    /// Its own instructions. Empty: Theo writes "You are <name>. <does>".
+    /// Its own instructions. Empty: Theo writes "You are <name>. <does>". For a bot that exists, given ones replace its own.
     pub instructions: String,
     /// The category it joins, by name (a bot that already exists is moved there). None: it sits under "Other bots".
     pub category: Option<String>,
@@ -47,25 +54,49 @@ pub struct NewBot {
     pub model: Option<String>,
     /// The brain it runs on ("Claude Code", "Codex", "OpenAI"). None: the maker's own brain, or one that has `model`.
     pub brain: Option<String>,
+    /// A bot that exists gets this name instead ("rename"). Ignored for a new bot.
+    pub new_name: Option<String>,
+    /// What it should remember: a new bot's memory file starts with it, a bot that exists has it added to its own (unless its
+    /// memory already holds it).
+    pub memory: Option<String>,
+}
+
+/// A group chat: bots talking in one room, the head reading the owner's message first and wrapping up. One that exists (by
+/// name) gets the head named and the members listed added.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct NewGroup {
+    pub name: String,
+    /// The bot at its head, by name. None: the first member. Two to six bots in all.
+    pub head: Option<String>,
+    pub members: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TeamBuildOrder {
     pub categories: Vec<NewCategory>,
     pub bots: Vec<NewBot>,
+    pub groups: Vec<NewGroup>,
     /// Ready-made teams to add whole, by name ("Research Desk"): `ready_teams::expanding` turns each into its category and bots.
     pub ready_made_teams: Vec<String>,
 }
 
 impl TeamBuildOrder {
-    pub fn is_empty(&self) -> bool { self.categories.is_empty() && self.bots.is_empty() && self.ready_made_teams.is_empty() }
+    pub fn is_empty(&self) -> bool { self.categories.is_empty() && self.bots.is_empty() && self.groups.is_empty() && self.ready_made_teams.is_empty() }
 }
 
 /// What the CEO is told (ClickyCore `BotProtocol.teamBuildHowTo`).
 pub fn how_to(owner: &str) -> String {
-    format!(
-        "Bots, categories and managers: you can set them up yourself. When {owner} asks for a new bot, agent, team or category, a category's manager, a bot moved to another team, or a bot's model or brain, don't tell them to use a button and don't write files for it: say in a line what you'll do, then add one ```team block with JSON {{\"categories\": [{{\"name\": \"Marketing\", \"purpose\": \"one line\", \"manager\": \"Ada\"}}], \"bots\": [{{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\", \"model\": \"haiku\"}}]}}. Either list can be left out. \"model\" picks a bot's model (\"opus\", \"sonnet\", \"haiku\", or an exact model id) and \"brain\" its brain (\"Claude Code\", \"Codex\", or an API key's provider such as \"OpenAI\"), only when asked; without them it runs on your brain and its usual model. List an existing bot with a model or brain to switch it. A category or bot that already exists is used, not made twice: list an existing category to give it a manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there. A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot as manager by itself, unless it's set to \"none\". At most {MOST_BOTS} bots and {MOST_CATEGORIES} categories at a time: make all of what was asked in one block, a whole squad included. Vello does it and says so in the chat; never say it's done before that line shows. Only when {owner} asked for it in their own words."
-    )
+    [
+        format!("Bots, categories, group chats and managers: you can set them up yourself. When {owner} asks for a new bot, agent, team, category or group chat, a category's manager, a bot moved to another team, or a bot renamed or given new instructions, a new description, model, brain or memory, don't tell them to use a button and don't write files for it: "),
+        "say in a line what you'll do, then add one ```team block with JSON {\"categories\": [{\"name\": \"Marketing\", \"purpose\": \"one line\", \"manager\": \"Ada\"}], \"bots\": [{\"name\": \"Ada\", \"does\": \"one line on its job\", \"instructions\": \"its full instructions, written to it as 'You are …'\", \"category\": \"Marketing\", \"model\": \"haiku\", \"memory\": \"what it should remember\"}], \"groups\": [{\"name\": \"Launch room\", \"head\": \"Ada\", \"members\": [\"Rex\", \"Bo\"]}]}. Any list can be left out. ".to_string(),
+        "\"model\" picks a bot's model (\"opus\", \"sonnet\", \"haiku\", or an exact model id) and \"brain\" its brain (\"Claude Code\", \"Codex\", or an API key's provider such as \"OpenAI\"), only when asked; without them it runs on your brain and its usual model. List an existing bot with a model or brain to switch it. ".to_string(),
+        format!("Instructions can be long (up to {LONGEST_INSTRUCTIONS} characters): write everything the bot should be told, with its sources and how to work, not a summary. "),
+        "A category or bot that already exists is used, not made twice: list an existing category to give it a manager (\"manager\": \"none\" for everyone reporting to you), and an existing bot with a category to move it there, with \"rename\": \"its new name\" to rename it, with \"instructions\" or \"does\" to replace its own (only when asked), and with \"memory\" to add to what it remembers (a new bot's memory starts with it). ".to_string(),
+        "A manager is a bot in that team (it joins if it isn't), never you. A category with no manager named gets its first bot as manager by itself, unless it's set to \"none\". ".to_string(),
+        format!("A group chat is bots talking in one room: its head reads {owner}'s message first and wraps up, its members answer in turn; the bots must exist or be made in the same block, and listing a group chat that exists sets its head and adds the members named; two to six bots in one, the head included. "),
+        format!("At most {MOST_BOTS} bots, {MOST_CATEGORIES} categories and {MOST_GROUPS} group chats at a time: make all of what was asked in one block, a whole squad included. Vello does it and says so in the chat; never say it's done before that line shows. Only when {owner} asked for it in their own words."),
+    ]
+    .concat()
 }
 
 /// Names match without regard to case or spaces at the ends.
@@ -92,7 +123,8 @@ pub fn extract(text: &str) -> (String, Option<TeamBuildOrder>) {
 }
 
 /// The JSON inside the block: {"categories": [{"name", "purpose"?, "manager"?}], "bots": [{"name", "does", "instructions"?,
-/// "category"?, "model"?, "brain"?}], "teams": ["a ready-made team's name"]}.
+/// "category"?, "model"?, "brain"?, "rename"?, "memory"?}], "groups": [{"name", "head"?, "members"}], "teams": ["a ready-made
+/// team's name"]}.
 pub fn parse(body: &str) -> Option<TeamBuildOrder> {
     let object: Value = serde_json::from_str(body.trim()).ok()?;
     let mut order = TeamBuildOrder::default();
@@ -109,7 +141,22 @@ pub fn parse(body: &str) -> Option<TeamBuildOrder> {
         let category = cleaned(entry.get("category"), LONGEST_CATEGORY_NAME);
         let model = cleaned(entry.get("model"), LONGEST_MODEL_WORDS);
         let brain = cleaned(entry.get("brain").or(entry.get("engine")), LONGEST_MODEL_WORDS);
-        order.bots.push(NewBot { name, does, instructions, category, model, brain });
+        let new_name = cleaned(entry.get("rename").or(entry.get("newName")).or(entry.get("new_name")), LONGEST_BOT_NAME).filter(|n| !same_name(n, &name));
+        let memory = cleaned(entry.get("memory"), LONGEST_MEMORY);
+        order.bots.push(NewBot { name, does, instructions, category, model, brain, new_name, memory });
+    }
+    for entry in object.get("groups").and_then(|g| g.as_array()).into_iter().flatten() {
+        let Some(name) = cleaned(entry.get("name"), LONGEST_CATEGORY_NAME) else { continue };
+        if order.groups.iter().any(|g| same_name(&g.name, &name)) { continue; }
+        let head = cleaned(entry.get("head").or(entry.get("lead")), LONGEST_BOT_NAME);
+        let mut members: Vec<String> = vec![];
+        for member in entry.get("members").and_then(|m| m.as_array()).into_iter().flatten().filter_map(|m| cleaned(Some(m), LONGEST_BOT_NAME)) {
+            if members.iter().any(|m| same_name(m, &member)) || head.as_deref().map(|h| same_name(h, &member)).unwrap_or(false) { continue; }
+            members.push(member);
+        }
+        members.truncate(if head.is_none() { MOST_GROUP_MEMBERS } else { MOST_GROUP_MEMBERS - 1 });
+        if members.len() + usize::from(head.is_some()) < FEWEST_GROUP_MEMBERS { continue; }
+        order.groups.push(NewGroup { name, head, members });
     }
     // A bot's category that the block didn't list is made too, so "a bot in a new Sales category" works in one go.
     let wanted: Vec<String> = order.bots.iter().filter_map(|b| b.category.clone()).collect();
@@ -127,8 +174,17 @@ pub fn parse(body: &str) -> Option<TeamBuildOrder> {
     }
     order.categories.truncate(MOST_CATEGORIES);
     order.bots.truncate(MOST_BOTS);
+    order.groups.truncate(MOST_GROUPS);
     order.ready_made_teams.truncate(crate::ready_teams::MOST_TEAMS_AT_ONCE);
     if order.is_empty() { None } else { Some(order) }
+}
+
+/// `memory` with `added` at its end, or None when it already holds it (so saying it twice doesn't write it twice).
+pub fn memory_adding(memory: &str, added: &str) -> Option<String> {
+    let wanted = added.trim();
+    if wanted.is_empty() || memory.contains(wanted) { return None; }
+    let kept = memory.trim();
+    Some(if kept.is_empty() { format!("{wanted}\n") } else { format!("{kept}\n\n{wanted}\n") })
 }
 
 /// The instructions a new bot starts with.
@@ -141,7 +197,7 @@ pub fn instructions_for(bot: &NewBot) -> String {
 pub fn owner_asked(text: &str) -> bool {
     if protocol::is_routine_run(text) { return false; }
     static PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-        let things = r"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|squads?|crews?|desks?|studios?|office)";
+        let things = r"(bots?|agents?|assistants?|categor(y|ies)|teams?|departments?|helpers?|employees?|members?|squads?|crews?|desks?|studios?|office|group\s*chats?|groups?)";
         [
             format!(r"\b(make|makes|making|made|create|creates|creating|add|adding|set\s+up|setup|build|start|spin\s+up|hire|need|want|get|give\s+me)\b[^.?!\n]{{0,60}}\b{things}\b"),
             format!(r"\b(new|another|more|extra)\s+([a-z-]+\s+){{0,3}}{things}\b"),
@@ -154,6 +210,14 @@ pub fn owner_asked(text: &str) -> bool {
             r"\b(move|put|file|shift|transfer)\b[^.?!\n]{0,60}\b(to|into|under|in)\b".to_string(),
             // "switch Rex to Haiku", "Penny should use Opus", "run the workers on Codex"
             r"\b(set|switch|change|move|put|use|uses|using|run|runs|make|give)\b[^.?!\n]{0,60}\b(models?|brains?|opus|sonnet|haiku|fable|gpt[-\w.]*|gemini|grok|codex|cursor|opencode|claude)\b".to_string(),
+            // "rename Rex to Max", "call Penny Ledger from now on"
+            r"\b(rename|renames|renaming|re-name)\b".to_string(),
+            r"\b(call|name)\s+\w+[^.?!\n]{0,40}\b(instead|from\s+now\s+on)\b".to_string(),
+            // "change Rex's instructions", "give Ada a better prompt", "update the digger's description"
+            r"\b(set|change|changes|update|updates|replace|rewrite|rewrites|edit|edits|give|fix|improve|improves|write|tweak|tune)\b[^.?!\n]{0,60}\b(instructions?|prompts?|system\s+prompts?|descriptions?|persona)\b".to_string(),
+            // "save this to Rex's memory", "Ada should remember that", "add the sources to their memory"
+            r"\b(save|saves|add|adds|write|writes|put|store|stores|set|give|seed|update)\b[^.?!\n]{0,60}\b(memory|memories)\b".to_string(),
+            r"\b(should|to|must|always)\s+remember\b".to_string(),
         ]
         .iter()
         .map(|p| Regex::new(p).unwrap())
@@ -339,9 +403,10 @@ pub fn made_bots_sentence(made: &[MadeBot]) -> String {
         }).collect::<Vec<_>>().join("; ")
     };
     if category_order.len() == 1 {
-        if let Some(category) = &category_order[0] {
-            return format!("Vello made {} bots in {category}: {}.", made.len(), names_in(&category_order[0]));
-        }
+        return match &category_order[0] {
+            Some(category) => format!("Vello made {} bots in {category}: {}.", made.len(), names_in(&category_order[0])),
+            None => format!("Vello made {} bots: {}.", made.len(), names_in(&None)),
+        };
     }
     let parts: Vec<String> = category_order.iter().map(|category| match category {
         Some(name) => format!("in {name}, {}", names_in(category)),
@@ -416,6 +481,9 @@ async fn make(h: &Arc<Harness>, maker: &Bot, order: &TeamBuildOrder) -> String {
     let mut filed: Vec<String> = vec![];
     let mut manager_lines: Vec<String> = vec![];
     let mut brain_lines: Vec<String> = vec![];
+    let mut edit_lines: Vec<String> = vec![];
+    // A bot renamed in this answer can still be named by its old name further down the block (a group chat, a manager).
+    let mut renamed: HashMap<String, String> = HashMap::new();
 
     // Each category's manager before any change, so a manager filled in by itself (the first bot in a category takes the job)
     // is said in the note too, and the CEO doesn't think the category has none.
@@ -477,12 +545,14 @@ async fn make(h: &Arc<Harness>, maker: &Bot, order: &TeamBuildOrder) -> String {
                     brain_lines.push(format!("{} runs on {} now", existing.name, brain_words(&new_model, &pick.engine, &maker.provider)));
                 }
             }
+            edit_lines.extend(edit_from_chat(h, &existing.id, wanted, &mut renamed));
             continue;
         }
         let pick = pick_brain(wanted.brain.as_deref(), wanted.model.as_deref(), &maker.provider, &brains);
         let model = match &pick.model { Some(model) => model.clone(), None => starting_model(h, &pick.engine, maker).await };
         let description = if wanted.does.is_empty() { format!("Your {} bot.", wanted.name) } else { wanted.does.clone() };
         let bot = h.add_bot(Bot::new(&wanted.name, &description, &instructions_for(wanted), &pick.engine, &model));
+        if let Some(memory) = &wanted.memory { write_memory_from_chat(h, &bot.id, memory, false); }
         if let Some(id) = category_id.as_deref() {
             h.change_layout(|layout, bots| { if let Some(s) = layout.section_mut(id) { s.add_member(&bot.id, bots) } });
         }
@@ -528,6 +598,8 @@ async fn make(h: &Arc<Harness>, maker: &Bot, order: &TeamBuildOrder) -> String {
         manager_lines.push(format!("{} manages {} now", manager.name, team.name));
     }
 
+    let group_lines = build_groups_from_chat(h, &order.groups, &renamed);
+
     // A manager the block didn't name but the category got anyway: a new category's first bot, or the next bot in one whose
     // manager moved out.
     let bots_now = h.bots();
@@ -548,12 +620,136 @@ async fn make(h: &Arc<Harness>, maker: &Bot, order: &TeamBuildOrder) -> String {
     sentences.extend(filed.into_iter().map(|f| format!("{f}.")));
     sentences.extend(manager_lines.into_iter().map(|f| format!("{f}.")));
     sentences.extend(brain_lines.into_iter().map(|f| format!("{f}.")));
+    sentences.extend(edit_lines.into_iter().map(|f| format!("{f}.")));
+    sentences.extend(group_lines.into_iter().map(|f| format!("{f}.")));
     if sentences.is_empty() {
         sentences.push(format!("Everything {} asked for was already set up that way, so nothing changed.", maker.name));
     } else if !made_bots.is_empty() {
         sentences.push("They're in the sidebar, and each one's settings can change its brain, model and apps.".into());
     }
     sentences.join(" ")
+}
+
+/// A bot that exists, listed with a new name, instructions, description or memory: changed as its settings would, and said
+/// in the note. The CEO stays as it is.
+fn edit_from_chat(h: &Arc<Harness>, bot_id: &str, wanted: &NewBot, renamed: &mut HashMap<String, String>) -> Vec<String> {
+    let Some(mut edited) = h.bot(bot_id) else { return vec![] };
+    if wanted.new_name.is_none() && wanted.instructions.is_empty() && wanted.does.is_empty() && wanted.memory.is_none() { return vec![]; }
+    if edited.primary {
+        // Only said when something it can't take was asked for: a description alone is often just the CEO restating it.
+        if wanted.new_name.is_none() && wanted.instructions.is_empty() && wanted.memory.is_none() { return vec![]; }
+        return vec![format!("Vello doesn't change {}'s name, instructions or memory from chat: its own settings can", edited.name)];
+    }
+    let before = edited.clone();
+    let mut lines = vec![];
+    let mut changes: Vec<String> = vec![];
+    if let Some(new_name) = &wanted.new_name {
+        if h.bots().iter().any(|b| b.id != bot_id && same_name(&b.name, new_name)) {
+            lines.push(format!("Vello couldn't rename {} to {new_name}: another bot is called that", edited.name));
+        } else if edited.name != *new_name {
+            renamed.insert(edited.name.to_lowercase(), bot_id.to_string());
+            lines.push(format!("{} is called {new_name} now", edited.name));
+            edited.name = new_name.clone();
+        }
+    }
+    if !wanted.instructions.is_empty() && wanted.instructions != edited.instructions {
+        edited.instructions = wanted.instructions.clone();
+        changes.push("new instructions".into());
+    }
+    if !wanted.does.is_empty() && wanted.does != edited.description {
+        edited.description = wanted.does.clone();
+        changes.push("a new description".into());
+    }
+    if edited != before { h.save_bot(edited.clone()); }
+    if !changes.is_empty() { lines.push(format!("{} has {}", edited.name, listed_in_words(&changes))); }
+    if let Some(memory) = &wanted.memory {
+        lines.push(if write_memory_from_chat(h, bot_id, memory, true) { format!("Vello added that to {}'s memory", edited.name) } else { format!("{}'s memory already had that", edited.name) });
+    }
+    lines
+}
+
+/// Writes what a bot should remember into its memory file: a new bot's file starts with it, a bot that exists has it added at
+/// the end. False when its memory already held it.
+fn write_memory_from_chat(h: &Arc<Harness>, bot_id: &str, memory: &str, adding: bool) -> bool {
+    let file = h.paths.memory_file(bot_id);
+    let before = if adding { std::fs::read_to_string(&file).unwrap_or_default() } else { String::new() };
+    let Some(after) = memory_adding(&before, memory) else { return false };
+    let _ = std::fs::create_dir_all(h.paths.memory_dir(bot_id));
+    std::fs::write(&file, after).is_ok()
+}
+
+/// A group chat's id from its name, as the New group dialog makes it.
+fn group_slug(name: &str) -> String {
+    let lowered: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let joined = lowered.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
+    let short: String = joined.chars().take(40).collect();
+    let short = short.trim_end_matches('-').to_string();
+    if short.is_empty() { "group".into() } else { short }
+}
+
+/// Makes the group chats a block lists, or sets the head of one that exists and adds the members named, as the New group
+/// dialog does. Each one's line for the note.
+fn build_groups_from_chat(h: &Arc<Harness>, wanted_groups: &[NewGroup], renamed: &HashMap<String, String>) -> Vec<String> {
+    let mut lines = vec![];
+    // A bot by its name now, or by the name it had before this answer renamed it.
+    let bot_named = |name: &str| -> Option<Bot> {
+        let bots = h.bots();
+        bots.iter().find(|b| same_name(&b.name, name)).cloned().or_else(|| renamed.get(&name.trim().to_lowercase()).and_then(|id| h.bot(id)))
+    };
+    let name_of = |id: &str| h.bot(id).map(|b| b.name).unwrap_or_default();
+    for wanted in wanted_groups {
+        let head = wanted.head.as_deref().and_then(bot_named);
+        let mut member_ids: Vec<String> = vec![];
+        let mut missing: Vec<String> = vec![];
+        for name in wanted.head.iter().chain(wanted.members.iter()) {
+            match bot_named(name) {
+                Some(found) => { if !member_ids.contains(&found.id) { member_ids.push(found.id); } }
+                None => missing.push(name.clone()),
+            }
+        }
+        let missing_line = if missing.is_empty() { String::new() } else { format!(" (Vello couldn't find {} to add)", listed_in_words(&missing)) };
+        let existing = h.with(|s| s.groups.iter().find(|g| same_name(&g.name, &wanted.name)).cloned());
+        if let Some(mut group) = existing {
+            let before = group.clone();
+            if let Some(head) = &head {
+                if group.head_id.as_deref() != Some(head.id.as_str()) {
+                    if let Some(old) = group.head_id.take() { group.member_ids.push(old); }
+                    group.head_id = Some(head.id.clone());
+                }
+            }
+            let joining: Vec<String> = member_ids.iter().filter(|id| group.head_id.as_deref() != Some(id.as_str()) && !group.member_ids.contains(id)).cloned().collect();
+            group.member_ids.retain(|id| group.head_id.as_deref() != Some(id.as_str()));
+            let room = MOST_GROUP_MEMBERS.saturating_sub(group.all_ids().len());
+            let joined: Vec<String> = joining.iter().take(room).cloned().collect();
+            group.member_ids.extend(joined.iter().cloned());
+            if group == before {
+                if !missing.is_empty() { lines.push(format!("The {} group chat stays as it was{missing_line}", group.name)); }
+                continue;
+            }
+            h.save_group(group.clone());
+            let mut parts: Vec<String> = vec![];
+            if group.head_id != before.head_id { if let Some(id) = &group.head_id { parts.push(format!("{} leads it now", name_of(id))); } }
+            let joined_names: Vec<String> = joined.iter().map(|id| name_of(id)).collect();
+            if !joined_names.is_empty() { parts.push(format!("{} joined", listed_in_words(&joined_names))); }
+            if joining.len() > room { parts.push("it was full, so not everyone joined (six bots at most)".into()); }
+            lines.push(format!("In the {} group chat, {}{missing_line}", group.name, parts.join("; ")));
+            continue;
+        }
+        let head_id = head.map(|b| b.id).or_else(|| member_ids.first().cloned());
+        let Some(head_id) = head_id.filter(|_| member_ids.len() >= FEWEST_GROUP_MEMBERS) else {
+            lines.push(format!("Vello couldn't make the {} group chat: it needs two bots that are here{missing_line}", wanted.name));
+            continue;
+        };
+        let base = group_slug(&wanted.name);
+        let mut id = base.clone();
+        let mut n = 2;
+        while h.group(&id).is_some() { id = format!("{base}-{n}"); n += 1; }
+        let others: Vec<String> = member_ids.iter().filter(|m| **m != head_id).take(MOST_GROUP_MEMBERS - 1).cloned().collect();
+        h.save_group(Group { id, name: wanted.name.clone(), head_id: Some(head_id.clone()), member_ids: others.clone() });
+        let other_names: Vec<String> = others.iter().map(|id| name_of(id)).collect();
+        lines.push(format!("New group chat: {}, with {} at its head and {}{missing_line}", wanted.name, name_of(&head_id), listed_in_words(&other_names)));
+    }
+    lines
 }
 
 /// The `card` of Vello's note on what a ```team block changed. It draws as a plain note.
@@ -693,5 +889,72 @@ mod tests {
         assert_eq!(made_bots_sentence(&[MadeBot { name: "Rex".into(), category: Some("Sales".into()), ..Default::default() }]), "Vello made the bot Rex in Sales.");
         let mixed = [MadeBot { name: "Ada".into(), category: Some("Growth".into()), ..Default::default() }, MadeBot { name: "Rex".into(), category: Some("Sales".into()), ..Default::default() }, MadeBot { name: "Bo".into(), ..Default::default() }];
         assert_eq!(made_bots_sentence(&mixed), "Vello made 3 bots: in Growth, Ada; in Sales, Rex; outside any category, Bo.");
+        let loose = [MadeBot { name: "Ada".into(), ..Default::default() }, MadeBot { name: "Bo".into(), ..Default::default() }];
+        assert_eq!(made_bots_sentence(&loose), "Vello made 2 bots: Ada and Bo.");
+    }
+
+    #[test]
+    fn a_group_chat_with_a_head_and_members() {
+        let order = parse(r#"{"groups": [{"name": "Launch room", "head": "Ada", "members": ["Rex", "Bo", "ada", "rex"]}]}"#).unwrap();
+        assert_eq!(order.groups, vec![NewGroup { name: "Launch room".into(), head: Some("Ada".into()), members: vec!["Rex".into(), "Bo".into()] }]);
+        assert!(order.bots.is_empty());
+        assert!(parse(r#"{"groups": [{"name": "Alone", "head": "Ada"}]}"#).is_none());
+        let crowd: Vec<String> = (1..=10).map(|n| format!("\"Bot {n}\"")).collect();
+        let with_head = parse(&format!(r#"{{"groups": [{{"name": "Crowd", "head": "Boss", "members": [{}]}}]}}"#, crowd.join(","))).unwrap();
+        assert_eq!(with_head.groups[0].members.len(), 5);
+        let without_head = parse(&format!(r#"{{"groups": [{{"name": "Crowd", "members": [{}]}}]}}"#, crowd.join(","))).unwrap();
+        assert_eq!(without_head.groups[0].members.len(), 6);
+        let many: Vec<String> = (1..=10).map(|n| format!(r#"{{"name": "Room {n}", "members": ["Ada", "Rex"]}}"#)).collect();
+        assert_eq!(parse(&format!(r#"{{"groups": [{}]}}"#, many.join(","))).unwrap().groups.len(), MOST_GROUPS);
+    }
+
+    #[test]
+    fn a_bot_can_be_renamed_and_remember() {
+        let order = parse(r#"{"bots": [{"name": "Rex", "rename": "Max", "memory": "The owner trades on NSE.\nUse NSE bhavcopy first."}, {"name": "Bo", "newName": "bo"}]}"#).unwrap();
+        assert_eq!(order.bots[0].new_name.as_deref(), Some("Max"));
+        assert_eq!(order.bots[0].memory.as_deref(), Some("The owner trades on NSE.\nUse NSE bhavcopy first."));
+        assert_eq!(order.bots[1].new_name, None);
+    }
+
+    #[test]
+    fn long_instructions_and_names_stay_whole() {
+        let playbook = "Check the exchange's own data first, then two other sources.\n".repeat(400);
+        assert!(playbook.len() > 20000);
+        let name = "Global Super Digger Squad Lead for Commodities and Trade Data";
+        let body = serde_json::json!({"bots": [{"name": name, "instructions": playbook}]}).to_string();
+        let order = parse(&body).unwrap();
+        assert_eq!(order.bots[0].name, name);
+        assert_eq!(order.bots[0].instructions, playbook.trim());
+        let capped = serde_json::json!({"bots": [{"name": "Ada", "instructions": "a".repeat(40000)}]}).to_string();
+        assert_eq!(parse(&capped).unwrap().bots[0].instructions.chars().count(), LONGEST_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn memory_is_added_once() {
+        assert_eq!(memory_adding("", "  Use NSE first. ").as_deref(), Some("Use NSE first.\n"));
+        assert_eq!(memory_adding("Old line.\n", "Use NSE first.").as_deref(), Some("Old line.\n\nUse NSE first.\n"));
+        assert_eq!(memory_adding("Old line.\n\nUse NSE first.\n", "Use NSE first."), None);
+        assert_eq!(memory_adding("Old line.", "   "), None);
+    }
+
+    #[test]
+    fn the_owner_asking_for_groups_renames_and_memory() {
+        for words in ["make a group chat with Ada and Rex", "set up a group with the diggers", "rename Rex to Max",
+                      "call Penny Ledger from now on", "change Rex's instructions", "give Ada a better prompt",
+                      "update the digger's description", "fix the prompt of the squad", "save this to Rex's memory",
+                      "Ada should remember that I trade on NSE", "add the sources to their memory"] {
+            assert!(owner_asked(words), "{words}");
+        }
+        for words in ["what's in my memory?", "do you remember yesterday?", "summarise the group's day"] {
+            assert!(!owner_asked(words), "{words}");
+        }
+        let text = how_to("the owner");
+        for part in ["\"groups\": [{\"name\"", "\"rename\"", "\"memory\"", "30000 characters"] { assert!(text.contains(part), "{part}"); }
+    }
+
+    #[test]
+    fn group_ids_from_names() {
+        assert_eq!(group_slug("Launch Room!"), "launch-room");
+        assert_eq!(group_slug("***"), "group");
     }
 }

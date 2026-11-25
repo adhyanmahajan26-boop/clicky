@@ -278,11 +278,12 @@ pub fn order_for(team: &ReadyTeam, existing_bot_names: &[String], existing_categ
         category: Some(category.clone()),
         model: member.model.clone(),
         brain: member.brain.clone(),
+        ..Default::default()
     }).collect();
     TeamBuildOrder {
         categories: vec![NewCategory { name: category, purpose: Some(team.purpose.clone()).filter(|p| !p.is_empty()), manager: names.first().cloned() }],
         bots,
-        ready_made_teams: vec![],
+        ..Default::default()
     }
 }
 
