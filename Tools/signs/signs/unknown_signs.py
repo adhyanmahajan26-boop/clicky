@@ -371,9 +371,11 @@ def fold_test_results(checkpoint_path: str, held_out_words: list[str], device_ch
 
 
 def run_folds(data_folder, language: str, output_folder, fold_count: int = 3, fraction: float = 0.1, seed: int = 0,
-              epochs: int = 120, most_wrongly_answered: float = 0.10, device_choice: str = "auto") -> dict:
+              epochs: int = 120, most_wrongly_answered: float = 0.10, device_choice: str = "auto",
+              person_changes: str = "") -> dict:
     """Builds the held-out datasets, trains and calibrates one model per fold (skipping any already trained), pools the
-    folds and picks the threshold. Writes and returns `<output>/folds.json`."""
+    folds and picks the threshold. Writes and returns `<output>/folds.json`. `person_changes`: the same
+    `--person-changes` the full model trains with, so the threshold comes from models trained the same way."""
     from . import calibrate, train_words
     from .landmarks import pack
 
@@ -395,7 +397,8 @@ def run_folds(data_folder, language: str, output_folder, fold_count: int = 3, fr
             _write_manifest_rows(fold_data, kept_rows)
             pack(fold_data)
         if not (fold_run / "checkpoint-best.pt").exists():
-            train_words.main(["--data", str(fold_data), "--language", language, "--output", str(fold_run), "--epochs", str(epochs)])
+            train_words.main(["--data", str(fold_data), "--language", language, "--output", str(fold_run), "--epochs", str(epochs)]
+                             + (["--person-changes", person_changes] if person_changes else []))
         calibrate.main(["--checkpoint", str(fold_run / "checkpoint-best.pt"), "--source", "apple"])
         fold_results.append(fold_test_results(str(fold_run / "checkpoint-best.pt"), held_out, device_choice))
     thresholds = [round(step * 0.01, 2) for step in range(100)]
@@ -493,6 +496,7 @@ def main(argument_list=None) -> None:
     folds.add_argument("--epochs", type=int, default=120)
     folds.add_argument("--most-wrongly-answered", type=float, default=0.10)
     folds.add_argument("--device", default="auto")
+    folds.add_argument("--person-changes", default="", help="the same --person-changes the full model trains with")
     apply = commands.add_parser("apply", help="write the folds' threshold into a full model's calibration file")
     apply.add_argument("--checkpoint", required=True)
     apply.add_argument("--folds", required=True, help="folds.json from the folds command")
@@ -502,7 +506,8 @@ def main(argument_list=None) -> None:
         print(f"held out {len(held_out)} words: {', '.join(held_out)}")
     elif arguments.command == "folds":
         result = run_folds(arguments.data, arguments.language, arguments.output, arguments.folds, arguments.fraction,
-                           arguments.seed, arguments.epochs, arguments.most_wrongly_answered, arguments.device)
+                           arguments.seed, arguments.epochs, arguments.most_wrongly_answered, arguments.device,
+                           arguments.person_changes)
         print(f"{'threshold':>9}  {'taught answered':>15}  {'right when answered':>19}  {'never-taught answered':>21}")
         for row in result["rows"][::5]:
             print(f"{row['threshold']:9.2f}  {row['taught_answered']:15.1%}  {row['taught_right_when_answered']:19.1%}  {row['never_taught_wrongly_answered']:21.1%}")

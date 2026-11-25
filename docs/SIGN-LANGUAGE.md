@@ -62,24 +62,31 @@ Settings › Accessibility › What signs do › **Sign to text**. The camera re
 gives each frame's hands and body (61 landmarks, Tools/signs/SPEC.md); a stretch of signing between rests is read by
 small Core ML models and becomes a line of words, sent to Vello's chat, Pointer Assistant or the app in front.
 
-**ISL reading has only been shown to work for the signers it learned from.** Every number below that is high was
-measured on the same people the models were trained on. On other people it is far weaker (ISL-CSLTR below), so expect
-"?" often.
+**ISL reading works best for the signers it learned from.** Every number below that is high was measured on the same
+people the models were trained on. For new people signing the same signs (INCLUDE signers it never saw) it gets about
+7 in 10 words right; signs from other regions often differ, and on another dataset's signers (ISL-CSLTR) it reads
+almost none. Expect "?" often. Settings says: "Reads 261 ISL signs and short runs of them. For new people signing the
+same signs it gets about 7 in 10 right; signs from other regions often differ. Expect it to show ? often."
 
 What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels in the repo; a model in the data folder
-`~/Library/Application Support/Theo/SignModels` is taken first), float16, 12 MB in all:
+`~/Library/Application Support/Theo/SignModels` is taken first), float16, 23 MB in all:
 
 - `SignWordsISL`: 261 ISL words from INCLUDE, with a "not sure" threshold of 0.95.
 - `SignSentencesISL`: the same words in short runs without rests between them.
 - `SignSpellISL`: ISL letters (not J and Z), also used by Spell to text.
-- No ASL models yet: choosing ASL says "ASL isn't in this build yet. It arrives in an update." With no saved choice the
-  language starts as one the build has models for (ISL today).
+- `SignWordsASL`: 562 ASL signs from PopSign, with a "not sure" threshold of 0.95.
+- `SignSpellASL`: ASL finger-spelling on the move (phrases, letters and digits), from FSboard.
+- No ASL sentence model yet, so every ASL stretch is read as one sign or one spelled word. With no saved choice the
+  language follows the Mac: ISL on a Mac set to an Indian region or Hindi, ASL elsewhere (a saved choice always wins); a language without models says "<language> isn't
+  in this build yet. It arrives in an update."
 
 ### Today's numbers (November 2026), each with what it was measured on
 
 | What | Measured on | Result |
 | --- | --- | --- |
-| Word model, whole clip | INCLUDE's official test list (813 clips; the same 7 signers as training, since INCLUDE names no signers) | 96.9% right first guess, 99.5% in the top 5 |
+| Word model, whole clip | INCLUDE's official test list (813 clips). INCLUDE names no signers, and its lists share them: the test clips are other takes by people in training | 96.9% right first guess, 99.5% in the top 5 |
+| Word model, signers it never saw | INCLUDE leave-one-signer-out: 4 signers held out in turn (2 men, 2 women, 1,115 clips), each model trained without them (120 epochs, one seed until a 3-seed run replaces it). INCLUDE names no signers: we identified them ourselves from its recording sessions (Tools/signs/studio/include_signers) | 69.6% right first guess, 89.3% in the top 5 (63.8% to 76.5% by signer) |
+| The same, trained with the hand turn and camera height changes | The same 4 held-out signers, 1,115 clips, one seed | 72.6% right first guess, 90.9% in the top 5 (66.1% to 78.4% by signer); not yet the model that ships |
 | Through the app's own pipeline, threshold off | The same test list, 815 clips, read as the camera would (`sign-eval clips`) | 95.3% right |
 | With the 0.95 threshold | The same 815 clips | 78.9% answered, 98.4% right when it answers, 21.1% shown as "?" |
 | With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (2,190 taught and 251 never-taught test clips) | Taught signs: 80% answered, 99% right when answered; never-taught signs wrongly given a word 8.8% of the time |
@@ -91,17 +98,81 @@ What ships, in the app's `Contents/Resources/SignModels` (Resources/SignModels i
 Float16 and float32 read exactly alike on the INCLUDE test clips and the built streams, and on the unseen signer's
 letters; on 455 multimodal photos 454 got the same top letter.
 
-### Why it doesn't carry over to other signers yet (first findings)
+### ASL (Experimental), measured on signers it never saw
 
-- ISL-CSLTR's other signers are seated and filmed closer; INCLUDE's stand. Their landmarks are as good as INCLUDE's
-  (a raised hand is found in 78% of frames, INCLUDE 69%), so it isn't the camera picture.
-- Cutting INCLUDE's clips to their signing part (no rise from rest, no drop back) still reads 94.5%, so it isn't the
-  rests either.
-- Even in the stretch of a CSLTR sentence that looks most like the word, its description sits far from INCLUDE's
-  clips of that word (median cosine distance 0.79, against 0.10 for INCLUDE's own test clips and 0.50 to the
-  nearest other word). At least one word, BEAUTIFUL, is a different sign in the two datasets (a hand circling the face
-  in INCLUDE, an open hand raised high in CSLTR). ISL has regional variants, and seven signers aren't enough to learn
-  a sign apart from the person making it.
+PopSign and FSboard split their recordings by person, so every ASL number here is on people the models never saw.
+
+| What | Measured on | Result |
+| --- | --- | --- |
+| Word model, whole clip (Python) | PopSign's 10 test signers, 4,477 clips of the 562 signs (sweep 1: 24 train / 4 val / 8 test clips a sign) | 76.4% right first guess, 94.4% in the top 5 |
+| **Words as the app reads them** (both ASL models running, threshold 0.95) | The same clips read as the camera would (`sign-eval clips`) | **Answers 45.3% of signs (the rest show "?") and is right on 92.1% of those it answers** |
+| Words, word model alone | The same clips | Threshold off: 71.7% right (the stretch finder finds no sign in 1.5% of PopSign's game clips and splits 5.5% in two); threshold on: 44.4% answered, 93.8% right when answered |
+| With the 0.95 threshold, words it was never taught | 3 folds, each holding out a tenth of the words (12,088 taught and 1,343 never-taught test clips) | Taught signs: 43% answered, 96.4% right when answered; never-taught signs wrongly given a word 9.2% of the time |
+| Finger-spelling, whole clip (Python) | FSboard's 15 test signers, 600 phrases (addresses, phone numbers, web addresses, names) | 7.2% of characters wrong |
+| **Finger-spelling as the app reads it** | The same 600 phrases (`sign-eval clips`, both ASL models) | **11.7% of characters wrong, 48.2% of phrases exactly right**; most of the rest of the gap to 7.2% is the 6% of phrases cut into more than one stretch at a pause |
+
+When a stretch counts as finger-spelling was tuned on the validation signers only (PopSign val for signs wrongly read
+as spelling, FSboard val for spelling read as signs). A stretch is now read by the spelling model when one hand is up
+and its wrist travels up to 1.5 body sizes (was 0.6: a long phrase drifts across as it is spelled, so a fifth of
+FSboard's phrases never reached the spelling model and showed "?"); the spelling then wins only if it lasts at least
+1 second and is at least 85% sure (was 0.6 s and 50%). On the test signers that took finger-spelling from 33.4% to
+11.7% of characters wrong (37.8% to 48.2% of phrases exactly right), ASL words from 48.8% answered / 85.3% right to
+45.3% / 92.1%, and left ISL unchanged (78.9% answered / 98.4% right; built streams 7.5% word error rate).
+
+What ASL can't read: signs outside PopSign's 562 (a vocabulary chosen for a children's game, so many everyday
+words are missing); sentences (no ASL sentence model: each stretch is one sign); facial grammar; and it was trained
+on phone videos held at arm's length, not a laptop camera, so expect less on your own camera. More data helps only
+so much: see the learning curve in Tools/signs/README.md when it's measured.
+
+### Why it doesn't carry over to other signers yet (round 7 findings)
+
+- **INCLUDE has about 26 signers, not a handful, and its official split mixes them.** Each signer signs a word about
+  three times, so a test clip's signer is in training. The camera's file numbers and where the body sits in the
+  picture split the 4,280 clips into 56 recording sessions; one frame from each, looked at by eye, named 26 people
+  (sessions that might be one person were merged, so a held-out signer can't leak back in). On signers it never saw,
+  the word model gets 69.6%, against 96.9% on the shared split.
+- **Changing the person while training helps a little.** Training with made-up changes of the person rather than the
+  sign (Tools/signs `--person-changes`: each bone a little longer or shorter, each hand turned up to 20 degrees about
+  its wrist, the camera a little higher or lower, uneven speed) raised unseen-signer accuracy to 71.9% (+2.3 points,
+  better for all 4 held-out signers). Leaving each change out in turn: the hand turn helps most (without it 70.4%),
+  then the camera height (70.9%); bone lengths and uneven speed don't help (without them 72.9% and 72.6%). Those
+  two alone (`--person-changes hand_turn,perspective`) give the best: 72.6% right first guess, 90.9% in the top 5
+  (+3.0 points, better for all 4 signers). A smaller model (width 128) with stronger dropout did worse (67.1%; with the
+  changes 68.6%). One seed each, so differences of a point or two are within noise.
+- **ISL-CSLTR's signers mostly use other signs.** Its "single-sign" clips are whole sentences named after a key word
+  (it has no word-level videos, only still photos), so the word model was asked to find the word inside the sentence.
+  A word of the sentence comes top somewhere in 26% of cases (4% for words not in it); pointing signs (I, you, he)
+  are at chance. Even the stretch that looks most like the word sits far from INCLUDE's clips of it (median cosine
+  distance 0.82, against 0.10 for INCLUDE's own test clips and 0.52 to the nearest other word). By eye: BEAUTIFUL is
+  a hand circling the face in INCLUDE and an open hand raised high in CSLTR; COLD is two shivering fists in INCLUDE
+  and isn't shivered in CSLTR; HAPPY is two hands brushing up the chest in INCLUDE and one hand at the chest and chin
+  in CSLTR. ISL has regional variants; CSLTR isn't trained on, since it would teach two signs for one word.
+- **It isn't the camera picture or the rests.** CSLTR's 1080p landmarks are as good as INCLUDE's (a raised hand is
+  found in 78% of frames, INCLUDE 69%); its 240x320 phone videos are weaker (51%), and upscaling them 4x before Vision
+  finds more hands (60% → 67% of raised-wrist frames on 6 clips) with under a third of the jitter. Cutting INCLUDE's clips to their signing part
+  (no rise from rest, no drop back) still reads 94.5%.
+
+### Tried, not shipped: ISL word model trained with hand turns and camera height (November 2026)
+
+The `--person-changes hand_turn,perspective` recipe reads new people better (leave-one-signer-out above), so the full
+ISL word model was retrained with it (same data, 200 epochs, threshold from the same 3 held-out-word folds) and
+compared with the shipped one on every row. It is not shipped: it is more confident on signs it was never taught, so
+its threshold rule (never-taught signs wrongly given a word at most 10% of the time) needs 0.97 instead of 0.95, and
+there it answers far fewer signs.
+
+| Row | Shipped | Retrained |
+| --- | --- | --- |
+| Same-signer test, whole clip (813 clips) | 96.9% / 99.5% top-5 | 96.9% / 99.4% |
+| Unseen signers, leave-one-signer-out (4 signers, 3 seeds) | 70.8% ± 1.2 | 72.6% ± 0.5 |
+| App pipeline, threshold off (815 clips) | 95.3% | 95.6% |
+| Threshold chosen | 0.95 | 0.97 |
+| App pipeline with its threshold | 78.9% answered, 98.4% right | **57.3% answered**, 98.7% right |
+| Held-out-word folds at that threshold | taught answered 80.2%, never-taught wrongly answered 8.8% | 67.1%, 6.0% |
+| At 0.95 for both | never-taught wrongly answered 8.8% | 13.1% (over the 10% rule) |
+| Built streams word error rate | 7.5% | 7.7% |
+
+What might make it shippable: training with "not a sign" examples, or calibrating on never-taught signs, so the gain
+on new people doesn't cost the "not sure" behaviour.
 
 ### What it can't read
 
@@ -136,3 +207,11 @@ The models were trained on (and ISL-CSLTR is used only to measure), each under C
   Rutuja Kadam, Ved Mishra, Gagandeep Kaur, Grishma Y. Bobhate, Ghanshyam Tejani, David Bassir. 2026. *A Multimodal
   Indian Sign Language Dataset for English and Marathi Alphabet Signs and Numerical Digits with Pose and Skin
   Segmentation Representations.* Mendeley Data, V2, doi:10.17632/2tj6c7pzfk.2. CC BY 4.0.
+- **PopSign ASL v2.1** (ASL words): Georgia Tech and Google; described in *PopSign ASL v1.0: An Isolated American Sign
+  Language Dataset Collected via Smartphones* (Thad Starner et al., NeurIPS 2023 Datasets and Benchmarks; full author
+  list not re-checked here). Data: signdata.cc.gatech.edu/data/popsign_v2_1, CC BY 4.0 as stated there when it was
+  downloaded (November 2026).
+- **FSboard** (ASL finger-spelling): Manfred Georg, Garrett Tanzer, Saad Hassan, Maximus Shengelia, Esha Uboweja, Sam
+  Sepah, Sean Forbes, Thad Starner. 2024. *FSboard: Over 3 million characters of ASL fingerspelling collected via
+  smartphones.* arXiv:2407.15806. Data: signdata.cc.gatech.edu/data/fsboard (also kaggle.com/datasets/googleai/fsboard),
+  CC BY 4.0 as stated where it was downloaded (November 2026).

@@ -36,10 +36,13 @@ public enum SignLanguage: String, CaseIterable, Codable, Sendable {
         "\(rawValue.uppercased()) isn't in this build yet. It arrives in an update."
     }
 
-    /// The language Sign to text starts with when nobody has chosen one: the first (ASL, then ISL) this build has
-    /// models for, so a fresh install reads something; ASL when it has none at all.
-    public static func defaultChoice(hasModels: (SignLanguage) -> Bool) -> SignLanguage {
-        allCases.first(where: hasModels) ?? .asl
+    /// The language Sign to text starts with when nobody has chosen one (a saved choice always wins). With models for
+    /// both, it follows the computer: ISL on a Mac set to an Indian region or to Hindi (`ComputerLanguage.isIndian`),
+    /// otherwise ASL. With models for one, that one; with none, ASL.
+    public static func defaultChoice(hasModels: (SignLanguage) -> Bool, computerIsIndian: Bool) -> SignLanguage {
+        let withModels = allCases.filter(hasModels)
+        if withModels.count > 1 { return computerIsIndian ? .isl : .asl }
+        return withModels.first ?? .asl
     }
 }
 
@@ -79,7 +82,8 @@ public enum SignWordNames {
 public struct SignReadingSettings: Equatable, Sendable {
     /// The top word needs at least this probability to be read at all; under it the stretch is not read.
     public var leastWordProbability: Float
-    /// Finger-spelling needs at least this confidence to be used.
+    /// Finger-spelling needs at least this confidence to be used. 0.85, tuned on PopSign and FSboard validation
+    /// signers together with the wrist travel below: lower, the ASL spelling model reads some one-handed signs as spelled words.
     public var leastSpellingConfidence: Float
     /// A top word at least this likely is used even when the stretch looks like finger-spelling.
     public var wordProbabilityThatBeatsSpelling: Float
@@ -92,9 +96,11 @@ public struct SignReadingSettings: Equatable, Sendable {
     public var leastShareOfFramesWithTheSpellingHand: Double
     /// …the other hand in at most this share…
     public var mostShareOfFramesWithTheOtherHand: Double
-    /// …the spelling hand's wrist moves at most this far (in body sizes, the larger of across and up-down)…
+    /// …the spelling hand's wrist moves at most this far (in body sizes, the larger of across and up-down; 1.5: a long
+    /// phrase drifts across as it is spelled, and at 0.6 a fifth of FSboard's phrases never reached the spelling model)…
     public var mostSpellingWristTravelInBodySizes: Double
-    /// …and it lasts at least this long (a short one-handed stretch is more likely a sign).
+    /// …and it lasts at least this long (a short one-handed stretch is more likely a sign; 1.0 s, tuned with the
+    /// confidence above: no spelled phrase on FSboard's validation signers was lost, ISL unchanged).
     public var shortestSpellingSeconds: Double
 
     /// An unclear sign keeps this many of the model's guesses, and mentions them to Vello's brain only when the top
@@ -108,14 +114,14 @@ public struct SignReadingSettings: Equatable, Sendable {
 
     public init(
         leastWordProbability: Float = 0.25,
-        leastSpellingConfidence: Float = 0.5,
+        leastSpellingConfidence: Float = 0.85,
         wordProbabilityThatBeatsSpelling: Float = 0.6,
         alternativesKept: Int = 3,
         leastAlternativeProbability: Float = 0.08,
         leastShareOfFramesWithTheSpellingHand: Double = 0.8,
         mostShareOfFramesWithTheOtherHand: Double = 0.15,
-        mostSpellingWristTravelInBodySizes: Double = 0.6,
-        shortestSpellingSeconds: Double = 0.6
+        mostSpellingWristTravelInBodySizes: Double = 1.5,
+        shortestSpellingSeconds: Double = 1.0
     ) {
         self.leastWordProbability = leastWordProbability
         self.leastSpellingConfidence = leastSpellingConfidence

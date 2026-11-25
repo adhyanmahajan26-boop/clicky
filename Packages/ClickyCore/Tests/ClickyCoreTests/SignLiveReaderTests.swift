@@ -214,7 +214,7 @@ struct SignLiveReaderTests {
         scorer.wordWhenWristIsLeftOfMiddle = nil
         scorer.spelledLetters = "hi"
         scorer.sentenceWordsRead = [("i", 0.9), ("go", 0.9)]
-        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)], into: &reader, scoring: scorer)
+        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 45), Self.rest(30)], into: &reader, scoring: scorer)
         #expect(Self.readEntries(fed.events).map(\.displayText) == ["hi"])
         #expect(scorer.sentenceModelRuns == 0)
     }
@@ -240,7 +240,8 @@ struct SignLiveReaderTests {
         let scorer = FakeSignScorer()
         scorer.wordWhenWristIsLeftOfMiddle = nil
         scorer.spelledLetters = "hi"
-        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 30), Self.rest(30)], into: &reader, scoring: scorer)
+        // A spelled word lasts over a second.
+        let fed = Self.feed([Self.rest(15), Self.sign(at: Self.leftOfMiddleWristX, 45), Self.rest(30)], into: &reader, scoring: scorer)
 
         let entries = Self.readEntries(fed.events)
         #expect(entries.count == 1)

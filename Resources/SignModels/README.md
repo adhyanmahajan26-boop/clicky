@@ -11,6 +11,8 @@ docs/SIGN-LANGUAGE.md for what the numbers mean and what these models can't read
 | SignWordsISL | INCLUDE (CC BY 4.0) word run, epoch 54, weights fae24d3434d98e07; `.reading.json` threshold 0.95 from held-out words | 5.6 MB | INCLUDE test, 815 clips through `sign-eval clips`: 78.9% answered, 98.4% right when answered |
 | SignSentencesISL | INCLUDE built sentences (v2) | 5.9 MB | `sign-eval stream`, 200 built streams of 2-5 INCLUDE test clips: 7.5% word error rate |
 | SignSpellISL | ISL alphabet photos (two Mendeley sets, CC BY 4.0) | 0.2 MB | 15 of 25 letters on an unseen signer (ISLAN signer 6) |
+| SignWordsASL | PopSign ASL v2.1 sweep 1 (CC BY 4.0): 562 signs, 24 train / 4 val / 8 test clips each, participants split by PopSign; epoch 64, weights e1e37f75a2e5b06d; `.reading.json` threshold 0.95 from held-out words | 5.7 MB | PopSign's 10 test signers (never seen), 4,477 clips: 76.4% right whole-clip (Python); as the app reads them (both ASL models, threshold on) 45.3% answered and 92.1% right when answered |
+| SignSpellASL | FSboard (CC BY 4.0) sweep 1: 9,200 finger-spelled phrases, 117 train signers | 5.8 MB | FSboard's 15 test signers (never seen), 600 phrases: 7.2% character error rate (Python), 11.7% as the app reads them |
 
-No ASL models yet. To replace one: train and export it (Tools/signs/README.md), compile it, and copy the
+No ASL sentence model yet: every ASL stretch is read as one sign or one spelled word. To replace a model: train and export it (Tools/signs/README.md), compile it, and copy the
 `.mlmodelc` with its `.labels.json` (and `.reading.json`) here.
