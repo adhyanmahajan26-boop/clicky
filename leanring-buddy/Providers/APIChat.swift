@@ -450,9 +450,10 @@ enum APIChat {
         // Every request of the turn, tool rounds too, counts in the bot's usage like a Claude Code turn does. API prices aren't known here,
         // so these turns count tokens only.
         let usageMeter = APIUsageMeter()
+        let botID = bot.id
         defer {
             let used = usageMeter.used
-            Task { @MainActor in BotUsage.shared.record(botID: bot.id, usage: used) }
+            Task { @MainActor in BotUsage.shared.record(botID: botID, usage: used) }
         }
         do {
             answer = try await stream(provider: provider, key: key, model: bot.model, system: system, messages: History.fitting(messages, roomCharacters: room),

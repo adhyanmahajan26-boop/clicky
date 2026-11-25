@@ -578,7 +578,7 @@ final class BotsStore: ObservableObject {
             Task { [weak self] in
                 while self?.replying[botID] != nil { try? await Task.sleep(nanoseconds: 500_000_000) }
                 guard let self, let waiting = self.waitingWhileBusy.removeValue(forKey: botID), let newest = waiting.last else { return }
-                let together = BusyMessages.combined(waiting.map(\.text), owner: BotPrompts.ownerName)
+                let together = BusyMessages.combined(waiting.map { $0.text }, owner: BotPrompts.ownerName)
                 // What decides "@code …" and the like reads their own words, without the note that they came together.
                 let commands = waiting.count == 1 ? newest.command : waiting.map { $0.command ?? $0.text }.joined(separator: "\n\n")
                 self.send(together, command: commands, to: botID, messageID: newest.id)
@@ -676,12 +676,13 @@ final class BotsStore: ObservableObject {
         guard let bot = bot(botID) else { return }
         // The newest message is still waiting for the bot to be free: /undo takes just that back and the answer in progress goes on;
         // /retry has nothing to try again yet.
-        if var waiting = waitingWhileBusy[botID], let newest = waiting.popLast() {
+        if let waiting = waitingWhileBusy[botID], let newest = waiting.last {
             if command == .retry {
                 post(BotChatMessage(author: Self.noteAuthor, text: ChatTakeBack.notAnsweredYet), to: botID)
                 return
             }
-            waitingWhileBusy[botID] = waiting.isEmpty ? nil : waiting
+            let stillWaiting = Array(waiting.dropLast())
+            waitingWhileBusy[botID] = stillWaiting.isEmpty ? nil : stillWaiting
             var record = conversation(botID)
             record.messages.removeAll { $0.id == newest.id }
             record.takenBack = ChatTakeBack.remembering(record.takenBack ?? [], adding: [newest.id])
