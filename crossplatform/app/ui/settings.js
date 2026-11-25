@@ -45,7 +45,7 @@ async function renderSettingsPage() {
   const productLine = (id) => (typeof productIsOn === "function" && !productIsOn(id))
     ? `<div class="list">${settingRowHTML(`${esc(productTitle(id))} is off`, "Turn it on to use it on this computer.", `<button class="btn sm" data-turn-on="${id}">Turn on</button>`)}</div>` : "";
   const about = `<div class="list">${settingRowHTML("Your name", `What your bots call you. Empty: they say "the owner".`, `<input id="owner-name" value="${esc(s.ownerName || "")}" maxlength="40" placeholder="Your first name">`)}`
-    + `<div class="crow about-you"><span class="tx"><b>About you</b><small style="white-space:normal">Every bot reads this, like Hermes's and OpenClaw's USER.md. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.</small>`
+    + `<div class="crow about-you"><span class="tx"><b>About you</b><small style="white-space:normal">Every bot reads this. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.</small>`
     + `<textarea id="about-you" rows="5" maxlength="6000" placeholder="For example: I run a small design studio in Pune. Keep answers short. My cofounder is Riya.">${esc(s.aboutYou || "")}</textarea>`
     + `<span class="about-you-bar"><small class="muted" id="about-you-count"></small><button class="btn sm primary" id="about-you-save" disabled>Save</button></span></span></div>`
     + settingRowHTML("Setup guide", "A brain, your products, coding runs and a first bot, one step at a time.", `<button class="btn sm" data-setup-again>Run it again</button>`)

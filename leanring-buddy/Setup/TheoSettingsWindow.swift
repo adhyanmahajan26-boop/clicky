@@ -884,7 +884,7 @@ struct AboutSettingsContent: View {
                     .buttonStyle(.theoSecondary)
                 }
             }
-            TheoSection(title: "About you", hint: "Every bot reads this, like Hermes's and OpenClaw's USER.md. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.") {
+            TheoSection(title: "About you", hint: "Every bot reads this. A bot adds a line when you tell it something lasting about yourself, and its chat says what it saved.") {
                 OwnerProfileEditor()
             }
             TheoSection(title: "Keyboard", hint: nil) {
