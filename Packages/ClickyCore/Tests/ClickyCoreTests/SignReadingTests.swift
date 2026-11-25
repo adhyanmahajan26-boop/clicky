@@ -96,7 +96,7 @@ struct SignReadingTests {
 
     /// One hand up the whole time, the other never, hardly moving, for a second: finger-spelling.
     private static let spellingFacts = SignStretchFacts(
-        seconds: 1,
+        seconds: 1.5,
         shareOfFramesWithRightHand: 0.95,
         shareOfFramesWithLeftHand: 0,
         busierHandWristTravelInBodySizes: 0.2
@@ -125,9 +125,9 @@ struct SignReadingTests {
         #expect(!facts.looksLikeFingerSpelling(settings: settings))
 
         facts = Self.spellingFacts
-        facts.seconds = 0.6
+        facts.seconds = 1.0
         #expect(facts.looksLikeFingerSpelling(settings: settings))
-        facts.seconds = 0.59
+        facts.seconds = 0.99
         #expect(!facts.looksLikeFingerSpelling(settings: settings))
     }
 
@@ -175,13 +175,13 @@ struct SignReadingTests {
     @Test func fingerSpellingNeedsEnoughConfidence() {
         let atTheLeast = SignStretchReading.token(
             wordGuesses: Self.guesses([("hello", 0.4)]),
-            spelling: SignSpelledGuess(text: "bob", confidence: 0.5),
+            spelling: SignSpelledGuess(text: "bob", confidence: 0.7),
             facts: Self.spellingFacts
         )
-        #expect(atTheLeast == .spelled(text: "bob", confidence: 0.5))
+        #expect(atTheLeast == .spelled(text: "bob", confidence: 0.7))
         let underIt = SignStretchReading.token(
             wordGuesses: Self.guesses([("hello", 0.4)]),
-            spelling: SignSpelledGuess(text: "bob", confidence: 0.49),
+            spelling: SignSpelledGuess(text: "bob", confidence: 0.69),
             facts: Self.spellingFacts
         )
         #expect(underIt?.text == "hello")
@@ -417,9 +417,17 @@ struct SignReadingTests {
     }
 
     @Test func theDefaultLanguageIsOneThisBuildHasModelsFor() {
-        #expect(SignLanguage.defaultChoice(hasModels: { $0 == .isl }) == .isl)
-        #expect(SignLanguage.defaultChoice(hasModels: { _ in true }) == .asl)
-        #expect(SignLanguage.defaultChoice(hasModels: { _ in false }) == .asl)
+        for indian in [true, false] {
+            #expect(SignLanguage.defaultChoice(hasModels: { $0 == .isl }, computerIsIndian: indian) == .isl)
+            #expect(SignLanguage.defaultChoice(hasModels: { $0 == .asl }, computerIsIndian: indian) == .asl)
+            #expect(SignLanguage.defaultChoice(hasModels: { _ in false }, computerIsIndian: indian) == .asl)
+        }
+    }
+
+    @Test func withBothLanguagesTheDefaultFollowsTheComputer() {
+        #expect(SignLanguage.defaultChoice(hasModels: { _ in true }, computerIsIndian: true) == .isl)
+        #expect(SignLanguage.defaultChoice(hasModels: { _ in true }, computerIsIndian: false) == .asl)
+        #expect(ComputerLanguage.isIndian(preferredLanguage: "en-IN") && !ComputerLanguage.isIndian(preferredLanguage: "en-US"))
     }
 
     @Test func aLanguageWithNoModelsSaysItArrivesInAnUpdate() {

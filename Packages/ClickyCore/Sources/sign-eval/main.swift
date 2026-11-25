@@ -4,7 +4,7 @@
 //  second, features, fitting) and the Core ML models (`SignCoreMLScorer`), frame by frame with the clip's own times.
 //
 //  sign-eval clips --manifest <manifest.csv> --clips <folder of .npy> --models <folder> --language asl|isl
-//                  [--split test] [--whole-clip] [--limit N] [--stretch name=value ...]
+//                  [--split test] [--whole-clip] [--limit N] [--stretch name=value ...] [--reading name=value ...]
 //      Each clip of that language (and split) in the manifest is fed as if from the camera at the manifest's fps.
 //      Prints how many clips were read as a word, how many of those were right, how many were right overall, how
 //      many were "unclear", and the 20 most common mix-ups. --whole-clip reads each clip as one sign instead of
@@ -94,6 +94,25 @@ func applyStretchSetting(_ assignment: String, to settings: inout SignStretchSet
     }
 }
 
+/// Sets one of `SignReadingSettings`' finger-spelling numbers by name, as `--reading` gives it. Unknown names stop the run.
+func applyReadingSetting(_ assignment: String, to settings: inout SignReadingSettings) {
+    let parts = assignment.split(separator: "=", maxSplits: 1).map(String.init)
+    guard parts.count == 2, let value = Double(parts[1]) else {
+        print("--reading needs name=value, got \(assignment)")
+        exit(2)
+    }
+    switch parts[0] {
+    case "leastSpellingConfidence": settings.leastSpellingConfidence = Float(value)
+    case "wordProbabilityThatBeatsSpelling": settings.wordProbabilityThatBeatsSpelling = Float(value)
+    case "leastShareOfFramesWithTheSpellingHand": settings.leastShareOfFramesWithTheSpellingHand = value
+    case "mostSpellingWristTravelInBodySizes": settings.mostSpellingWristTravelInBodySizes = value
+    case "shortestSpellingSeconds": settings.shortestSpellingSeconds = value
+    default:
+        print("unknown reading setting \(parts[0])")
+        exit(2)
+    }
+}
+
 func parseOptions(arguments: [String]) -> EvaluationOptions {
     guard let command = arguments.first, ["clips", "video", "stream"].contains(command) else { printUsageAndExit() }
     var videoPath: String?
@@ -128,6 +147,7 @@ func parseOptions(arguments: [String]) -> EvaluationOptions {
         case "--split": split = nextValue()
         case "--whole-clip": readsWholeClip = true
         case "--stretch": applyStretchSetting(nextValue(), to: &stretchSettings)
+        case "--reading": applyReadingSetting(nextValue(), to: &readingSettings)
         case "--streams":
             guard let parsedCount = Int(nextValue()), parsedCount > 0 else { printUsageAndExit() }
             streamCount = parsedCount
