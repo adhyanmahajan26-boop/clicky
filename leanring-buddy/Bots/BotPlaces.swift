@@ -48,7 +48,8 @@ enum DeviceSnapshotBuilder {
         return DeviceSnapshot(name: TheoLink.localName, projectsFolder: BotsT3.projectsFolder.path, projects: BotsT3.projects(), harnesses: ready,
                               hasScreens: StudioController.isAvailable, t3Version: HarnessCenter.shared.statuses["t3"]?.version, firesRoutines: DeviceRoles.runsHere(.routines),
                               deviceID: DeviceRoles.thisMacID, isDesktop: DeviceRoles.thisMacIsDesktop, routinesChoice: DeviceRoles.choice(.routines).rawValue,
-                              mainMacID: DeviceRoles.mainMacPick?.id, mainMacChosenAt: DeviceRoles.mainMacPick?.at)
+                              mainMacID: DeviceRoles.mainMacPick?.id, mainMacChosenAt: DeviceRoles.mainMacPick?.at,
+                              syncFolder: LinkSyncFolderController.shared.folderKindForOtherMac)
     }
 }
 
@@ -240,6 +241,42 @@ enum BotOwnFileStore {
     /// The instructions file's text, for the settings field to show (nil without a file).
     static func instructionsForTheField(botID: String) -> String? {
         text(.instructions, botID: botID).map { BotOwnFiles.body(of: $0) }
+    }
+
+    // MARK: Both Macs (link key "botFiles/<id>", rules in ClickyCore `LinkBotFiles`)
+
+    /// One file as the other Mac gets it. Its time is to the whole second, as it travels, so both Macs compare the same times.
+    private static func linkFile(_ kind: Kind, botID: String) -> LinkBotFile? {
+        let url = file(kind, botID: botID)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? Date.distantPast
+        return LinkBotFile(text: text, changedAt: Date(timeIntervalSince1970: modified.timeIntervalSince1970.rounded(.down)))
+    }
+
+    static func linkItem(botID: String) -> LinkBotFilesItem {
+        LinkBotFilesItem(instructions: linkFile(.instructions, botID: botID), nature: linkFile(.nature, botID: botID))
+    }
+
+    /// Fingerprints for the bots that have either file. A bot with neither on either Mac sends nothing.
+    static func linkDigests(botIDs: [String]) -> [String: String] {
+        var digests: [String: String] = [:]
+        for botID in botIDs {
+            let item = linkItem(botID: botID)
+            guard item.instructions != nil || item.nature != nil else { continue }
+            digests["botFiles/" + botID] = item.digest
+        }
+        return digests
+    }
+
+    /// The other Mac's copies: each file takes the newer one, and keeps its time so both Macs agree which that was.
+    static func applyLink(_ theirs: LinkBotFilesItem, botID: String) {
+        for (kind, theirFile) in [(Kind.instructions, theirs.instructions), (Kind.nature, theirs.nature)] {
+            guard let chosen = LinkBotFiles.copyToWrite(mine: linkFile(kind, botID: botID), theirs: theirFile) else { continue }
+            let url = file(kind, botID: botID)
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard (try? chosen.text.write(to: url, atomically: true, encoding: .utf8)) != nil else { continue }
+            try? FileManager.default.setAttributes([.modificationDate: chosen.changedAt], ofItemAtPath: url.path)
+        }
     }
 }
 

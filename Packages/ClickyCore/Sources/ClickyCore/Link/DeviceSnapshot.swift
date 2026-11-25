@@ -43,9 +43,12 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
     /// The main Mac it was told of (`LinkedMac.mainMacID`) and when. Nil from builds before there was a main Mac.
     public var mainMacID: String?
     public var mainMacChosenAt: Date?
+    /// The kind of folder its sync folder is in ("Google Drive", "iCloud Drive", "Dropbox", "OneDrive", or "a folder of your
+    /// own"), nil while its sync folder is off. The other Mac turns its own on in the same place (`LinkSyncFolder.autoSetup`).
+    public var syncFolder: String?
 
     public init(name: String, projectsFolder: String, projects: [DeviceProject], harnesses: [String: Bool], hasScreens: Bool, t3Version: String? = nil, firesRoutines: Bool? = nil,
-                deviceID: String? = nil, isDesktop: Bool? = nil, routinesChoice: String? = nil, mainMacID: String? = nil, mainMacChosenAt: Date? = nil) {
+                deviceID: String? = nil, isDesktop: Bool? = nil, routinesChoice: String? = nil, mainMacID: String? = nil, mainMacChosenAt: Date? = nil, syncFolder: String? = nil) {
         self.name = name
         self.projectsFolder = projectsFolder
         self.projects = projects
@@ -58,6 +61,7 @@ public struct DeviceSnapshot: Codable, Equatable, Sendable {
         self.routinesChoice = routinesChoice
         self.mainMacID = mainMacID
         self.mainMacChosenAt = mainMacChosenAt
+        self.syncFolder = syncFolder
     }
 
     /// The other Mac, as the routing rules see it. A build from before ids were shared is known by its name, and only a Mac Studio

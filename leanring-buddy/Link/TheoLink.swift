@@ -87,8 +87,13 @@ final class TheoLink: ObservableObject {
         ["clickyHere": clickyRunsHere, "clickyMac": clickyMacNow, "paired": isPaired, "peer": peerName ?? NSNull(), "peerBuild": peerBuild ?? NSNull(), "build": localBuild,
          "lastSync": lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(), "problem": problem ?? NSNull(),
          "found": foundPeers.count, "listening": listener?.state == .ready, "connection": connectionState, "failedDials": failedDials,
-         "syncFolder": LinkSyncFolderController.shared.statusReport]
+         "syncFolder": LinkSyncFolderController.shared.statusReport, "chats": BotsStore.shared.linkChatCounts,
+         "connectors": ConnectorLinkSync.shared.statusReport, "stillDiffering": lastWantedKeys]
     }
+
+    /// What this Mac asked the other for at the last comparison: things that differ. Logged when it changes, so a thing that
+    /// never comes into step shows in theo.log.
+    private var lastWantedKeys: [String] = []
 
     // MARK: Where Clicky works
 
@@ -524,6 +529,11 @@ final class TheoLink: ObservableObject {
                 // A bot's memory that's the same on both: that's the other Mac's copy now, for the next merge.
                 for (key, value) in theirs where key.hasPrefix("botMemory/") && mine[key] == value { BotMemory.agreed(botID: String(key.dropFirst("botMemory/".count))) }
                 if let skills = theirs["skills"], mine["skills"] == skills { BotSkills.agreed(botIDs: store.bots.map(\.id)) }
+                let wantedNow = wanted.sorted()
+                if wantedNow != self.lastWantedKeys {
+                    self.lastWantedKeys = wantedNow
+                    callLog("🔗 Link: differs from \(self.peerName ?? "the other Mac"): \(wantedNow.isEmpty ? "nothing" : wantedNow.joined(separator: ", "))")
+                }
                 if wanted.isEmpty {
                     if mine == theirs || Set(theirs.keys).isSubset(of: Set(mine.keys)) { self.lastSync = Date() }
                 } else {
@@ -669,10 +679,12 @@ final class TheoLink: ObservableObject {
         let fromDisk = await Task.detached { () -> [String: String] in
             var found = BotMemory.digests(botIDs: botIDs)
             found["skills"] = BotSkillSync.digest(BotSkills.copies(botIDs: botIDs))
+            found.merge(BotOwnFileStore.linkDigests(botIDs: botIDs)) { _, new in new }
             found["memory"] = LinkCoding.digest(memory.everything().map { "\($0.kind.rawValue)|\(Int($0.at.timeIntervalSince1970))|\($0.text)" }.sorted())
             return found
         }.value
         digests.merge(fromDisk) { _, new in new }
+        digests["connectors"] = ConnectorLinkSync.shared.digest()
         return digests
     }
 }
@@ -792,7 +804,7 @@ struct LinkSettingsContent: View {
                 }
             }
             if link.isPaired { SyncFolderSettingsSection() }
-            Text("Bots, categories, group chats, chats, private messages between bots, coding runs, Pointer Assistant's team and memory stay the same on both, and each message says which Mac it was written on. API keys stay on their own Mac: they don't leave the Keychain. Routines show on both and fire on one.")
+            Text("Bots, categories, group chats, chats, private messages between bots, coding runs, Pointer Assistant's team, the apps on the Connectors page, each bot's instructions and nature files and memory stay the same on both, and each message says which Mac it was written on. API keys and app sign-ins stay on their own Mac: an app you reach through your Claude account works on both once each Mac's Claude Code is signed in to it, and any other app asks you to sign in once on each Mac. Routines show on both and fire on one.")
                 .font(TheoType.body).foregroundColor(DS.Colors.textSecondary)
         }
     }

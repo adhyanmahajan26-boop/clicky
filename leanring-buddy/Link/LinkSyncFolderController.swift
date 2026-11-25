@@ -23,6 +23,10 @@ final class LinkSyncFolderController: ObservableObject {
 
     private static let enabledKey = "v5.link.syncFolder.enabled"
     private static let pathKey = "v5.link.syncFolder.path"
+    /// The owner switched the sync folder off on this Mac: it's never turned back on by itself after that.
+    private static let ownerTurnedOffKey = "v5.link.syncFolder.ownerTurnedOff"
+    /// Vello's chat was told once about the other Mac's sync folder (the cloud folder's name), so it isn't told again.
+    private static let toldAboutOtherMacKey = "v5.link.syncFolder.toldAboutOtherMac"
     private static let tickSeconds: TimeInterval = 20
 
     @Published private(set) var isEnabled = UserDefaults.standard.bool(forKey: LinkSyncFolderController.enabledKey)
@@ -33,8 +37,12 @@ final class LinkSyncFolderController: ObservableObject {
     @Published private(set) var otherMacName: String?
     @Published private(set) var otherMacWrittenAt: Date?
     @Published private(set) var problem: String?
+    /// The other Mac syncs through a folder this Mac can't use yet: what to do about it, for Settings.
+    @Published private(set) var otherMacSetupNote: String?
 
     private var timer: Timer?
+    /// While this Mac's folder is off: looks every two minutes whether the other Mac's cloud folder has appeared here.
+    private var watchTimer: Timer?
     private var isTicking = false
     private var isSoonQueued = false
 
@@ -81,10 +89,47 @@ final class LinkSyncFolderController: ObservableObject {
         return folderURL.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
     }
 
-    func use(folder: URL) {
+    func use(folder: URL, byOwner: Bool = true) {
         folderPath = folder.standardizedFileURL.path
         UserDefaults.standard.set(folderPath, forKey: Self.pathKey)
-        setEnabled(true)
+        setEnabled(true, byOwner: byOwner)
+    }
+
+    /// What this Mac tells the other in its `DeviceSnapshot`: the kind of folder it syncs through, nil while it's off.
+    var folderKindForOtherMac: String? {
+        guard isEnabled, let folderURL else { return nil }
+        let path = folderURL.standardizedFileURL.path
+        return suggestedFolders.first(where: { $0.url.standardizedFileURL.path == path })?.name ?? LinkSyncFolder.ownFolderName
+    }
+
+    /// The other Mac's sync folder is on: turn this Mac's on in the same cloud folder, so the owner sets it up once. If this
+    /// Mac doesn't have that cloud folder, Settings and Vello's chat say what to install. Never undoes the owner turning it off.
+    func followOtherMac(_ otherMac: DeviceSnapshot?) {
+        guard TheoLink.shared.isPaired else { return }
+        let otherName = TheoLink.shortName(otherMac?.name ?? TheoLink.shared.knownPeerName ?? "other Mac")
+        let decision = LinkSyncFolder.autoSetup(otherMacFolder: otherMac?.syncFolder, enabledHere: isEnabled,
+                                                ownerTurnedOffHere: UserDefaults.standard.bool(forKey: Self.ownerTurnedOffKey),
+                                                suggestions: suggestedFolders)
+        switch decision {
+        case .nothing:
+            otherMacSetupNote = nil
+        case .use(let suggestion):
+            otherMacSetupNote = nil
+            use(folder: suggestion.url, byOwner: false)
+            tellVelloOnce(about: suggestion.name, "Your \(otherName) keeps both Macs in step through \(suggestion.name), so this Mac does too now. Your bots, categories, chats and apps reach each other even when the Macs aren't on the same network or open at the same time.")
+        case .needsCloudApp(let cloudName):
+            let help = LinkSyncFolder.cloudAppHelp(cloudName)
+            otherMacSetupNote = "Your \(otherName) keeps both Macs in step through \(cloudName), which isn't on this Mac. \(help), and this Mac turns it on by itself."
+            tellVelloOnce(about: cloudName, "Your \(otherName) keeps both Macs in step through \(cloudName), but this Mac doesn't have \(cloudName) yet, so what changes here only reaches it while both Macs are open on the same network. \(help), and Vello turns the sync folder on by itself.")
+        case .askOwnerToChoose:
+            otherMacSetupNote = "Your \(otherName) keeps both Macs in step through a folder of its own. Pick the same folder here with Choose…."
+        }
+    }
+
+    private func tellVelloOnce(about cloudName: String, _ text: String) {
+        guard UserDefaults.standard.string(forKey: Self.toldAboutOtherMacKey) != cloudName, let vello = BotsStore.shared.primary else { return }
+        UserDefaults.standard.set(cloudName, forKey: Self.toldAboutOtherMacKey)
+        BotsStore.shared.post(BotChatMessage(author: BotsStore.noteAuthor, text: text), to: vello.id)
     }
 
     func chooseFolder() {
@@ -100,21 +145,36 @@ final class LinkSyncFolderController: ObservableObject {
         use(folder: url)
     }
 
-    func setEnabled(_ enabled: Bool) {
+    func setEnabled(_ enabled: Bool, byOwner: Bool = true) {
         isEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+        if byOwner { UserDefaults.standard.set(!enabled, forKey: Self.ownerTurnedOffKey) }
         problem = nil
         if enabled { start() } else { stop() }
+        // The other Mac hears at once, and turns its own on in the same place.
+        TheoLink.shared.syncSoon()
     }
 
     // MARK: Running
 
     func start() {
+        watchOtherMac()
         guard isEnabled, folderURL != nil, timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.tickSeconds, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         tick()
+    }
+
+    private func watchOtherMac() {
+        followOtherMac(BotsStore.shared.peerDevice)
+        guard watchTimer == nil else { return }
+        watchTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isEnabled else { return }
+                self.followOtherMac(BotsStore.shared.peerDevice)
+            }
+        }
     }
 
     func stop() {
@@ -245,6 +305,7 @@ final class LinkSyncFolderController: ObservableObject {
                 store.applyLinkPayload(item.key, item.payload)
                 merged[item.key] = item.digest
             }
+            if !items.isEmpty { callLog("🔗 Sync folder: took \(items.count) of \(wanted.count) things from \(manifest.macName): \(items.map(\.key).prefix(12).joined(separator: ", "))") }
             state.merged[folder] = merged.filter { theirs[$0.key] != nil }
             otherMacName = manifest.macName
             otherMacWrittenAt = manifest.writtenAt
@@ -282,6 +343,10 @@ struct SyncFolderSettingsSection: View {
                 .toggleStyle(.switch).labelsHidden()
                 .disabled(!link.isPaired)
             }
+            if let note = syncFolder.otherMacSetupNote, !syncFolder.isEnabled {
+                RowDivider()
+                Text(note).font(TheoType.body).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
+            }
             RowDivider()
             SettingRow(title: "Where", detail: syncFolder.folderDisplayName ?? "Not picked yet") {
                 HStack(spacing: 8) {
@@ -307,7 +372,7 @@ struct SyncFolderSettingsSection: View {
         if let name = syncFolder.otherMacName, let at = syncFolder.otherMacWrittenAt {
             parts.append("\(TheoLink.shortName(name)) wrote \(relative.localizedString(for: at, relativeTo: Date()))")
         } else {
-            parts.append("Nothing from your other Mac yet. Turn this on there too, with the same folder.")
+            parts.append("Nothing from your other Mac yet. It turns this on by itself in the same folder once it's open and linked, if it has that folder too.")
         }
         return parts.joined(separator: " · ")
     }
