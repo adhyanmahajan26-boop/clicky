@@ -35,7 +35,9 @@ extension BotsStore {
                             You never host, start, schedule or co-host a Space.
                             """,
                             hue: hue, accentHue: hue + 30, primary: false,
-                            provider: primary?.provider ?? "claude", model: primary?.model ?? ClickyModels.sonnet, effort: nil,
+                            // Claude's fastest model when Vello thinks with Claude: a Space needs quick, short answers.
+                            provider: primary?.provider ?? "claude", model: (primary?.provider ?? "claude") == "claude" ? ClickyModels.haiku : (primary?.model ?? ClickyModels.haiku),
+                            effort: nil,
                             apps: [], category: "personal")
         bot.avatar = BotCharacter.firstFree(preferring: BotCharacter.fromSeed(Self.xSpaceBotID), among: bots).rawValue
         bot.look = .shuffled()

@@ -199,9 +199,12 @@ public enum SpaceFloor {
     /// Whether a reply that's ready starts now. `someoneIsSpeaking`: a voice on the Space's audio now. `quietSeconds`:
     /// since it stopped. `secondsWaiting`: since the reply was ready. `talkMovedOn`: new words were heard since the turn
     /// this answers.
-    public static func startDecision(someoneIsSpeaking: Bool, quietSeconds: Double, secondsWaiting: Double, talkMovedOn: Bool) -> StartDecision {
+    /// `requiredQuiet`: the quiet the turn needs before the bot's voice may start (`CallOwnAccount.pauseBeforeAnswering`):
+    /// a reply that was started early, on the words so far, still waits for it.
+    public static func startDecision(someoneIsSpeaking: Bool, quietSeconds: Double, secondsWaiting: Double, talkMovedOn: Bool,
+                                     requiredQuiet: Double = quietBeforeStartingSeconds) -> StartDecision {
         if talkMovedOn || secondsWaiting > dropAfterWaitingSeconds { return .drop }
-        if someoneIsSpeaking || quietSeconds < quietBeforeStartingSeconds { return .wait }
+        if someoneIsSpeaking || quietSeconds < max(quietBeforeStartingSeconds, requiredQuiet) { return .wait }
         return .start
     }
 }

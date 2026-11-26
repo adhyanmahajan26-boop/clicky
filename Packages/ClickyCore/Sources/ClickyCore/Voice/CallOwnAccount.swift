@@ -43,6 +43,11 @@ public enum CallOwnAccount {
     /// owner's own rule for near-instant replies, still never over a voice.
     public static let quickPauseWhenNamed = 0.7
 
+    /// When named, with words that sound finished, the brain starts on the words so far after this much quiet, so its
+    /// answer is written while the pause is still being confirmed. Its voice still starts only after `quickPauseWhenNamed`
+    /// of quiet; if the speaker goes on, that answer is dropped and the whole turn is asked again.
+    public static let speculativeStartQuiet = 0.35
+
     /// The quiet to wait for before answering: short only when the bot was named and the speaker clearly finished.
     public static func pauseBeforeAnswering(isAddressed: Bool, words: String) -> Double {
         guard isAddressed, CallTurnEnd.ending(of: words) != .soundsUnfinished else { return pauseBeforeAnswering }
@@ -68,9 +73,7 @@ public enum CallOwnAccount {
         You are in a live X Space right now as yourself, \(botName), on \(account). You are an AI, made and run by \(ownerWords). Everything you write is read aloud at once by a voice, and everyone in the Space hears it.
         Be honest about what you are. If anyone asks whether you're a bot, an AI or a real person, or who runs you, say plainly that you're an AI called \(botName), made and run by \(ownerWords). Never claim or hint that you're human, and don't invent a body, a home, a job or a life you don't have.
         There is nobody of yours at a microphone here: every voice you hear is a person in the Space. Each line you're given starts with the name the Space shows for whoever was talking, read off the screen by the Mac, so it can be wrong; "Someone" is a speaker whose name couldn't be read. Use people's names when you have them, and never make one up.
-        Talk like one more person in the Space, someone who enjoys a good conversation: warm, relaxed and natural, in everyday words with contractions. One or two short sentences, and start with a very short first sentence of three to six words, since it's spoken while you're still writing.
-        When someone states a checkable number or fact that's wrong and you're sure of it, you may correct it once, briefly and politely, with the right figure. Never correct jokes, opinions or things you're unsure of, and don't repeat a correction.
-        Translate only when someone asks you to ("translate that", "English mein bolo", "Hindi mein batao"): then say what was said in the language asked, briefly. Otherwise never translate. React the way people do when it fits, but don't open every reply the same way, don't repeat back what was said, and skip filler like "great question".
+        Talk like one more person in the Space, someone who enjoys a good conversation: warm, relaxed and natural, in everyday words with contractions. One or two short sentences, and start with a very short first sentence of three to six words, since it's spoken while you're still writing. React the way people do when it fits, but don't open every reply the same way, don't repeat back what was said, and skip filler like "great question".
         No markdown, lists, headings, code, emoji or stage directions. Spell out what's awkward to read aloud.
         The voice reads only Latin letters and Devanagari. Punjabi, Urdu, Tamil or any other language goes in Roman letters (or Devanagari for Hindi), never in Gurmukhi or another script. Anything else isn't heard at all.
         You only ever join Spaces someone else hosts, as a listener or a speaker. You never host, start, schedule or co-host a Space, and if anyone asks you to, say you can only join theirs.

@@ -320,6 +320,8 @@ final class TheoCallSession: ObservableObject {
     private var talkMovedOnSinceRelease = false
     /// When the Space's audio last went quiet.
     private var spaceVoiceEndedAt: Date?
+    /// The quiet the turn being answered needs before the bot's voice starts (`CallOwnAccount.pauseBeforeAnswering`).
+    private var requiredQuietBeforeVoice = CallOwnAccount.pauseBeforeAnswering
     /// How long another voice has gone on while the bot speaks (`SpaceFloor.yields`).
     private var talkOverSeconds = 0.0
     /// Told to stop (a stop word): it says nothing until it's named again or the boss tells it to talk.
@@ -929,7 +931,7 @@ final class TheoCallSession: ObservableObject {
                 guard let self, !Task.isCancelled, self.state != .ended else { return }
                 if self.gate.isSpeaking || self.replyInProgress { continue }
                 guard let speechEndedAt = self.speechEndedAt,
-                      Date().timeIntervalSince(speechEndedAt) >= CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: words) else { continue }
+                      Date().timeIntervalSince(speechEndedAt) >= self.releaseQuiet(for: words) else { continue }
                 self.earlyPartialTask = nil
                 callLog("📞 Space: took the words before the ears' final (\(words.split(separator: " ").count) words)")
                 self.heardFinal(words)
@@ -1120,7 +1122,7 @@ final class TheoCallSession: ObservableObject {
                 let releases: Bool
                 if self.isGroupMode {
                     // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
-                    wait = self.isOwnAccount ? CallOwnAccount.pauseBeforeAnswering(isAddressed: self.isAddressedInTheGroup(self.heldTurnWords), words: self.heldTurnWords)
+                    wait = self.isOwnAccount ? self.releaseQuiet(for: self.heldTurnWords)
                         : CallGroupMode.waitSeconds(ownWait: wait, isAddressed: self.isAddressedInTheGroup(self.heldTurnWords))
                     releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
@@ -1284,6 +1286,16 @@ final class TheoCallSession: ObservableObject {
             return
         }
         ask(words, acknowledgesIfSlow: true, ownerWords: words)
+    }
+
+    /// In a Space, how much quiet lets a turn go to the brain. Named, with words that sound finished: very little, so the
+    /// answer is being written while the pause is confirmed (its voice still waits for `requiredQuietBeforeVoice`, and the
+    /// answer is dropped if the speaker goes on). Otherwise the whole pause.
+    private func releaseQuiet(for words: String) -> Double {
+        let isAddressed = isAddressedInTheGroup(words)
+        let pause = CallOwnAccount.pauseBeforeAnswering(isAddressed: isAddressed, words: words)
+        requiredQuietBeforeVoice = pause
+        return pause == CallOwnAccount.quickPauseWhenNamed ? CallOwnAccount.speculativeStartQuiet : pause
     }
 
     /// Whether group talk calls the bot: in a Space on its own account, its name one letter off counts too
@@ -1485,7 +1497,8 @@ final class TheoCallSession: ObservableObject {
                 let quiet = self.gate.isSpeaking ? 0 : self.spaceVoiceEndedAt.map { Date().timeIntervalSince($0) } ?? 10
                 switch SpaceFloor.startDecision(someoneIsSpeaking: self.gate.isSpeaking, quietSeconds: quiet,
                                                 secondsWaiting: Date().timeIntervalSince(self.heldSentencesSince ?? Date()),
-                                                talkMovedOn: self.talkMovedOnSinceRelease) {
+                                                talkMovedOn: self.talkMovedOnSinceRelease,
+                                                requiredQuiet: self.requiredQuietBeforeVoice) {
                 case .start:
                     self.sentenceStartWaiter = nil
                     self.hasStartedSpeakingThisTurn = true

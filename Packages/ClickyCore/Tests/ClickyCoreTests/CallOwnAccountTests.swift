@@ -341,11 +341,8 @@ struct CallOwnAccountTests {
         #expect(CallOwnAccount.quickPauseWhenNamed >= 0.6 && CallOwnAccount.quickPauseWhenNamed <= 0.8)
     }
 
-    @Test func factChecksAreRareAndTranslationIsOnRequest() {
+    @Test func theFirstSentenceIsShort() {
         let prompt = CallOwnAccount.systemPrompt(personaHead: "You are Chotta Tirri.", handle: "@KPKPKP9828", owner: "Addy", botName: "Chotta Tirri", languageRule: "")
-        #expect(prompt.contains("you may correct it once, briefly and politely"))
-        #expect(prompt.contains("Never correct jokes, opinions or things you're unsure of"))
-        #expect(prompt.contains("Translate only when someone asks you to"))
         #expect(prompt.contains("very short first sentence"))
     }
 
@@ -590,6 +587,10 @@ struct SpaceFloorTests {
         #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 0.5, secondsWaiting: 1, talkMovedOn: false) == .start)
         #expect(SpaceFloor.startDecision(someoneIsSpeaking: true, quietSeconds: 0, secondsWaiting: 4.5, talkMovedOn: false) == .drop)
         #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 1, secondsWaiting: 1, talkMovedOn: true) == .drop)
+        // A reply written early still waits for the turn's own quiet before it's heard.
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 0.5, secondsWaiting: 0.3, talkMovedOn: false, requiredQuiet: 0.7) == .wait)
+        #expect(SpaceFloor.startDecision(someoneIsSpeaking: false, quietSeconds: 0.75, secondsWaiting: 0.5, talkMovedOn: false, requiredQuiet: 0.7) == .start)
+        #expect(CallOwnAccount.speculativeStartQuiet < CallOwnAccount.quickPauseWhenNamed)
     }
 
     @Test func stopWordsStopItFromAnyone() {
