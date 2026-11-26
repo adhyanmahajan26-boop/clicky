@@ -48,9 +48,10 @@ public enum CallOwnAccount {
         guard isAddressed, CallTurnEnd.ending(of: words) != .soundsUnfinished else { return pauseBeforeAnswering }
         return quickPauseWhenNamed
     }
-    /// The X Space bot's Sarvam voice when none is picked for it: an even, conversational Hinglish voice. The "companion"
-    /// voices it fell back to before sounded breathy and stretched in a public Space (25 Nov).
-    public static let defaultSarvamSpeaker = "simran_enhi_customer"
+    /// The X Space bot's Sarvam voice when none is picked for it: Shubh, the male Hinglish voice the owner liked in its first
+    /// public Space (25 Nov). The odd, stretched sounds there came from speaking fragments, not from this voice: it now
+    /// gets whole, cleaned sentences at a neutral pace.
+    public static let defaultSarvamSpeaker = "shubh_enhi_companion"
     /// The voice's pace in a Space: neutral.
     public static let sarvamPace = 1.0
 
