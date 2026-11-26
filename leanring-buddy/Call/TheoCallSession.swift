@@ -303,6 +303,18 @@ final class TheoCallSession: ObservableObject {
     private var wordsLastNamedAt: Date?
     /// A standing instruction for this Space from the owner (debug inbox `ownAccountNote`), added to every turn.
     var spaceNote: String?
+    /// Which forms the bot uses for itself in Hindi, from its voice or the owner's setting (ClickyCore `SpaceSelfGender`).
+    private var spaceSelfGender: SpaceSelfGender {
+        XAccountSettings.selfGender(sarvamSpeaker: CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .sarvam) ?? CallOwnAccount.defaultSarvamSpeaker)
+    }
+    /// The owner's clip on its phrase (ClickyCore `SpaceClipTrigger`): the last two finals heard, so a phrase split across
+    /// them still counts, when it last played, and the wait for quiet before it plays.
+    private var recentFinalsForClip: [String] = []
+    private var clipCooldown = SpaceClipCooldown()
+    private var clipTask: Task<Void, Never>?
+    private(set) var clipLog: [[String: Any]] = []
+    /// The last sentences sent to the voice in a Space, exactly as the voice got them (`ownAccountStatus`).
+    private var spokenLately: [String] = []
     /// Someone talked over the bot in a Space: it finishes what's already playing and says no more this turn
     /// (ClickyCore `SpaceInterruption`).
     private var speaksNoMoreThisTurn = false
@@ -974,6 +986,7 @@ final class TheoCallSession: ObservableObject {
             (lastReleasedTurn != nil && heldTurnWords.isEmpty && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn))
             || (!heldTurnWords.isEmpty && CallHeldWords.adding(words, to: heldTurnWords) == heldTurnWords.trimmingCharacters(in: .whitespacesAndNewlines)))
         if isRepeat { callLog("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
+        if isOwnAccount, !words.isEmpty, !isRepeat, listenForTheClip(words) { return }
         if isOwnAccount, !words.isEmpty, !isRepeat {
             _ = heardAStopWord(words)
             if replyInProgress || !heldSentences.isEmpty || audio.isVoicePlaying { talkMovedOnSinceRelease = true }
@@ -1020,6 +1033,66 @@ final class TheoCallSession: ObservableObject {
         if !isOwnerSpeaking, !replyInProgress, state == .userSpeaking || state == .thinking { state = .listening }
         waitForTheEndOfTheTurn()
     }
+
+    /// The owner's clip, when someone in the Space says its phrase (ClickyCore `SpaceClipTrigger`): the reply to those words
+    /// is dropped, and once there's 0.7 s of quiet (3 s at most) the clip plays once into the Space, then the bot listens on.
+    /// True when the words were the clip's phrase and were taken for it.
+    private func listenForTheClip(_ words: String) -> Bool {
+        let phrase = SpaceClipPhrase.paraKaiseyKartaHai
+        recentFinalsForClip.append(words)
+        if recentFinalsForClip.count > 2 { recentFinalsForClip.removeFirst(recentFinalsForClip.count - 2) }
+        guard SpaceClipTrigger.matches(recentFinalsForClip.joined(separator: " "), phrase: phrase) else { return false }
+        recentFinalsForClip = []
+        let now = Date()
+        guard clipCooldown.allows(at: now), clipTask == nil else {
+            callLog("📞 Space: heard \"\(phrase.name)\" again within \(Int(SpaceClipTrigger.cooldownSeconds)) s, not playing the clip")
+            return false
+        }
+        guard let file = XAccountSettings.clipFile(named: phrase.name) else {
+            callLog("📞 Space: heard \"\(phrase.name)\" but its clip file is missing")
+            clipLog.append(["at": now.timeIntervalSince1970, "words": words, "played": false, "why": "clip missing"])
+            return false
+        }
+        clipCooldown.played(at: now)
+        callLog("📞 Space: heard \"\(phrase.name)\" (\(words)), playing its clip")
+        // The reply to these words, held or already being written, is dropped.
+        heldTurnTask?.cancel()
+        heldTurnTask = nil
+        heldTurnWords = ""
+        heldGroupLines = []
+        heldTurnStartedAt = nil
+        isHoldingTurn = false
+        if let heldTurnLineID, let index = lines.firstIndex(where: { $0.id == heldTurnLineID }) {
+            lines[index].isLive = false
+        } else if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) {
+            lines[liveIndex].text = words
+            lines[liveIndex].isLive = false
+        }
+        heldTurnLineID = nil
+        if replyInProgress || audio.isVoicePlaying || state == .speaking || !heldSentences.isEmpty { stopSpeakingThisTurn() }
+        if state == .thinking || state == .userSpeaking { state = .listening }
+        let heardAt = now
+        clipTask = Task { @MainActor [weak self] in
+            var waited = 0.0
+            while !Task.isCancelled, let self, self.state != .ended {
+                let quiet = self.gate.isSpeaking ? 0 : self.spaceVoiceEndedAt.map { Date().timeIntervalSince($0) } ?? 10
+                waited = Date().timeIntervalSince(heardAt)
+                if quiet >= SpaceClipTrigger.quietBeforePlaying || waited >= SpaceClipTrigger.longestWaitForQuiet { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard let self, self.state != .ended else { return }
+            let seconds = self.audio.playClip(file, gainDecibels: SpaceClipTrigger.gainDecibels)
+            callLog("📞 Space: played the clip after \(String(format: "%.1f", waited)) s (\(seconds.map { String(format: "%.2f s long", $0) } ?? "couldn't play it"))")
+            self.clipLog.append(["at": heardAt.timeIntervalSince1970, "words": words, "played": seconds != nil, "waitedSeconds": waited,
+                                 "clipSeconds": seconds ?? 0, "file": file.lastPathComponent])
+            if self.clipLog.count > 20 { self.clipLog.removeFirst(self.clipLog.count - 20) }
+            self.clipTask = nil
+        }
+        return true
+    }
+
+    /// TEST ONLY (`ownAccountClip`): plays the clip as if its phrase was just heard, through the same path.
+    func clipForTest(words: String) -> Bool { isOwnAccount && listenForTheClip(words) }
 
     /// In a Space on Vello's own account, the name seen speaking most since the last words were named, or nil ("Someone").
     private func speakerOfWordsJustHeard() -> String? {
@@ -1263,6 +1336,8 @@ final class TheoCallSession: ObservableObject {
             if let spaceNote, !spaceNote.isEmpty { message += "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName) }
             if let stance = XAccountSettings.stance.instruction(target: XAccountSettings.stanceTarget) { message += "\n" + stance }
             if let tone = XAccountSettings.tone.instruction(custom: XAccountSettings.toneCustom) { message += "\n" + tone }
+            let selfGenderRule = spaceSelfGender.instruction
+            if !selfGenderRule.isEmpty { message += "\n(" + selfGenderRule + ")" }
             if lastReplyWasNotHeard {
                 message = "(Your last reply wasn't heard in the Space, so it doesn't count as said.)\n" + message
                 lastReplyWasNotHeard = false
@@ -1482,7 +1557,12 @@ final class TheoCallSession: ObservableObject {
     /// the talk moves on or it's waited more than 4 s (`SpaceFloor`).
     private func sayInTheSpace(_ sentence: String) {
         guard !speaksNoMoreThisTurn else { return }
-        let text = SpeakableText.speakable(SpaceVoiceText.sanitized(CallPrompt.speakable(sentence)))
+        let written = CallPrompt.speakable(sentence)
+        let ownForms = spaceSelfGender.applied(to: written)
+        if ownForms != written { callLog("📞 Space: said its own verbs in the \(spaceSelfGender.rawValue) forms") }
+        let text = SpeakableText.speakable(SpaceVoiceText.sanitized(ownForms))
+        spokenLately.append(text)
+        if spokenLately.count > 6 { spokenLately.removeFirst(spokenLately.count - 6) }
         guard text.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return }
         if hasStartedSpeakingThisTurn {
             voice?.speak(text)
@@ -1968,6 +2048,11 @@ final class TheoCallSession: ObservableObject {
         report["currentSpeaker"] = currentSpeaker ?? ""
         report["bot"] = bot?.id ?? ""
         report["speakers"] = speakerWatcher?.report() ?? [:]
+        report["selfGender"] = spaceSelfGender.rawValue
+        report["spokenLately"] = spokenLately
+        let clip = XAccountSettings.clipFile(named: SpaceClipPhrase.paraKaiseyKartaHai.name)
+        report["clip"] = ["phrase": SpaceClipPhrase.paraKaiseyKartaHai.name, "file": clip?.path ?? "", "found": clip != nil,
+                          "heard": clipLog] as [String: Any]
         return report
     }
 

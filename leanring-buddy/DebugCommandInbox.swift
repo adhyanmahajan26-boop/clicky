@@ -74,6 +74,7 @@
 //                               browser): {started, problem} and the call's status
 //    ownAccountStop           → ends it
 //    ownAccountNote {text}    → a standing instruction from the owner for the Space going on, added to each turn
+//    ownAccountClip {words}   → TEST ONLY: takes these words as heard in the Space for the owner's clip (plays it if they match)
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
@@ -378,6 +379,14 @@ final class DebugCommandInbox {
             }
             session.sayInTheSpaceForTest(text)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["said": text], errorMessage: nil)
+        case "ownAccountClip":
+            // TEST ONLY {words}: the words as if heard in the Space, through the clip's own path (match, cooldown, quiet, play).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount, let words = commandObject["words"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile, a Space and words only.")
+                return
+            }
+            let taken = session.clipForTest(words: words)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["taken": taken], errorMessage: nil)
         case "ownAccountNote":
             // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
             guard let session = TheoCallController.session, session.isOwnAccount else {

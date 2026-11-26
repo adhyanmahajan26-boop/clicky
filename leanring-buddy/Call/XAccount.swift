@@ -51,6 +51,30 @@ enum XAccountSettings {
         UserDefaults.standard.set(target, forKey: stanceTargetKey)
     }
 
+    /// Which forms the bot uses for itself in Hindi ("feminine", "masculine", "none"), or unset to follow its voice
+    /// (ClickyCore `SpaceSelfGender`: a woman's Sarvam voice says "main karti hun").
+    static let selfGenderKey = "v5.xAccount.selfGender"
+    static func selfGender(sarvamSpeaker: String?) -> SpaceSelfGender {
+        SpaceSelfGender.resolved(setting: UserDefaults.standard.string(forKey: selfGenderKey), sarvamSpeaker: sarvamSpeaker)
+    }
+
+    /// Clips the owner set to play into the Space on a phrase (ClickyCore `SpaceClipTrigger`): files named after the
+    /// phrase ("para-kaisey-karta-hai.m4a") in ~/Library/Application Support/VelloXSpace/clips, in the Mac user's own home
+    /// even in a test profile.
+    static func clipFile(named name: String) -> URL? {
+        var homes: [URL] = []
+        if let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir { homes.append(URL(fileURLWithPath: String(cString: directory))) }
+        homes.append(URL(fileURLWithPath: NSHomeDirectory()))
+        for home in homes {
+            let folder = home.appendingPathComponent("Library/Application Support/VelloXSpace/clips")
+            for fileExtension in ["m4a", "wav", "caf", "aac", "mp3", "aiff"] {
+                let url = folder.appendingPathComponent(name).appendingPathExtension(fileExtension)
+                if FileManager.default.fileExists(atPath: url.path) { return url }
+            }
+        }
+        return nil
+    }
+
     /// "@vello_ai", or empty.
     static var handle: String { XHandle.normalized(UserDefaults.standard.string(forKey: handleKey) ?? "") }
 

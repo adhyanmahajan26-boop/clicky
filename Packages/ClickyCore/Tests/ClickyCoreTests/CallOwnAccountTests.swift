@@ -650,3 +650,89 @@ struct SpaceVoiceTextTests {
         #expect(!CallOwnAccount.defaultSarvamSpeaker.contains("companion"))
     }
 }
+
+struct SpaceSelfGenderTests {
+    private func feminine(_ text: String) -> String { SpaceSelfGender.feminine.applied(to: text) }
+
+    @Test func theVoiceDecidesUnlessTheOwnerSet() {
+        #expect(SpaceSelfGender.resolved(setting: nil, sarvamSpeaker: "simran_enhi_customer") == .feminine)
+        #expect(SpaceSelfGender.resolved(setting: nil, sarvamSpeaker: "shubh_enhi_companion") == .masculine)
+        #expect(SpaceSelfGender.resolved(setting: "", sarvamSpeaker: "unknown_voice") == .unset)
+        #expect(SpaceSelfGender.resolved(setting: "masculine", sarvamSpeaker: "simran_enhi_customer") == .masculine)
+        #expect(SpaceSelfGender.resolved(setting: "none", sarvamSpeaker: "simran_enhi_customer") == .unset)
+        #expect(SpaceSelfGender.feminine.instruction.contains("main karti hun"))
+        #expect(SpaceSelfGender.unset.instruction.isEmpty)
+    }
+
+    @Test func herOwnVerbsBecomeFeminine() {
+        #expect(feminine("Main aata hun, ek minute.") == "Main aati hun, ek minute.")
+        #expect(feminine("main yeh roz karta hun") == "main yeh roz karti hun")
+        #expect(feminine("Main soch raha hun ki tum sahi ho.") == "Main soch rahi hun ki tum sahi ho.")
+        #expect(feminine("Kal main wahan gaya tha.") == "Kal main wahan gayi thi.")
+        #expect(feminine("Main thak gaya yaar.") == "Main thak gayi yaar.")
+        #expect(feminine("Main bolta hoon sach.") == "Main bolti hoon sach.")
+        #expect(feminine("Haan, main karunga.") == "Haan, main karungi.")
+        #expect(feminine("Bas abhi aata hun.") == "Bas abhi aati hun.")
+        #expect(feminine("Karta hun, pakka.") == "Karti hun, pakka.")
+        #expect(feminine("Karunga!") == "Karungi!")
+        #expect(feminine("main pehle yeh karta tha") == "main pehle yeh karti thi")
+        #expect(feminine("Main akela tha.") == "Main akeli thi.")
+        #expect(feminine("मैं यह करता हूँ।") == "मैं यह करती हूँ।")
+        #expect(feminine("मैं कल गया था") == "मैं कल गई थी")
+        #expect(feminine("मैं कर रहा हूँ") == "मैं कर रही हूँ")
+        #expect(feminine("मैं करूँगा") == "मैं करूँगी")
+    }
+
+    @Test func otherPeoplesVerbsAndPlainWordsStay() {
+        #expect(feminine("Wo kal gaya tha.") == "Wo kal gaya tha.")
+        #expect(feminine("Ravi kehta hai ki wo aata hai.") == "Ravi kehta hai ki wo aata hai.")
+        #expect(feminine("Maine dekha tha.") == "Maine dekha tha.")
+        #expect(feminine("Main gayi thi, aur Ravi gaya tha.") == "Main gayi thi, aur Ravi gaya tha.")
+        #expect(feminine("Mujhe pata hai.") == "Mujhe pata hai.")
+        #expect(feminine("Main tumhara beta hun.") == "Main tumhara beta hun.")
+        #expect(feminine("Ghar mein gaya tha woh.") == "Ghar mein gaya tha woh.")
+        #expect(feminine("I think that's right.") == "I think that's right.")
+        #expect(feminine("Main sochti hun, tum kya karte ho?") == "Main sochti hun, tum kya karte ho?")
+        #expect(SpaceSelfGender.masculine.applied(to: "Main aata hun.") == "Main aata hun.")
+    }
+}
+
+struct SpaceClipTriggerTests {
+    private func matches(_ text: String) -> Bool { SpaceClipTrigger.matches(text, phrase: .paraKaiseyKartaHai) }
+
+    @Test func theWholePhraseMatchesInAnySpelling() {
+        #expect(matches("para kaisey karta hai"))
+        #expect(matches("Para kaise karta hai?"))
+        #expect(matches("पैरा कैसे करता है"))
+        #expect(matches("bhai para kaise karta hai"))
+        #expect(matches("arre bhai, para ye kaise karta hai yaar"))
+        #expect(matches("PARAA KESE KRTA HAIN!!"))
+        #expect(matches("पारा कैसे करता हैं।"))
+        #expect(matches("para kaise karta है"))
+    }
+
+    @Test func partsAndLookalikesDoNot() {
+        #expect(!matches("para"))
+        #expect(!matches("kaise karta hai"))
+        #expect(!matches("para kaise karti hai"))
+        #expect(!matches("parantu kaise"))
+        #expect(!matches("kaise ho"))
+        #expect(!matches("para kaise karta"))
+        #expect(!matches("para bhai ye kaise karta hai"))   // two fillers
+        #expect(!matches("para kaise wo karta hai"))       // not a filler
+        #expect(!matches("hai karta kaise para"))
+    }
+
+    @Test func itPlaysAtMostOnceIn20Seconds() {
+        var cooldown = SpaceClipCooldown()
+        let start = Date(timeIntervalSince1970: 1_000)
+        #expect(cooldown.allows(at: start))
+        cooldown.played(at: start)
+        #expect(!cooldown.allows(at: start.addingTimeInterval(5)))
+        #expect(!cooldown.allows(at: start.addingTimeInterval(19.9)))
+        #expect(cooldown.allows(at: start.addingTimeInterval(20)))
+        #expect(SpaceClipTrigger.quietBeforePlaying == 0.7)
+        #expect(SpaceClipTrigger.longestWaitForQuiet == 3)
+        #expect(SpaceClipTrigger.gainDecibels == -3)
+    }
+}

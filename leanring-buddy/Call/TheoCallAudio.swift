@@ -476,6 +476,52 @@ final class CallAudio {
         }
     }
 
+    /// The owner's clip, once, into the Space's virtual mic only (never the monitor or this Mac's speakers), `gainDecibels`
+    /// down, as one mono buffer. Its length in seconds, or nil when it couldn't be read or played.
+    @discardableResult
+    func playClip(_ url: URL, gainDecibels: Double) -> TimeInterval? {
+        guard let virtualMic else { return nil }
+        virtualMic.ensureRunning()
+        guard let file = try? AVAudioFile(forReading: url),
+              let read = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: read)) != nil, read.frameLength > 0, let channels = read.floatChannelData,
+              let mono = AVAudioPCMBuffer(pcmFormat: AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate, channels: 1)!,
+                                          frameCapacity: read.frameLength),
+              let out = mono.floatChannelData?[0] else {
+            callLog("📞 Space: couldn't read the clip \(url.lastPathComponent)")
+            return nil
+        }
+        let gain = Float(pow(10, gainDecibels / 20))
+        let channelCount = Int(read.format.channelCount)
+        for frame in 0..<Int(read.frameLength) {
+            var sum: Float = 0
+            for channel in 0..<channelCount { sum += channels[channel][frame] }
+            out[frame] = max(-1, min(1, sum / Float(channelCount) * gain))
+        }
+        mono.frameLength = read.frameLength
+        writeTee(mono)
+        if !segmentOpen {
+            channel.startSegment(rate: 1)
+            segmentOpen = true
+        }
+        let turn = generation
+        scheduled += 1
+        let accepted = channel.schedule(mono) { [weak self] in
+            guard let self, self.generation == turn else { return }
+            self.scheduled -= 1
+            if self.scheduled == 0 {
+                self.voiceLevel = 0
+                self.onDrained?()
+            }
+        }
+        guard accepted else {
+            scheduled -= 1
+            return nil
+        }
+        loudestDecibelsSinceReset = max(loudestDecibelsSinceReset, Self.decibels(of: mono))
+        return Double(mono.frameLength) / file.processingFormat.sampleRate
+    }
+
     /// Silence, now. What was queued is dropped.
     func stopVoice() {
         generation += 1
