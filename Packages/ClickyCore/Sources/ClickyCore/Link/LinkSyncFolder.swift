@@ -139,6 +139,40 @@ public enum LinkSyncFolder {
         }
         return found
     }
+
+    /// What a Mac's `DeviceSnapshot.syncFolder` says for a folder that isn't one of the cloud folders above.
+    public static let ownFolderName = "a folder of your own"
+
+    /// What this Mac does about the other Mac's sync folder, so the owner turns it on once and both Macs use it.
+    public enum AutoSetup: Equatable, Sendable {
+        /// Nothing: this Mac's own folder is on, the owner turned it off here, or the other Mac has none.
+        case nothing
+        /// Turn it on here, in this Mac's copy of the same cloud folder.
+        case use(Suggestion)
+        /// The other Mac syncs through this cloud folder, and this Mac doesn't have it: say so, with what to install.
+        case needsCloudApp(String)
+        /// The other Mac uses a folder of its own: only the owner can pick where that is here.
+        case askOwnerToChoose
+    }
+
+    /// `ownerTurnedOffHere`: the owner switched this Mac's sync folder off themselves, which an automatic setup never undoes.
+    public static func autoSetup(otherMacFolder: String?, enabledHere: Bool, ownerTurnedOffHere: Bool, suggestions: [Suggestion]) -> AutoSetup {
+        guard !enabledHere, !ownerTurnedOffHere, let otherMacFolder else { return .nothing }
+        if let same = suggestions.first(where: { $0.name == otherMacFolder }) { return .use(same) }
+        if otherMacFolder == ownFolderName { return .askOwnerToChoose }
+        return .needsCloudApp(otherMacFolder)
+    }
+
+    /// Where to get the app that makes a cloud folder appear on a Mac, for the line that says it's missing.
+    public static func cloudAppHelp(_ cloudFolderName: String) -> String {
+        switch cloudFolderName {
+        case "Google Drive": return "Install Google Drive for desktop (google.com/drive/download) and sign in with the same Google account"
+        case "iCloud Drive": return "Turn on iCloud Drive in System Settings › Apple Account › iCloud, with the same Apple Account"
+        case "Dropbox": return "Install Dropbox (dropbox.com/install) and sign in with the same account"
+        case "OneDrive": return "Install OneDrive from the App Store and sign in with the same account"
+        default: return "Make the same folder available on this Mac"
+        }
+    }
 }
 
 /// Where a shared chat moved from one Mac to the other: a small "On MacBook Air" line goes before the first message written on

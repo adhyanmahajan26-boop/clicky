@@ -347,7 +347,7 @@ final class BotsStore: ObservableObject {
     func setTeamSetup(bots newBots: [NativeBot], layout newLayout: BotsLayout) {
         bots = newBots
         layout = newLayout
-        for bot in newBots where conversations[bot.id] == nil { conversations[bot.id] = BotConversationRecord() }
+        for bot in newBots where conversations[bot.id] == nil { conversations[bot.id] = loadConversation(bot.id) }
         writeBots()
         writeLayout()
     }
@@ -2981,6 +2981,11 @@ extension BotsStore {
 // MARK: - Theo Link
 
 /// What goes over the link for one chat. Engine sessions stay with their own Mac.
+/// Times in the link's log lines and status, to the second.
+enum LinkLogTime {
+    static func text(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
+}
+
 struct LinkChatItem: Codable {
     var messages: [BotChatMessage]
     var clearedAt: Date?
@@ -3090,6 +3095,7 @@ extension BotsStore {
 
     func wantsLinkItem(_ key: String) -> Bool {
         if key.hasPrefix("botMemory/") { return bot(String(key.dropFirst("botMemory/".count))) != nil }
+        if key.hasPrefix("botFiles/") { return bot(String(key.dropFirst("botFiles/".count))) != nil }
         // An older build's name for what "device" says now.
         if key == "projects" { return false }
         guard key.hasPrefix("chat/") else { return true }
@@ -3109,7 +3115,9 @@ extension BotsStore {
         case "clickyMac": return try? encoder.encode(TheoLink.shared.clickyMacItem)
         case "memory": return try? encoder.encode(memoryStore.everything())
         case "skills": return try? encoder.encode(BotSkills.copies(botIDs: bots.map(\.id)))
+        case "connectors": return ConnectorLinkSync.shared.payload()
         default:
+            if key.hasPrefix("botFiles/") { return try? encoder.encode(BotOwnFileStore.linkItem(botID: String(key.dropFirst("botFiles/".count)))) }
             if key.hasPrefix("botMemory/") { return try? encoder.encode(BotMemory.read(botID: String(key.dropFirst("botMemory/".count)))) }
             guard key.hasPrefix("chat/") else { return nil }
             return try? encoder.encode(linkItem(forChat: String(key.dropFirst("chat/".count))))
@@ -3130,7 +3138,9 @@ extension BotsStore {
             bots = merged.items
             for bot in bots where enginesBefore[bot.id].map({ $0 != bot.provider }) == true { clearEngineSessions(of: bot.id) }
             linkSavedBots = bots
-            for bot in bots where conversations[bot.id] == nil { conversations[bot.id] = BotConversationRecord() }
+            // A bot new to this list may still have its chat saved here (from before it was removed, or a copy of the folder):
+            // it's read from disk, never started empty, or the next save of that chat would write over the file.
+            for bot in bots where conversations[bot.id] == nil { conversations[bot.id] = loadConversation(bot.id) }
             writeBots()
             writeLinkStamps()
         case "groups":
@@ -3139,7 +3149,7 @@ extension BotsStore {
             linkGroupStamps = merged.stamps
             groups = merged.items
             linkSavedGroups = groups
-            for group in groups where group.headID != nil && conversations[group.roomID] == nil { conversations[group.roomID] = BotConversationRecord() }
+            for group in groups where group.headID != nil && conversations[group.roomID] == nil { conversations[group.roomID] = loadConversation(group.roomID) }
             writeGroups()
             writeLinkStamps()
         case "routines":
@@ -3178,6 +3188,8 @@ extension BotsStore {
             if let theirs = try? decoder.decode(DeviceSnapshot.self, from: data) {
                 peerDevice = theirs
                 DeviceRoles.rememberOtherMac(theirs)
+                // The other Mac's sync folder is on: this one turns its own on in the same place.
+                LinkSyncFolderController.shared.followOtherMac(theirs)
                 // The other Mac may have picked a new main Mac: the VM screens leave this one if they're no longer its.
                 StudioController.shared.followDeviceSetting()
             }
@@ -3192,14 +3204,28 @@ extension BotsStore {
         case "skills":
             guard let theirs = try? decoder.decode([String: SkillCopy].self, from: data) else { return }
             BotSkills.merge(theirs, botIDs: bots.map(\.id))
+        case "connectors":
+            ConnectorLinkSync.shared.apply(data)
         default:
+            if key.hasPrefix("botFiles/") {
+                let botID = String(key.dropFirst("botFiles/".count))
+                if bot(botID) != nil, let theirs = try? decoder.decode(LinkBotFilesItem.self, from: data) { BotOwnFileStore.applyLink(theirs, botID: botID) }
+                return
+            }
             if key.hasPrefix("botMemory/") {
                 let botID = String(key.dropFirst("botMemory/".count))
                 if bot(botID) != nil, let theirs = try? decoder.decode(String.self, from: data) { BotMemory.merge(theirs, botID: botID) }
                 return
             }
             let id = String(key.dropFirst("chat/".count))
-            guard key.hasPrefix("chat/"), isWantedChat(id), let theirs = try? decoder.decode(LinkChatItem.self, from: data) else { return }
+            guard key.hasPrefix("chat/"), isWantedChat(id) else {
+                callLog("🔗 Link: left out \(key): not a chat this Mac keeps")
+                return
+            }
+            guard let theirs = try? decoder.decode(LinkChatItem.self, from: data) else {
+                callLog("🔗 Link: couldn't read \(key) from the other Mac (\(data.count) bytes)")
+                return
+            }
             var record = conversation(id)
             let known = Set(record.messages.map(\.id))
             let clearedAt = [record.clearedAt, theirs.clearedAt].compactMap { $0 }.max()
@@ -3219,8 +3245,20 @@ extension BotsStore {
             }
             conversations[id] = record
             writeConversation(id)
+            callLog("🔗 Link: \(key) \(known.count) here + \(theirs.messages.count) theirs → \(merged.count) (\(arrived.count) new\(clearedAt.map { ", cleared \(LinkLogTime.text($0))" } ?? ""))")
             for message in arrived where !message.text.isEmpty { noteUnread(message, in: id) }
         }
+    }
+
+    /// For `linkStatus`: how many messages each shared chat holds here, and when it was cleared, so the two Macs can be compared
+    /// from outside without reading a word of them.
+    var linkChatCounts: [String: Any] {
+        var counts: [String: Any] = [:]
+        for id in linkChatIDs.sorted() {
+            let record = conversation(id)
+            counts[id] = record.clearedAt.map { ["messages": record.messages.count, "clearedAt": LinkLogTime.text($0)] as [String: Any] } ?? record.messages.count
+        }
+        return counts
     }
 
     /// The runs both Macs show, the same way round on both. Older ones stay on their own Mac.
