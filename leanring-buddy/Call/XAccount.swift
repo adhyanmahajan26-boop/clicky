@@ -106,6 +106,16 @@ enum XAccountSettings {
         return nil
     }
 
+    /// Hindi words written in Roman letters go to Sarvam's voice in Devanagari (ClickyCore `HinglishVoiceText`). On unless
+    /// the owner turns it off.
+    static let devanagariForTheVoiceKey = "v5.xAccount.devanagariForTheVoice"
+    static var devanagariForTheVoice: Bool { UserDefaults.standard.object(forKey: devanagariForTheVoiceKey) as? Bool ?? true }
+
+    /// The bot may search the web when someone in the Space asks it to (Claude Code's own web search, on the owner's
+    /// Claude plan). Off until the owner turns it on.
+    static let webSearchKey = "v5.xAccount.webSearch"
+    static var webSearch: Bool { UserDefaults.standard.bool(forKey: webSearchKey) }
+
     /// "@vello_ai", or empty.
     static var handle: String { XHandle.normalized(UserDefaults.standard.string(forKey: handleKey) ?? "") }
 

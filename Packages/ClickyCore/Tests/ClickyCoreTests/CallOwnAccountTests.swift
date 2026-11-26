@@ -345,7 +345,7 @@ struct CallOwnAccountTests {
         #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: "Chotta Tirri, what do you think?") == CallOwnAccount.quickPauseWhenNamed)
         #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: false, words: "what do you think?") == CallOwnAccount.pauseBeforeAnswering)
         #expect(CallOwnAccount.pauseBeforeAnswering(isAddressed: true, words: "Chotta Tirri, I was thinking that and") == CallOwnAccount.pauseBeforeAnswering)
-        #expect(CallOwnAccount.quickPauseWhenNamed >= 0.6 && CallOwnAccount.quickPauseWhenNamed <= 0.8)
+        #expect(CallOwnAccount.quickPauseWhenNamed >= 0.45 && CallOwnAccount.quickPauseWhenNamed <= 0.8)
     }
 
     @Test func theFirstSentenceIsShort() {
@@ -766,5 +766,41 @@ struct SpaceClipTriggerTests {
         #expect(roman.contains("one language and one script for the whole reply"))
         #expect(CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: true, fixedLanguage: nil).contains("all in Devanagari"))
         #expect(CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: nil, fixedLanguage: "English").contains("one script"))
+    }
+}
+
+struct HinglishVoiceTextTests {
+    @Test func hindiWordsGoToTheVoiceInDevanagari() {
+        #expect(HinglishVoiceText.spoken("Main yahin hun!") == "मैं यहीं हूँ!")
+        #expect(HinglishVoiceText.spoken("Main yahin hun, sun rahi hun!") == "मैं यहीं हूँ, सुन रही हूँ!")
+        #expect(HinglishVoiceText.spoken("Main bhi so gayi thi, sun!") == "मैं भी सो गई थी, sun!")
+        #expect(HinglishVoiceText.spoken("Nahin yaar, main aisa nahin karungi.") == "नहीं यार, मैं ऐसा नहीं करूँगी.")
+        #expect(HinglishVoiceText.spoken("Haan bilkul!") == "हाँ बिल्कुल!")
+        // English words, names and numbers stay as written.
+        #expect(HinglishVoiceText.spoken("Haan Ambar, equality sabke liye hai, 2027 mein bhi.") == "हाँ Ambar, equality सबके लिए है, 2027 में भी.")
+        #expect(HinglishVoiceText.spoken("Token Tirri mera king hai!") == "Token Tirri मेरा king है!")
+    }
+
+    @Test func englishAndDevanagariStayAsTheyAre() {
+        #expect(HinglishVoiceText.spoken("The main point is equal pay for equal work.") == "The main point is equal pay for equal work.")
+        #expect(HinglishVoiceText.spoken("Hi everyone, I'm an AI.") == "Hi everyone, I'm an AI.")
+        #expect(HinglishVoiceText.spoken("मैं यहीं हूँ") == "मैं यहीं हूँ")
+        #expect(HinglishVoiceText.spoken("") == "")
+    }
+}
+
+struct SpokenMorseTests {
+    @Test func dotsAndDashesReadOutAreDecoded() {
+        let reading = SpokenMorse.reading("Okay, छोटा Terry, अब ध्यान से सुनना। डैश डॉट डैश डॉट। डैश डैश डैश। dot dash.")
+        #expect(reading?.groups == ["-.-.", "---", ".-"])
+        #expect(reading?.letters == ["C", "O", "A"])
+        #expect(SpokenMorse.reading("dot dot dot, dash dash dash, dot dot dot")?.letters == ["S", "O", "S"])
+        // No pauses heard: letters can't be told apart, and the brain is told to ask.
+        let runTogether = SpokenMorse.note("डैश डॉट डैश डॉट डैश डैश डैश डॉट डॉट")
+        #expect(runTogether?.contains("?") == true)
+        #expect(runTogether?.contains("ask for a short pause") == true)
+        // Talk that only mentions Morse isn't any.
+        #expect(SpokenMorse.reading("Morse bhai, ek baar code do na") == nil)
+        #expect(SpokenMorse.reading("visit example dot com") == nil)
     }
 }

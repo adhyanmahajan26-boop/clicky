@@ -158,7 +158,8 @@ enum CallPrompt {
     /// A Space on Vello's own X account: Vello's persona and the Space's rules, and nothing from the owner's chats, team,
     /// runs or memory, since everything it knows it could say in public (ClickyCore `CallOwnAccount`).
     @MainActor
-    static func ownAccount(bot: NativeBot?, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
+    static func ownAccount(bot: NativeBot?, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language,
+                           canSearchTheWeb: Bool = false) -> String {
         let theo = bot
         let fixedLanguage: String?
         switch language {
@@ -169,7 +170,7 @@ enum CallPrompt {
         // Hinglish in a Space is written in Roman letters, one script per reply (`CallOwnAccount.languageRule`).
         let rule = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: language.meansHinglish ? false : nil, fixedLanguage: fixedLanguage)
         return CallOwnAccount.systemPrompt(personaHead: theo?.personaHead ?? "You are Vello.", handle: handle, owner: BotPrompts.ownerName,
-                                           botName: theo?.name ?? "Vello", languageRule: rule)
+                                           botName: theo?.name ?? "Vello", languageRule: rule, canSearchTheWeb: canSearchTheWeb)
     }
 
     /// Which language to answer in.
@@ -432,6 +433,8 @@ final class TheoCallSession: ObservableObject {
     private var turnActedOnTheCall = false
     /// When the ears last gave words in a partial: the owner is still going, so the turn isn't let go yet.
     private var lastPartialWordsAt: Date?
+    /// Words in the last partial, so a partial that only respells them doesn't count as more talk (`heardPartial`).
+    private var lastPartialWordCount = 0
     /// Only the voice near the Mac counts (Settings › Voice, on by default): someone talking across the room opens the
     /// gate too, and the ears write their words down, so a stretch of speech counts only when it's about as loud as the
     /// owner's own (ClickyCore `CallNearVoice`).
@@ -533,11 +536,15 @@ final class TheoCallSession: ObservableObject {
         }
         brainNameForWords = BrainAvailability.name(of: brainSetting)
         // The call starts with as much of the chat as its brain has room for. A public Space gets none of it.
-        let prompt = ownAccount.map { CallPrompt.ownAccount(bot: bot, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language) }
+        // A Space may search the web when the owner turned it on and the brain is Claude Code's (`XAccountSettings.webSearch`).
+        let searchesTheWeb = isOwnAccount && XAccountSettings.webSearch && BrainModel(setting: brainSetting).isClaude
+        let prompt = ownAccount.map { CallPrompt.ownAccount(bot: bot, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language,
+                                                            canSearchTheWeb: searchesTheWeb) }
             ?? CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
                                  carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
         let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
-                                            promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low")
+                                            promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low",
+                                            tools: searchesTheWeb ? ["WebSearch"] : [])
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {
@@ -926,7 +933,12 @@ final class TheoCallSession: ObservableObject {
         }
         startAddyLine()
         lastWordsAt = Date()
-        lastPartialWordsAt = lastWordsAt
+        // In a Space only a partial with more words than the last restarts the wait for the end of the turn: Sarvam
+        // rewrites the same words in other spellings for a second or more after the voice stops, and every rewrite
+        // restarted it (a public Space, 26 Nov: turns let go 2.5 s after the voice stopped, not 0.5 to 1.3 s).
+        let partialWordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+        if !isOwnAccount || partialWordCount > lastPartialWordCount { lastPartialWordsAt = lastWordsAt }
+        lastPartialWordCount = partialWordCount
         guard let index = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) else { return }
         lines[index].text = lines[index].id == heldTurnLineID && !heldTurnWords.isEmpty ? CallHeldWords.adding(text, to: heldTurnWords) : text
         if isOwnAccount { takePartialIfTheFinalIsSlow(text) }
@@ -958,6 +970,7 @@ final class TheoCallSession: ObservableObject {
     /// The ears give their words after about half a second of quiet, far less than people pause mid-thought. The words are
     /// held, and Vello answers only once the pause is a real one (`waitForTheEndOfTheTurn`).
     private func heardFinal(_ text: String) {
+        lastPartialWordCount = 0
         earlyPartialTask?.cancel()
         earlyPartialTask = nil
         let words = CallHeardWords.withoutRunawayRepeats(text)
@@ -1341,6 +1354,8 @@ final class TheoCallSession: ObservableObject {
             var message = CallOwnAccount.message(lines: heard, handle: ownAccount?.handle ?? "", botName: botName, isAddressed: isAddressed,
                                                  passesInARow: groupPassesInARow, onStage: speakerWatcher?.onStage ?? [],
                                                  bossNames: ownAccount?.bossNames ?? [], owner: BotPrompts.ownerName)
+            // Morse code read out ("dash dot dash dot"): decoded here, so the brain doesn't guess (ClickyCore `SpokenMorse`).
+            for line in heard { if let morse = SpokenMorse.note(line.text) { message += "\n" + morse } }
             if let spaceNote, !spaceNote.isEmpty { message += "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName) }
             if let stance = XAccountSettings.stance.instruction(target: XAccountSettings.stanceTarget) { message += "\n" + stance }
             if let tone = XAccountSettings.tone.instruction(custom: XAccountSettings.toneCustom) { message += "\n" + tone }
@@ -1565,10 +1580,21 @@ final class TheoCallSession: ObservableObject {
     /// the talk moves on or it's waited more than 4 s (`SpaceFloor`).
     private func sayInTheSpace(_ sentence: String) {
         guard !speaksNoMoreThisTurn else { return }
+        // A web search's answer ends with its sources: links aren't said, and nothing after them is.
+        var sentence = sentence
+        if let sources = sentence.range(of: #"(?i)\bsources?\s*:"#, options: .regularExpression) {
+            sentence = String(sentence[..<sources.lowerBound])
+            speaksNoMoreThisTurn = true
+        }
+        sentence = sentence.replacingOccurrences(of: #"\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
         let written = CallPrompt.speakable(sentence)
         let ownForms = spaceSelfGender.applied(to: written)
         if ownForms != written { callLog("📞 Space: said its own verbs in the \(spaceSelfGender.rawValue) forms") }
-        let text = SpeakableText.speakable(SpaceVoiceText.sanitized(ownForms))
+        var text = SpeakableText.speakable(SpaceVoiceText.sanitized(ownForms))
+        // Sarvam's Hindi voice reads Roman Hindi like English ("main" as "mey"): its Hindi words go in Devanagari, for the
+        // voice only (ClickyCore `HinglishVoiceText`).
+        if voice is SarvamCallVoice, XAccountSettings.devanagariForTheVoice { text = HinglishVoiceText.spoken(text) }
         spokenLately.append(text)
         if spokenLately.count > 6 { spokenLately.removeFirst(spokenLately.count - 6) }
         guard text.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return }
