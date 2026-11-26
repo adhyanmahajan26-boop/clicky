@@ -53,10 +53,10 @@ public enum CallOwnAccount {
         guard isAddressed, CallTurnEnd.ending(of: words) != .soundsUnfinished else { return pauseBeforeAnswering }
         return quickPauseWhenNamed
     }
-    /// The X Space bot's Sarvam voice when none is picked for it: Shubh, the male Hinglish voice the owner liked in its first
-    /// public Space (25 Nov). The odd, stretched sounds there came from speaking fragments, not from this voice: it now
-    /// gets whole, cleaned sentences at a neutral pace.
-    public static let defaultSarvamSpeaker = "shubh_enhi_companion"
+    /// The Meeting bot's Sarvam voice when none is picked for it: Simran, a clear female Hinglish voice in a plain (not
+    /// "companion") style, which the owner asked for on 26 Nov. Rendered to a file through the whole voice path it had no
+    /// clipping or breaks; the companion styles sounded breathy in a Space.
+    public static let defaultSarvamSpeaker = "simran_enhi_customer"
     /// The voice's pace in a Space: neutral.
     public static let sarvamPace = 1.0
 

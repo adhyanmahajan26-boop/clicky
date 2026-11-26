@@ -1971,6 +1971,9 @@ final class TheoCallSession: ObservableObject {
         return report
     }
 
+    /// `ownAccountTee`: the voice's audio also written to a file. Test use.
+    func teeVoiceForTest(to url: URL?) { audio.teeVoice(to: url) }
+
     /// `ownAccountSay`: a line said in the Space through the same path a reply takes, with no turn for the brain. Test use.
     func sayInTheSpaceForTest(_ text: String) {
         guard isOwnAccount else { return }

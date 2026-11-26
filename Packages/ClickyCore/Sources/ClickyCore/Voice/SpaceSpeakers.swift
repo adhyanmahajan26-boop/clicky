@@ -413,6 +413,16 @@ public enum SpaceSpeakerName {
         })
     }
 
+    /// The better of two readings of one name line, one in Latin scripts and one in Hindi: the Hindi one when it has
+    /// Devanagari in it and is at least as sure (a Devanagari name read as Latin comes out as junk like "HIGG"), else the
+    /// Latin one.
+    public static func preferredReading(latin: String?, latinConfidence: Float, hindi: String?, hindiConfidence: Float) -> String? {
+        let hindiHasDevanagari = hindi?.unicodeScalars.contains { (0x0900...0x097F).contains($0.value) } == true
+        guard hindiHasDevanagari, let hindi else { return latin }
+        guard let latin, !latin.isEmpty else { return hindi }
+        return hindiConfidence >= latinConfidence ? hindi : latin
+    }
+
     /// The bot's own tile: its handle, or its display name with the bot's name in it ("Vello (AI)").
     public static func isTheBot(_ name: String, handle: String, botName: String) -> Bool {
         let plainName = plain(name)

@@ -631,4 +631,22 @@ struct SpaceVoiceTextTests {
         let sentences = long.add(String(repeating: "word, ", count: 60))
         #expect(sentences.count == 1 && sentences[0].count <= SpaceSentenceGatherer.longestSentence)
     }
+
+    @Test func hindiNamesAreReadInDevanagari() {
+        #expect(SpaceSpeakerName.preferredReading(latin: "HIGG", latinConfidence: 0.4, hindi: "माधव", hindiConfidence: 0.8) == "माधव")
+        #expect(SpaceSpeakerName.preferredReading(latin: "Kongji", latinConfidence: 0.9, hindi: "कोंगजी", hindiConfidence: 0.5) == "Kongji")
+        #expect(SpaceSpeakerName.preferredReading(latin: "Kongji", latinConfidence: 0.9, hindi: "Kongji", hindiConfidence: 0.95) == "Kongji")
+        #expect(SpaceSpeakerName.preferredReading(latin: nil, latinConfidence: 0, hindi: "सत्यान्वेषि", hindiConfidence: 0.3) == "सत्यान्वेषि")
+        #expect(SpaceSpeakerName.cleaned("सत्यान्वेषि") == "सत्यान्वेषि")
+        // Devanagari names snap in the roster like any other.
+        var roster = SpaceSpeakerRoster()
+        let start = Date(timeIntervalSince1970: 6000)
+        _ = roster.observe("माधव", at: start); _ = roster.observe("माधव", at: start.addingTimeInterval(1))
+        #expect(roster.onStage == ["माधव"])
+    }
+
+    @Test func theDefaultVoiceIsAPlainFemaleVoice() {
+        #expect(CallOwnAccount.defaultSarvamSpeaker == "simran_enhi_customer")
+        #expect(!CallOwnAccount.defaultSarvamSpeaker.contains("companion"))
+    }
 }

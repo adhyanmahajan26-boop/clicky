@@ -273,6 +273,21 @@ final class CallAudio {
 
     func resetLoudness() { loudestDecibelsSinceReset = -100 }
 
+    /// Test only (`ownAccountTee`): every buffer of the voice handed to the player, also written to this file, to hear and
+    /// measure exactly what the voice produced without touching a live device.
+    private var teeFile: AVAudioFile?
+    private var teeURL: URL?
+    func teeVoice(to url: URL?) {
+        teeURL = url
+        teeFile = nil
+    }
+
+    private func writeTee(_ buffer: AVAudioPCMBuffer) {
+        guard let teeURL else { return }
+        if teeFile == nil { teeFile = try? AVAudioFile(forWriting: teeURL, settings: buffer.format.settings, commonFormat: buffer.format.commonFormat, interleaved: buffer.format.isInterleaved) }
+        try? teeFile?.write(from: buffer)
+    }
+
     init(hub: AudioEngineHub, isLive: Bool, ownAccount: XAccountSetup? = nil) {
         self.hub = hub
         self.isLive = isLive
@@ -428,6 +443,7 @@ final class CallAudio {
     func play(_ buffer: AVAudioPCMBuffer) {
         // A Space's virtual mic engine can stop under a device change: started again before anything is lost.
         virtualMic?.ensureRunning()
+        writeTee(buffer)
         monitor?.ensureRunning()
         if !segmentOpen {
             channel.startSegment(rate: 1)

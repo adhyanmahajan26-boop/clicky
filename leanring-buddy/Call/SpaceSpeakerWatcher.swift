@@ -260,28 +260,44 @@ final class SpaceSpeakerWatcher {
             .integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         guard pixelRect.width > 8, pixelRect.height > 8, let crop = image.cropping(to: pixelRect) else { return [] }
         let enlarged = doubledWithoutVividColour(crop) ?? crop
-        let request = VNRecognizeTextRequest()
-        // The accurate reader once it's loaded: the fast one read "Priya" as "Prlya" every time (Studio, 25 Nov).
-        request.recognitionLevel = AccurateTextReading.isReady ? .accurate : .fast
-        request.usesLanguageCorrection = false
-        // Latin scripts first: with automatic languages the reader wrote "@KPKPKP9828" in Cyrillic look-alikes.
-        request.automaticallyDetectsLanguage = false
-        request.recognitionLanguages = latinFirstLanguages(for: request)
-        try? VNImageRequestHandler(cgImage: enlarged, options: [:]).perform([request])
         // The crop as it really was, after clipping to the picture.
         let cropBox = SpaceBox(x: pixelRect.minX / Double(image.width), y: pixelRect.minY / Double(image.height),
                                width: pixelRect.width / Double(image.width), height: pixelRect.height / Double(image.height))
+        let latin = recognise(enlarged, cropBox: cropBox, languages: nil)
+        // Names written in Devanagari ("माधव"): read again in Hindi, and the better reading of each line kept. Only the
+        // accurate reader knows Hindi.
+        guard AccurateTextReading.isReady else { return latin.map(\.line) }
+        let hindi = recognise(enlarged, cropBox: cropBox, languages: ["hi-IN"])
+        return latin.map { latinLine -> SpaceTextLine in
+            guard let match = hindi.first(where: { abs($0.line.box.midY - latinLine.line.box.midY) < latinLine.line.box.height * 0.6
+                                                     && abs($0.line.box.midX - latinLine.line.box.midX) < latinLine.line.box.width }) else { return latinLine.line }
+            let text = SpaceSpeakerName.preferredReading(latin: latinLine.line.text, latinConfidence: latinLine.confidence,
+                                                         hindi: match.line.text, hindiConfidence: match.confidence) ?? latinLine.line.text
+            return SpaceTextLine(text: text, box: latinLine.line.box)
+        } + hindi.filter { hindiLine in
+            !latin.contains { abs($0.line.box.midY - hindiLine.line.box.midY) < hindiLine.line.box.height * 0.6 }
+        }.map(\.line)
+    }
+
+    /// The lines Vision reads on `image` (a crop of the picture at `cropBox`), in boxes on the whole picture, with how sure
+    /// it was. `languages` nil: English and the other Latin-script languages first.
+    private nonisolated static func recognise(_ image: CGImage, cropBox: SpaceBox, languages: [String]?) -> [(line: SpaceTextLine, confidence: Float)] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = AccurateTextReading.isReady ? .accurate : .fast
+        request.usesLanguageCorrection = false
+        request.automaticallyDetectsLanguage = false
+        request.recognitionLanguages = languages ?? latinFirstLanguages(for: request)
+        try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         return (request.results ?? []).compactMap { observation in
-            guard let text = observation.topCandidates(1).first?.string else { return nil }
+            guard let candidate = observation.topCandidates(1).first else { return nil }
             let rect = observation.boundingBox
             // Vision's boxes are 0...1 of the crop from the bottom left; these are 0...1 of the picture from the top left.
-            return SpaceTextLine(text: text, box: SpaceBox(x: cropBox.x + rect.minX * cropBox.width, y: cropBox.y + (1 - rect.maxY) * cropBox.height,
-                                                           width: rect.width * cropBox.width, height: rect.height * cropBox.height))
+            let box = SpaceBox(x: cropBox.x + rect.minX * cropBox.width, y: cropBox.y + (1 - rect.maxY) * cropBox.height,
+                               width: rect.width * cropBox.width, height: rect.height * cropBox.height)
+            return (SpaceTextLine(text: candidate.string, box: box), candidate.confidence)
         }
     }
 
-    /// The strip at twice the size, with every vivid pixel (the speaking ring, a badge) painted the strip's background
-    /// colour, so only the name's plain text is left to read.
     /// English and the other Latin-script languages Vision reads, English first.
     private nonisolated static func latinFirstLanguages(for request: VNRecognizeTextRequest) -> [String] {
         let supported = (try? request.supportedRecognitionLanguages()) ?? ["en-US"]

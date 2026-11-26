@@ -361,6 +361,15 @@ final class DebugCommandInbox {
                 }
                 self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
             }
+        case "ownAccountTee":
+            // TEST ONLY {path}: the voice's audio also written to this file ("" stops).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile and a Space only.")
+                return
+            }
+            let path = commandObject["path"] as? String ?? ""
+            session.teeVoiceForTest(to: path.isEmpty ? nil : URL(fileURLWithPath: path))
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["tee": path], errorMessage: nil)
         case "ownAccountSay":
             // TEST ONLY {text}: said in the Space through the reply's own path (sentences, clean-up, the floor rules).
             guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount, let text = commandObject["text"] as? String else {
