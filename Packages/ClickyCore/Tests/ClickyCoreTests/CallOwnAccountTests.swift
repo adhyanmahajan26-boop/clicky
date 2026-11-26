@@ -289,6 +289,13 @@ struct CallOwnAccountTests {
         #expect(CallOwnAccount.isAddressed("kaise ho chotta tirri", botName: "Chotta Tirri", assistantNames: names))
         #expect(!CallOwnAccount.isAddressed("hello everyone, welcome to the space", botName: "Chotta Tirri", assistantNames: names))
         #expect(!CallOwnAccount.isAddressed("the tiger roared", botName: "Chotta Tirri", assistantNames: names))
+        // In Devanagari and by sound (a public Space, 26 Nov: she was called and never heard her name).
+        #expect(CallOwnAccount.isAddressed("छोटा टिर्री, तू सुन रहा मैं?", botName: "Chotta Tirri", assistantNames: names))
+        #expect(CallOwnAccount.isAddressed("नहीं छोटा Terry तुम बहुत अच्छा कर रही हो", botName: "Chotta Tirri", assistantNames: names))
+        #expect(CallOwnAccount.isAddressed("टिरी के बैटरी चार्ज करके लेके आ", botName: "Chotta Tirri", assistantNames: names))
+        // "Chhota" is everyday Hindi.
+        #expect(!CallOwnAccount.isAddressed("ek chhota sa sawaal hai", botName: "Chotta Tirri", assistantNames: names))
+        #expect(!CallOwnAccount.isAddressed("ये छोटा सा काम है", botName: "Chotta Tirri", assistantNames: names))
     }
 
     @Test func cutOffNamesBelongToThePersonAlreadySeen() {
@@ -599,8 +606,12 @@ struct SpaceFloorTests {
             #expect(SpaceStopWords.isStop(words, isAddressed: false), "\(words)")
         }
         #expect(SpaceStopWords.isStop("Chotta Tirri, please stop talking now about this", isAddressed: true))
+        #expect(SpaceStopWords.isStop("bas bas bhai", isAddressed: false))
+        #expect(SpaceStopWords.isStop("Chotta Tirri bas", isAddressed: true))
+        #expect(!SpaceStopWords.isStop("Chotta Tirri, bas yahi baat hai ki tum sahi ho", isAddressed: true))
         // Ordinary talk that holds a stop word isn't one.
-        for words in ["bas yahi baat hai ki economy badhegi", "we can't stop innovation in this country", "chup chaap sunte raho sab log yahan", "hello everyone"] {
+        for words in ["bas yahi baat hai ki economy badhegi", "we can't stop innovation in this country", "chup chaap sunte raho sab log yahan", "hello everyone",
+                      "बस हो गई", "bas ho gaya", "बस हो गई चार लाइन", "ruko main aata hun"] {
             #expect(!SpaceStopWords.isStop(words, isAddressed: false), "\(words)")
         }
     }

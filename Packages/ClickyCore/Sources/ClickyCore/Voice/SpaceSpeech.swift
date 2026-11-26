@@ -217,18 +217,30 @@ public enum SpaceStopWords {
         "रुको", "रुक जाओ", "बस", "बस करो", "चुप", "चुप करो", "चुप हो जाओ", "ख़ामोश", "खामोश",
         "ਰੁਕੋ", "ਰੁਕ ਜਾ", "ਬੱਸ", "ਬਸ ਕਰ", "ਚੁੱਪ", "ਚੁੱਪ ਕਰ", "ਚੁੱਪ ਕਰੋ",
     ]
+    /// "bas" and "enough" are also "that's it" about anything ("बस हो गई", a public Space, 26 Nov: the bot went quiet for
+    /// the rest of it). Alone or with other stop words they stop the bot; in other talk only when it's named.
+    static let weakPhrases: Set<String> = ["bas", "बस", "ਬੱਸ", "enough", "quiet"]
+    /// Words that can come with a stop without making it talk: "arre ruko yaar", "bas bas bhai".
+    static let fillers: Set<String> = ["yaar", "yar", "bhai", "please", "na", "naa", "abhi", "ab", "now", "ok", "okay", "haan", "arre", "are", "re",
+                                       "ji", "अरे", "यार", "भाई", "ना", "अब", "अभी", "जी"]
     /// Words longer than this are talk that happens to hold a stop word ("bas yahi baat hai"), unless the bot is named.
     static let longestStopUtteranceWords = 4
+    /// Told to stop, the bot stays quiet until it's named or its boss talks to it, and for this long at most.
+    public static let silenceLastsSeconds: Double = 60
 
-    /// Whether words heard (a partial is enough) tell the bot to stop: a stop phrase said on its own, or anywhere when the
-    /// bot is named in them ("Chotta Tirri, stop").
+    /// Whether words heard (a partial is enough) tell the bot to stop: stop words said on their own ("ruko", "arre bas
+    /// yaar"), or a stop said to the bot by name ("Chotta Tirri, stop"). "Bas ho gayi" and other talk that holds one isn't.
     public static func isStop(_ words: String, isAddressed: Bool) -> Bool {
-        let simplified = " " + CallTurnEnd.simplifiedWords(words).joined(separator: " ") + " "
-        let count = simplified.split(separator: " ").count
-        guard count > 0 else { return false }
-        let hasPhrase = phrases.contains { simplified.contains(" " + CallTurnEnd.simplifiedWords($0).joined(separator: " ") + " ") }
-        guard hasPhrase else { return false }
-        return isAddressed || count <= longestStopUtteranceWords
+        let heard = CallTurnEnd.simplifiedWords(words)
+        guard !heard.isEmpty else { return false }
+        let simplified = " " + heard.joined(separator: " ") + " "
+        let said = phrases.filter { simplified.contains(" " + CallTurnEnd.simplifiedWords($0).joined(separator: " ") + " ") }
+        guard !said.isEmpty else { return false }
+        if isAddressed {
+            return said.contains { !weakPhrases.contains($0) } || heard.count <= longestStopUtteranceWords
+        }
+        let vocabulary = Set(phrases.flatMap(CallTurnEnd.simplifiedWords)).union(fillers)
+        return heard.count <= longestStopUtteranceWords && heard.allSatisfy { vocabulary.contains($0) }
     }
 }
 

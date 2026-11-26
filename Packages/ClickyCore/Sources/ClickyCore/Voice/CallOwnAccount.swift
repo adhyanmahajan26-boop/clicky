@@ -149,13 +149,49 @@ public enum CallOwnAccount {
     /// Studio, 25 Nov), for words of four letters or more. Vello's usual names aren't loosened this way: "hello" is one
     /// letter off "vello".
     public static func isAddressed(_ words: String, botName: String, assistantNames: [String]) -> Bool {
-        if CallGroupMode.isAddressed(words, assistantNames: assistantNames) { return true }
-        let nameWords = Set(CallTurnEnd.simplifiedWords(botName).filter { $0.count >= 4 }.map(SpaceSpeakerName.skeleton))
+        // A word of the name that's also everyday Hindi ("chotta", small) isn't the name on its own.
+        let names = assistantNames.filter { !everydaySpokenWords.contains(spokenForm($0)) }
+        if CallGroupMode.isAddressed(words, assistantNames: names) { return true }
+        let nameWords = Set(CallTurnEnd.simplifiedWords(botName).filter { $0.count >= 4 && !everydaySpokenWords.contains(spokenForm($0)) }.map(SpaceSpeakerName.skeleton))
         guard !nameWords.isEmpty else { return false }
-        return CallTurnEnd.simplifiedWords(words).contains { word in
+        if CallTurnEnd.simplifiedWords(words).contains(where: { word in
             let heard = SpaceSpeakerName.skeleton(word)
             return heard.count >= 4 && nameWords.contains { $0 == heard || SpaceSpeakerName.isMisreading(heard, of: $0) }
+        }) { return true }
+        // The name as the ears write it in Devanagari or by sound: "छोटा टिर्री", "Chhoti Terry". Words that are also
+        // everyday Hindi ("chhota", small) don't count on their own.
+        let spokenName = Set(CallTurnEnd.simplifiedWords(botName).map(spokenForm).filter { $0.count >= 4 && !everydaySpokenWords.contains($0) })
+        guard !spokenName.isEmpty else { return false }
+        return CallTurnEnd.simplifiedWords(words).contains { word in
+            let heard = spokenForm(word)
+            return heard.count >= 4 && spokenName.contains { $0 == heard || SpaceSpeakerName.isMisreading(heard, of: $0) }
         }
+    }
+
+    static let everydaySpokenWords: Set<String> = Set(["chhota", "chhoti", "chota", "choti", "chotta", "chotti", "bada", "badi", "pyari", "pyara", "मीठी", "छोटा", "छोटी"].map(spokenForm))
+
+    /// A word by how it sounds: in Latin letters (Devanagari spelled out), with no accents, h after a consonant dropped,
+    /// e/i/y as one vowel and o/u as another, and no doubled letters: "टिर्री", "Tirri", "Terry" and "tiri" all come out "tiri".
+    static func spokenForm(_ word: String) -> String {
+        var latin = word
+        if word.unicodeScalars.contains(where: { !$0.isASCII }) {
+            latin = latin.applyingTransform(.toLatin, reverse: false) ?? latin
+            latin = latin.applyingTransform(.stripDiacritics, reverse: false) ?? latin
+        }
+        var letters: [Character] = []
+        for character in latin.lowercased() where character.isLetter && character.isASCII {
+            var sound = character
+            switch character {
+            case "e", "y": sound = "i"
+            case "o": sound = "u"
+            case "w": sound = "v"
+            default: break
+            }
+            if sound == "h", let last = letters.last, !"aiu".contains(last) { continue }
+            if letters.last == sound { continue }
+            letters.append(sound)
+        }
+        return String(letters)
     }
 
     /// Whether words heard on the call may switch it (group mode, Listen mode) or reach Vello's work on the screen. Only

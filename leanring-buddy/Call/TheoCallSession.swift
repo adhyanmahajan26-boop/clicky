@@ -339,6 +339,7 @@ final class TheoCallSession: ObservableObject {
     private var talkOverSeconds = 0.0
     /// Told to stop (a stop word): it says nothing until it's named again or the boss tells it to talk.
     private(set) var isSilenced = false
+    private var silencedAt: Date?
     /// Lines heard while silenced, given to the brain with the next turn it answers.
     private var silencedBacklog: [CallGroupMode.HeardLine] = []
     /// The last turn's reply wasn't heard in the Space: the brain is told with the next turn, so it doesn't count it as said.
@@ -800,7 +801,8 @@ final class TheoCallSession: ObservableObject {
     /// and the bot stays quiet until it's named again or its boss tells it to talk.
     private func heardAStopWord(_ words: String) -> Bool {
         guard SpaceStopWords.isStop(words, isAddressed: isAddressedInTheGroup(words)) else { return false }
-        if !isSilenced { callLog("📞 Space: told to stop, staying quiet until named") }
+        if !isSilenced { callLog("📞 Space: told to stop (\(words)), staying quiet until named") }
+        if !isSilenced { silencedAt = Date() }
         isSilenced = true
         if replyInProgress || audio.isVoicePlaying || state == .speaking || !heldSentences.isEmpty { stopSpeakingThisTurn() }
         return true
@@ -1317,6 +1319,12 @@ final class TheoCallSession: ObservableObject {
         if isOwnAccount {
             var heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: false, text: words)]
             let isAddressed = isAddressedInTheGroup(words)
+            // Quiet for a minute at most: a stop that wasn't meant for it doesn't keep it quiet for the rest of the Space.
+            if isSilenced, let silencedAt, Date().timeIntervalSince(silencedAt) > SpaceStopWords.silenceLastsSeconds {
+                isSilenced = false
+                silencedBacklog = []
+                callLog("📞 Space: a minute since it was told to stop, talking again when there's something to say")
+            }
             if isSilenced {
                 let fromTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
                 // Told to stop: quiet until named again (not in the stop itself) or the boss speaks to it.
