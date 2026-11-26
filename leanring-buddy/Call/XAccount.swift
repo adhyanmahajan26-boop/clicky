@@ -59,12 +59,43 @@ enum XAccountSettings {
     }
 
     /// Clips the owner set to play into the Space on a phrase (ClickyCore `SpaceClipTrigger`): files named after the
-    /// phrase ("para-kaisey-karta-hai.m4a") in ~/Library/Application Support/VelloXSpace/clips, in the Mac user's own home
+    /// phrase ("mercury-baba.m4a") in ~/Library/Application Support/VelloXSpace/clips, in the Mac user's own home
     /// even in a test profile.
-    static func clipFile(named name: String) -> URL? {
+    private static var homes: [URL] {
         var homes: [URL] = []
         if let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir { homes.append(URL(fileURLWithPath: String(cString: directory))) }
         homes.append(URL(fileURLWithPath: NSHomeDirectory()))
+        return homes
+    }
+
+    /// The owner's list of phrases and their clips (ClickyCore `SpaceClipPhrase.list`), in the Mac user's clips folder.
+    /// Read again whenever the file changes, so a new code word works in a Space going on. Without the file, the clip
+    /// plays on "mercury baba".
+    static var clipPhrasesFile: URL { homes[0].appendingPathComponent("Library/Application Support/VelloXSpace/clips/phrases.json") }
+    nonisolated(unsafe) private static var cachedPhrases: (modified: Date?, phrases: [SpaceClipPhrase])?
+    static func clipPhrases() -> [SpaceClipPhrase] {
+        let modified = (try? FileManager.default.attributesOfItem(atPath: clipPhrasesFile.path))?[.modificationDate] as? Date
+        if let cachedPhrases, cachedPhrases.modified == modified { return cachedPhrases.phrases }
+        var phrases = [SpaceClipPhrase.mercuryBaba]
+        if modified != nil, let data = try? Data(contentsOf: clipPhrasesFile) {
+            if let list = SpaceClipPhrase.list(fromJSON: data) {
+                phrases = list
+                callLog("📞 Space: clip phrases now \(list.map(\.name).joined(separator: ", "))")
+            } else {
+                callLog("📞 Space: couldn't read \(clipPhrasesFile.lastPathComponent), kept the clip on its default phrase")
+            }
+        }
+        cachedPhrases = (modified, phrases)
+        return phrases
+    }
+
+    /// Writes the phrases file (`ownAccountClipPhrases`); the list in effect from the next words heard.
+    static func saveClipPhrases(_ phrases: [SpaceClipPhrase]) throws {
+        try FileManager.default.createDirectory(at: clipPhrasesFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try SpaceClipPhrase.json(for: phrases).write(to: clipPhrasesFile, options: .atomic)
+    }
+
+    static func clipFile(named name: String) -> URL? {
         for home in homes {
             let folder = home.appendingPathComponent("Library/Application Support/VelloXSpace/clips")
             for fileExtension in ["m4a", "wav", "caf", "aac", "mp3", "aiff"] {

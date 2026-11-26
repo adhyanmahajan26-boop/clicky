@@ -75,6 +75,7 @@
 //    ownAccountStop           → ends it
 //    ownAccountNote {text}    → a standing instruction from the owner for the Space going on, added to each turn
 //    ownAccountClip {words}   → TEST ONLY: takes these words as heard in the Space for the owner's clip (plays it if they match)
+//    ownAccountClipPhrases {phrases?} → the phrases that play the owner's clips (a list like phrases.json; none: just read them)
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
@@ -387,6 +388,25 @@ final class DebugCommandInbox {
             }
             let taken = session.clipForTest(words: words)
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["taken": taken], errorMessage: nil)
+        case "ownAccountClipPhrases":
+            // {phrases?}: the list of phrases that play the owner's clips, saved to phrases.json in the clips folder and
+            // used from the next words heard. Without phrases, the list in effect.
+            if let entries = commandObject["phrases"] {
+                guard let data = try? JSONSerialization.data(withJSONObject: entries), let phrases = SpaceClipPhrase.list(fromJSON: data), !phrases.isEmpty else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "No phrase could be read.")
+                    return
+                }
+                do { try XAccountSettings.saveClipPhrases(phrases) } catch {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.localizedDescription)
+                    return
+                }
+            }
+            let phrases = XAccountSettings.clipPhrases()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: [
+                "file": XAccountSettings.clipPhrasesFile.path,
+                "phrases": phrases.map { ["name": $0.name, "clip": $0.clip, "words": $0.words.map { $0.sorted() },
+                                          "found": XAccountSettings.clipFile(named: $0.clip) != nil] as [String: Any] },
+            ], errorMessage: nil)
         case "ownAccountNote":
             // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
             guard let session = TheoCallController.session, session.isOwnAccount else {

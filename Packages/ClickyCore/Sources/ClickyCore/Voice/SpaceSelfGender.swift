@@ -239,26 +239,61 @@ enum SpaceFeminineSelf {
 /// in order, each heard in any of its spellings, Roman or Devanagari.
 public struct SpaceClipPhrase: Sendable, Equatable {
     public let name: String
+    /// The clip's file name without its extension in the clips folder; the phrase's name when not given.
+    public let clip: String
     public let words: [Set<String>]
     /// Words that may come between the phrase's words ("para ye kaise karta hai"), at most `mostFillers` of them.
     public let fillers: Set<String>
     public let mostFillers: Int
 
-    public init(name: String, words: [Set<String>], fillers: Set<String> = [], mostFillers: Int = 1) {
+    public init(name: String, words: [Set<String>], fillers: Set<String> = [], mostFillers: Int = 1, clip: String? = nil) {
         self.name = name
+        self.clip = (clip?.isEmpty ?? true) ? name : clip!
         self.words = words.map { Set($0.map { SpaceClipTrigger.normalizedWords($0).joined(separator: " ") }) }
         self.fillers = fillers
         self.mostFillers = mostFillers
     }
 
-    /// Addy's clip (26 Nov).
-    public static let paraKaiseyKartaHai = SpaceClipPhrase(
-        name: "para-kaisey-karta-hai",
-        words: [["para", "paraa", "parra", "पैरा", "पारा", "परा"],
-                ["kaisey", "kaise", "kese", "kaisay", "कैसे"],
-                ["karta", "kartha", "krta", "करता"],
-                ["hai", "he", "hain", "है", "हैं"]],
-        fillers: ["ye", "yeh", "bhai"])
+    /// Addy's code word for his clip (26 Nov): "mercury baba", both words together. It replaced "para kaisey karta hai".
+    public static let mercuryBaba = SpaceClipPhrase(
+        name: "mercury-baba",
+        words: [["mercury", "merkury", "markury", "marcury", "mercuri", "merkuri", "मर्करी", "मरकरी", "मरक्यूरी", "मर्क्यूरी"],
+                ["baba", "baaba", "bawa", "बाबा"]],
+        mostFillers: 0)
+
+    /// The phrases from the owner's phrases file (`phrases.json` in the clips folder), a JSON list of
+    /// `{"name", "clip"?, "words": [["spelling", …], …] or "phrase": "code word", "variants"?: {"word": ["spelling", …]},
+    /// "fillers"?: [...], "mostFillers"?: 1}`. Entries that can't be read are left out; nil when the list itself can't be.
+    public static func list(fromJSON data: Data) -> [SpaceClipPhrase]? {
+        guard let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        return entries.compactMap { entry in
+            var words: [Set<String>] = []
+            if let lists = entry["words"] as? [[String]] {
+                words = lists.map { Set($0) }
+            } else if let phrase = entry["phrase"] as? String {
+                let variants = entry["variants"] as? [String: [String]] ?? [:]
+                words = SpaceClipTrigger.normalizedWords(phrase).map { word in
+                    Set([word] + (variants[word] ?? variants.first { SpaceClipTrigger.normalizedWords($0.key) == [word] }?.value ?? []))
+                }
+            }
+            words = words.filter { !$0.isEmpty }
+            guard !words.isEmpty else { return nil }
+            let name = (entry["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? SpaceClipTrigger.normalizedWords((entry["phrase"] as? String) ?? "").joined(separator: "-")
+            guard !name.isEmpty else { return nil }
+            return SpaceClipPhrase(name: name, words: words, fillers: Set(entry["fillers"] as? [String] ?? []),
+                                   mostFillers: entry["mostFillers"] as? Int ?? 1, clip: entry["clip"] as? String)
+        }
+    }
+
+    /// The phrases file's JSON for these phrases, spellings sorted so the file reads the same each time.
+    public static func json(for phrases: [SpaceClipPhrase]) -> Data {
+        let entries: [[String: Any]] = phrases.map { phrase in
+            ["name": phrase.name, "clip": phrase.clip, "words": phrase.words.map { $0.sorted() },
+             "fillers": phrase.fillers.sorted(), "mostFillers": phrase.mostFillers]
+        }
+        return (try? JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])) ?? Data("[]".utf8)
+    }
 }
 
 public enum SpaceClipTrigger {
@@ -285,6 +320,11 @@ public enum SpaceClipTrigger {
         }
         if !current.isEmpty { words.append(current) }
         return words
+    }
+
+    /// The first of `phrases` said in `text`, whole.
+    public static func phraseSaid(in text: String, among phrases: [SpaceClipPhrase]) -> SpaceClipPhrase? {
+        phrases.first { matches(text, phrase: $0) }
     }
 
     /// The whole phrase, its words in order and next to each other, with at most `mostFillers` filler words between.

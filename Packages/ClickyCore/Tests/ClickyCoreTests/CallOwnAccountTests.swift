@@ -698,29 +698,41 @@ struct SpaceSelfGenderTests {
 }
 
 struct SpaceClipTriggerTests {
-    private func matches(_ text: String) -> Bool { SpaceClipTrigger.matches(text, phrase: .paraKaiseyKartaHai) }
+    private func matches(_ text: String) -> Bool { SpaceClipTrigger.matches(text, phrase: .mercuryBaba) }
 
-    @Test func theWholePhraseMatchesInAnySpelling() {
-        #expect(matches("para kaisey karta hai"))
-        #expect(matches("Para kaise karta hai?"))
-        #expect(matches("पैरा कैसे करता है"))
-        #expect(matches("bhai para kaise karta hai"))
-        #expect(matches("arre bhai, para ye kaise karta hai yaar"))
-        #expect(matches("PARAA KESE KRTA HAIN!!"))
-        #expect(matches("पारा कैसे करता हैं।"))
-        #expect(matches("para kaise karta है"))
+    @Test func theCodeWordMatchesInAnySpelling() {
+        #expect(matches("mercury baba"))
+        #expect(matches("Mercury Baba!"))
+        #expect(matches("मर्करी बाबा"))
+        #expect(matches("bhai mercury baba"))
+        #expect(matches("arre MERKURI BAWA aao"))
+        #expect(matches("मरक्यूरी baba"))
     }
 
-    @Test func partsAndLookalikesDoNot() {
-        #expect(!matches("para"))
-        #expect(!matches("kaise karta hai"))
-        #expect(!matches("para kaise karti hai"))
-        #expect(!matches("parantu kaise"))
-        #expect(!matches("kaise ho"))
-        #expect(!matches("para kaise karta"))
-        #expect(!matches("para bhai ye kaise karta hai"))   // two fillers
-        #expect(!matches("para kaise wo karta hai"))       // not a filler
-        #expect(!matches("hai karta kaise para"))
+    @Test func partsAndOtherPhrasesDoNot() {
+        #expect(!matches("mercury"))
+        #expect(!matches("baba"))
+        #expect(!matches("para kaisey karta hai"))
+        #expect(!matches("mercury planet baba"))
+        #expect(!matches("baba mercury"))
+        #expect(!matches("mercury ye baba"))
+    }
+
+    @Test func phrasesComeFromTheOwnersFile() throws {
+        let json = #"[{"phrase": "mercury baba", "variants": {"mercury": ["merkury"]}, "clip": "addy-clip"},"#
+            + #" {"name": "para", "words": [["para", "पैरा"], ["kaise"], ["karta"], ["hai"]], "fillers": ["bhai"]}, {"words": []}]"#
+        let phrases = try #require(SpaceClipPhrase.list(fromJSON: Data(json.utf8)))
+        #expect(phrases.count == 2)
+        #expect(phrases[0].name == "mercury-baba")
+        #expect(phrases[0].clip == "addy-clip")
+        #expect(phrases[0].mostFillers == 1)
+        #expect(SpaceClipTrigger.phraseSaid(in: "hey Merkury baba", among: phrases)?.name == "mercury-baba")
+        #expect(SpaceClipTrigger.phraseSaid(in: "पैरा kaise bhai karta hai", among: phrases)?.name == "para")
+        #expect(SpaceClipTrigger.phraseSaid(in: "mercury", among: phrases) == nil)
+        #expect(SpaceClipPhrase.list(fromJSON: Data("not json".utf8)) == nil)
+        // What's written is read back the same.
+        let again = try #require(SpaceClipPhrase.list(fromJSON: SpaceClipPhrase.json(for: [.mercuryBaba])))
+        #expect(again == [.mercuryBaba])
     }
 
     @Test func itPlaysAtMostOnceIn20Seconds() {
@@ -734,5 +746,14 @@ struct SpaceClipTriggerTests {
         #expect(SpaceClipTrigger.quietBeforePlaying == 0.7)
         #expect(SpaceClipTrigger.longestWaitForQuiet == 3)
         #expect(SpaceClipTrigger.gainDecibels == -3)
+    }
+
+    @Test func aReplyKeepsOneLanguageAndOneScript() {
+        let roman = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: false, fixedLanguage: nil)
+        #expect(roman.contains("all in Roman letters"))
+        #expect(roman.contains("no Devanagari"))
+        #expect(roman.contains("one language and one script for the whole reply"))
+        #expect(CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: true, fixedLanguage: nil).contains("all in Devanagari"))
+        #expect(CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: nil, fixedLanguage: "English").contains("one script"))
     }
 }

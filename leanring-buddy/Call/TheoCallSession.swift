@@ -166,7 +166,8 @@ enum CallPrompt {
         case .hindi: fixedLanguage = "Hindi, in Devanagari"
         case .auto, .hinglish: fixedLanguage = nil
         }
-        let rule = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: language.meansHinglish ? usesSarvamVoice : nil, fixedLanguage: fixedLanguage)
+        // Hinglish in a Space is written in Roman letters, one script per reply (`CallOwnAccount.languageRule`).
+        let rule = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: language.meansHinglish ? false : nil, fixedLanguage: fixedLanguage)
         return CallOwnAccount.systemPrompt(personaHead: theo?.personaHead ?? "You are Vello.", handle: handle, owner: BotPrompts.ownerName,
                                            botName: theo?.name ?? "Vello", languageRule: rule)
     }
@@ -1038,17 +1039,16 @@ final class TheoCallSession: ObservableObject {
     /// is dropped, and once there's 0.7 s of quiet (3 s at most) the clip plays once into the Space, then the bot listens on.
     /// True when the words were the clip's phrase and were taken for it.
     private func listenForTheClip(_ words: String) -> Bool {
-        let phrase = SpaceClipPhrase.paraKaiseyKartaHai
         recentFinalsForClip.append(words)
         if recentFinalsForClip.count > 2 { recentFinalsForClip.removeFirst(recentFinalsForClip.count - 2) }
-        guard SpaceClipTrigger.matches(recentFinalsForClip.joined(separator: " "), phrase: phrase) else { return false }
+        guard let phrase = SpaceClipTrigger.phraseSaid(in: recentFinalsForClip.joined(separator: " "), among: XAccountSettings.clipPhrases()) else { return false }
         recentFinalsForClip = []
         let now = Date()
         guard clipCooldown.allows(at: now), clipTask == nil else {
             callLog("📞 Space: heard \"\(phrase.name)\" again within \(Int(SpaceClipTrigger.cooldownSeconds)) s, not playing the clip")
             return false
         }
-        guard let file = XAccountSettings.clipFile(named: phrase.name) else {
+        guard let file = XAccountSettings.clipFile(named: phrase.clip) else {
             callLog("📞 Space: heard \"\(phrase.name)\" but its clip file is missing")
             clipLog.append(["at": now.timeIntervalSince1970, "words": words, "played": false, "why": "clip missing"])
             return false
@@ -2050,9 +2050,12 @@ final class TheoCallSession: ObservableObject {
         report["speakers"] = speakerWatcher?.report() ?? [:]
         report["selfGender"] = spaceSelfGender.rawValue
         report["spokenLately"] = spokenLately
-        let clip = XAccountSettings.clipFile(named: SpaceClipPhrase.paraKaiseyKartaHai.name)
-        report["clip"] = ["phrase": SpaceClipPhrase.paraKaiseyKartaHai.name, "file": clip?.path ?? "", "found": clip != nil,
-                          "heard": clipLog] as [String: Any]
+        let phrases = XAccountSettings.clipPhrases()
+        report["clip"] = ["phrases": phrases.map { phrase -> [String: Any] in
+                              let file = XAccountSettings.clipFile(named: phrase.clip)
+                              return ["name": phrase.name, "words": phrase.words.map { $0.sorted() }, "file": file?.path ?? "", "found": file != nil]
+                          },
+                          "phrasesFile": XAccountSettings.clipPhrasesFile.path, "heard": clipLog] as [String: Any]
         return report
     }
 

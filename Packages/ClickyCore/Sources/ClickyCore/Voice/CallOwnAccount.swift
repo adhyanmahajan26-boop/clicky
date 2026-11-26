@@ -87,11 +87,14 @@ public enum CallOwnAccount {
 
     /// Which language to answer in, for a Space: the person who spoke rather than the owner.
     public static func languageRule(followsSpeaker: Bool, hinglishInDevanagari: Bool?, fixedLanguage: String?) -> String {
-        if let fixedLanguage { return "Answer in \(fixedLanguage)." }
-        guard followsSpeaker, let hinglishInDevanagari else { return "Answer in the language the person who spoke to you just used." }
-        return hinglishInDevanagari
-            ? "Answer in the language the person who spoke to you just used: English in English, Hindi in Hindi written in Devanagari, Hinglish as Hinglish with the Hindi in Devanagari and the English in Latin letters."
-            : "Answer in the language the person who spoke to you just used: English in English, Hindi or Hinglish in Roman letters, the way people text it."
+        // One language and one script for a whole reply: replies that went from Roman Hinglish to Devanagari halfway, or
+        // mixed the two in a sentence, sounded like the voice switching language (a public Space, 26 Nov).
+        let oneLanguage = " Keep one language and one script for the whole reply: never switch language or script in the middle of it."
+        if let fixedLanguage { return "Answer in \(fixedLanguage)." + oneLanguage }
+        guard followsSpeaker, let hinglishInDevanagari else { return "Answer in the language the person who spoke to you just used." + oneLanguage }
+        return (hinglishInDevanagari
+            ? "Answer in the language the person who spoke to you just used: English in English, Hindi or Hinglish in Hindi written all in Devanagari, English words included."
+            : "Answer in the language the person who spoke to you just used: English in English, Hindi or Hinglish all in Roman letters the way people text it, with English words in English and no Devanagari, even when the lines you're given are in Devanagari.") + oneLanguage
     }
 
     /// The turn for the brain: what was said in the Space since it last spoke, by name where one was read.
