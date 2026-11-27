@@ -17,7 +17,7 @@ public enum HinglishVoiceText {
         var table: [String: String] = [:]
         let entries: [(String, String)] = [
             // I, you, they
-            ("main", "मैं"), ("mai", "मैं"), ("mein", "में"), ("mujhe", "मुझे"), ("mujhko", "मुझको"), ("mera", "मेरा"), ("meri", "मेरी"), ("mere", "मेरे"),
+            ("mein", "में"), ("mujhe", "मुझे"), ("mujhko", "मुझको"), ("mera", "मेरा"), ("meri", "मेरी"), ("mere", "मेरे"),
             ("maine", "मैंने"), ("hum", "हम"), ("humne", "हमने"), ("hamara", "हमारा"), ("hamari", "हमारी"), ("hamare", "हमारे"), ("humein", "हमें"), ("hume", "हमें"),
             ("tum", "तुम"), ("tumhe", "तुम्हें"), ("tumhein", "तुम्हें"), ("tumhara", "तुम्हारा"), ("tumhari", "तुम्हारी"), ("tumhare", "तुम्हारे"), ("tumne", "तुमने"),
             ("aap", "आप"), ("aapka", "आपका"), ("aapki", "आपकी"), ("aapke", "आपके"), ("aapko", "आपको"), ("aapne", "आपने"), ("tu", "तू"), ("tera", "तेरा"), ("teri", "तेरी"),
@@ -98,6 +98,10 @@ public enum HinglishVoiceText {
     /// The sentence for the voice: its Hindi words in Devanagari, English words, names and numbers as written. A sentence
     /// in English, or already in Devanagari, comes back as it was.
     public static func spoken(_ sentence: String) -> String {
+        withMainInRoman(spokenInDevanagari(sentence))
+    }
+
+    static func spokenInDevanagari(_ sentence: String) -> String {
         var pieces: [(range: Range<String.Index>, lower: String)] = []
         var start: String.Index?
         var index = sentence.startIndex
@@ -135,6 +139,12 @@ public enum HinglishVoiceText {
         }
         result += sentence[cursor...]
         return result
+    }
+
+    /// "मैं" as the voice says it best: Sarvam's male voice made it "mey" in a live Space (27 Nov), and Roman "main" was
+    /// clearer, so the voice gets "main" for it, written either way.
+    static func withMainInRoman(_ text: String) -> String {
+        text.replacingOccurrences(of: #"(?<![\p{L}\p{M}])(मैं|मै)(?![\p{L}\p{M}])"#, with: "main", options: .regularExpression)
     }
 
     static let littleWords: Set<String> = ["main", "haan", "nahi", "nahin", "aur", "kya", "kaise", "theek", "accha", "achha", "chalo", "arre", "bahut", "abhi", "sach"]

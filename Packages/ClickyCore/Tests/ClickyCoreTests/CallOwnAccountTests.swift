@@ -772,10 +772,10 @@ struct SpaceClipTriggerTests {
 
 struct HinglishVoiceTextTests {
     @Test func hindiWordsGoToTheVoiceInDevanagari() {
-        #expect(HinglishVoiceText.spoken("Main yahin hun!") == "मैं यहीं हूँ!")
-        #expect(HinglishVoiceText.spoken("Main yahin hun, sun rahi hun!") == "मैं यहीं हूँ, सुन रही हूँ!")
-        #expect(HinglishVoiceText.spoken("Main bhi so gayi thi, sun!") == "मैं भी सो गई थी, sun!")
-        #expect(HinglishVoiceText.spoken("Nahin yaar, main aisa nahin karungi.") == "नहीं यार, मैं ऐसा नहीं करूँगी.")
+        #expect(HinglishVoiceText.spoken("Main yahin hun!") == "Main यहीं हूँ!")
+        #expect(HinglishVoiceText.spoken("Main yahin hun, sun rahi hun!") == "Main यहीं हूँ, सुन रही हूँ!")
+        #expect(HinglishVoiceText.spoken("Main bhi so gayi thi, sun!") == "Main भी सो गई थी, sun!")
+        #expect(HinglishVoiceText.spoken("Nahin yaar, main aisa nahin karungi.") == "नहीं यार, main ऐसा नहीं करूँगी.")
         #expect(HinglishVoiceText.spoken("Haan bilkul!") == "हाँ बिल्कुल!")
         // English words, names and numbers stay as written.
         #expect(HinglishVoiceText.spoken("Haan Ambar, equality sabke liye hai, 2027 mein bhi.") == "हाँ Ambar, equality सबके लिए है, 2027 में भी.")
@@ -785,7 +785,7 @@ struct HinglishVoiceTextTests {
     @Test func englishAndDevanagariStayAsTheyAre() {
         #expect(HinglishVoiceText.spoken("The main point is equal pay for equal work.") == "The main point is equal pay for equal work.")
         #expect(HinglishVoiceText.spoken("Hi everyone, I'm an AI.") == "Hi everyone, I'm an AI.")
-        #expect(HinglishVoiceText.spoken("मैं यहीं हूँ") == "मैं यहीं हूँ")
+        #expect(HinglishVoiceText.spoken("मैं यहीं हूँ") == "main यहीं हूँ")
         #expect(HinglishVoiceText.spoken("") == "")
     }
 }
