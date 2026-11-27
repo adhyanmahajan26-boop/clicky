@@ -868,3 +868,28 @@ struct SpaceSentencePiecesTests {
         #expect(gatherer.add("!") == ["Haan bhai!"])
     }
 }
+
+struct SpaceLocalBrainTests {
+    @Test func theIdeologyFileGivesOnlyWhatsWritten() {
+        #expect(SpaceIdeology.cleaned(SpaceIdeology.template).isEmpty)
+        #expect(SpaceIdeology.note(SpaceIdeology.template, owner: "Addy") == nil)
+        let written = SpaceIdeology.template.replacingOccurrences(of: "## Catchphrases\n-", with: "## Catchphrases\n- Scene kya hai bhai")
+        let note = SpaceIdeology.note(written, owner: "Addy") ?? ""
+        #expect(note.contains("Catchphrases\n- Scene kya hai bhai"))
+        #expect(!note.contains("Worldview"))
+        #expect(!note.contains("Edit freely"))
+    }
+
+    @Test func onlyWhatGetsAnAccountBannedIsHeldBack() {
+        #expect(SpaceSafetyFilter.reason("Main usko jaan se maar dunga") == .threat)
+        #expect(SpaceSafetyFilter.reason("Uska number hai 98765 43210, call karo") == .privateDetails)
+        #expect(SpaceSafetyFilter.reason("mail karo usko at someone@example.com") == .privateDetails)
+        #expect(SpaceSafetyFilter.reason("Tu toh bilkul retard hai") == .slur)
+        #expect(SpaceSafetyFilter.reason("Ye kaun sa porn chal raha hai") == .sexual)
+        // Savage, political and religious takes are fine.
+        #expect(SpaceSafetyFilter.reason("Modi avatar nahi, neta hain, aur Vishnu ji ko PR team ki zaroorat nahi.") == nil)
+        #expect(SpaceSafetyFilter.reason("Kejriwal ki party ka budget dekho, comedy show hai.") == nil)
+        #expect(SpaceSafetyFilter.reason("Chhod do yaar, us match mein last ball pe chakka laga, ekdum bomb tha!") == nil)
+        #expect(!SpaceSafetyFilter.deflection(turn: 1).isEmpty)
+    }
+}

@@ -76,6 +76,8 @@
 //    ownAccountNote {text}    → a standing instruction from the owner for the Space going on, added to each turn
 //    ownAccountClip {words}   → TEST ONLY: takes these words as heard in the Space for the owner's clip (plays it if they match)
 //    ownAccountClipPhrases {phrases?} → the phrases that play the owner's clips (a list like phrases.json; none: just read them)
+//    ownAccountBrain {brain?, model?} → the Space's brain: "claude" or "local" (LM Studio model id), switched from the next turn
+//    ownAccountIdeology {text?}  → the bot's ideology file (ideology.md): writes it, or just reads it
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
@@ -407,6 +409,31 @@ final class DebugCommandInbox {
                 "phrases": phrases.map { ["name": $0.name, "clip": $0.clip, "words": $0.words.map { $0.sorted() },
                                           "found": XAccountSettings.clipFile(named: $0.clip) != nil] as [String: Any] },
             ], errorMessage: nil)
+        case "ownAccountBrain":
+            // {brain?, model?}: "claude" or "local", and the local model's LM Studio id; a Space going on switches at once.
+            if let choice = commandObject["brain"] as? String {
+                guard ["claude", "local"].contains(choice) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "brain is \"claude\" or \"local\".")
+                    return
+                }
+                UserDefaults.standard.set(choice, forKey: XAccountSettings.brainKey)
+            }
+            if let model = commandObject["model"] as? String { UserDefaults.standard.set(model, forKey: XAccountSettings.localModelKey) }
+            if commandObject["brain"] != nil || commandObject["model"] != nil { TheoCallController.session?.switchSpaceBrain() }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: TheoCallController.session?.spaceBrainReport ?? ["brain": XAccountSettings.brain, "localModel": XAccountSettings.localModel],
+                  errorMessage: nil)
+        case "ownAccountIdeology":
+            // {text?}: the bot's ideology file, written (read on the bot's next turn), or just read.
+            if let text = commandObject["text"] as? String {
+                do { try XAccountSettings.saveIdeology(text) } catch {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.localizedDescription)
+                    return
+                }
+            }
+            let text = XAccountSettings.ideology()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["file": XAccountSettings.ideologyFile.path, "text": text, "forTheBot": SpaceIdeology.cleaned(text)], errorMessage: nil)
         case "ownAccountNote":
             // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
             guard let session = TheoCallController.session, session.isOwnAccount else {

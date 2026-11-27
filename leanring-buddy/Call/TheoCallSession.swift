@@ -303,6 +303,11 @@ final class TheoCallSession: ObservableObject {
     private var speakerWatcher: SpaceSpeakerWatcher?
     /// When the last words were given a speaker: the next words' name is the one seen most since then.
     private var wordsLastNamedAt: Date?
+    /// The Space's prompt and its Claude brain, kept so the brain can be switched to the local model and back mid-Space
+    /// (`switchSpaceBrain`).
+    private var spacePrompt = ""
+    private var spaceClaudeBrain: ConversationBrain?
+
     /// A standing instruction for this Space from the owner (debug inbox `ownAccountNote`), added to every turn.
     var spaceNote: String?
     /// Which forms the bot uses for itself in Hindi, from its voice or the owner's setting (ClickyCore `SpaceSelfGender`).
@@ -542,9 +547,12 @@ final class TheoCallSession: ObservableObject {
                                                             canSearchTheWeb: searchesTheWeb) }
             ?? CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
                                  carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
-        let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
-                                            promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low",
-                                            tools: searchesTheWeb ? ["WebSearch"] : [])
+        let claudeBrain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
+                                                  promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low",
+                                                  tools: searchesTheWeb ? ["WebSearch"] : [])
+        spacePrompt = prompt
+        spaceClaudeBrain = claudeBrain
+        let brain = isOwnAccount ? makeSpaceBrain() : claudeBrain
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {
@@ -1110,6 +1118,37 @@ final class TheoCallSession: ObservableObject {
         return true
     }
 
+    /// A Space's brain: Claude Code's, or the local model on LM Studio with Claude standing by
+    /// (`XAccountSettings.brain`, `FallbackConversation`).
+    private func makeSpaceBrain() -> ConversationBrain {
+        let claude = spaceClaudeBrain ?? ConversationBrains.make(model: ClickyModels.sonnet, systemPrompt: spacePrompt,
+                                                                 promptFileName: CallPrompt.otherBotFileName, effort: "low")
+        guard XAccountSettings.brain == "local" else { return claude }
+        let local = OneTurnConversation(model: BrainModel(provider: .api, modelIdentifier: "lmstudio/" + XAccountSettings.localModel),
+                                        systemPrompt: spacePrompt, keepsHistory: true)
+        callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel), Claude standing by")
+        return FallbackConversation(primary: local, fallback: claude)
+    }
+
+    /// The owner switched the Space's brain (`ownAccountBrain`): the new one from the next turn, the Space and its
+    /// listening untouched.
+    func switchSpaceBrain() {
+        guard isOwnAccount, state != .ended else { return }
+        if replyInProgress { brain?.interrupt(); replyInProgress = false }
+        if let fallback = brain as? FallbackConversation { fallback.stopLocalOnly() } else if brain !== spaceClaudeBrain { brain?.stop() }
+        let next = makeSpaceBrain()
+        next.onEnded = { [weak self] message in self?.problem = message }
+        try? next.start()
+        brain = next
+        callLog("📞 Space: brain switched to \(XAccountSettings.brain)")
+    }
+
+    var spaceBrainReport: [String: Any] {
+        ["brain": XAccountSettings.brain, "localModel": XAccountSettings.localModel,
+         "answeredBy": (brain as? FallbackConversation)?.answeredBy ?? [], "ideologyFile": XAccountSettings.ideologyFile.path,
+         "ideologyChars": SpaceIdeology.cleaned(XAccountSettings.ideology()).count]
+    }
+
     /// TEST ONLY (`ownAccountClip`): plays the clip as if its phrase was just heard, through the same path.
     func clipForTest(words: String) -> Bool { isOwnAccount && listenForTheClip(words) }
 
@@ -1370,8 +1409,11 @@ final class TheoCallSession: ObservableObject {
                 lastReplyWasNotHeard = false
             }
             turnHadTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
+            if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { message += "\n" + ideology }
             // A search asked for: the bot says its own "Ek sec, check karti hun" first, so no second filler of the app's.
             let asksForASearch = XAccountSettings.webSearch && CallOwnAccount.asksForASearch(words)
+            // Only Claude's side can search: a search turn goes there when the local model is thinking.
+            if asksForASearch, let fallback = brain as? FallbackConversation { fallback.nextTurnToFallback = true }
             ask(message,
                 acknowledgesIfSlow: isAddressed && !asksForASearch)
             return
@@ -1590,6 +1632,12 @@ final class TheoCallSession: ObservableObject {
         var sentence = sentence
         if let sources = sentence.range(of: #"(?i)\bsources?\s*:"#, options: .regularExpression) {
             sentence = String(sentence[..<sources.lowerBound])
+            speaksNoMoreThisTurn = true
+        }
+        // On the local model, the few things that get an X account banned aren't said (ClickyCore `SpaceSafetyFilter`).
+        if brain is FallbackConversation, let reason = SpaceSafetyFilter.reason(sentence) {
+            callLog("📞 Space: held back a sentence (\(reason.rawValue))")
+            sentence = SpaceSafetyFilter.deflection(turn: turnNumber)
             speaksNoMoreThisTurn = true
         }
         sentence = sentence.replacingOccurrences(of: #"\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
@@ -2089,6 +2137,7 @@ final class TheoCallSession: ObservableObject {
         report["bot"] = bot?.id ?? ""
         report["speakers"] = speakerWatcher?.report() ?? [:]
         report["selfGender"] = spaceSelfGender.rawValue
+        report["brain"] = spaceBrainReport
         report["spokenLately"] = spokenLately
         let phrases = XAccountSettings.clipPhrases()
         report["clip"] = ["phrases": phrases.map { phrase -> [String: Any] in

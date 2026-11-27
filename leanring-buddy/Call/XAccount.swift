@@ -121,6 +121,32 @@ enum XAccountSettings {
     static let webSearchKey = "v5.xAccount.webSearch"
     static var webSearch: Bool { UserDefaults.standard.bool(forKey: webSearchKey) }
 
+    /// The Space's brain: "claude" (Claude Code, the default) or "local" (a model on this Mac's LM Studio server, with Claude
+    /// standing by), and the local model's LM Studio identifier.
+    static let brainKey = "v5.xAccount.brain"
+    static let localModelKey = "v5.xAccount.localModel"
+    static var brain: String { UserDefaults.standard.string(forKey: brainKey) == "local" ? "local" : "claude" }
+    static var localModel: String {
+        let saved = (UserDefaults.standard.string(forKey: localModelKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return saved.isEmpty ? "xspace-qwen27b-nothink" : saved
+    }
+
+    /// The owner's ideology for the bot (ClickyCore `SpaceIdeology`), in the Mac user's own home, read again when it changes.
+    static var ideologyFile: URL { homes[0].appendingPathComponent("Library/Application Support/VelloXSpace/ideology.md") }
+    nonisolated(unsafe) private static var cachedIdeology: (modified: Date?, text: String)?
+    static func ideology() -> String {
+        if !FileManager.default.fileExists(atPath: ideologyFile.path) { try? saveIdeology(SpaceIdeology.template) }
+        let modified = (try? FileManager.default.attributesOfItem(atPath: ideologyFile.path))?[.modificationDate] as? Date
+        if let cachedIdeology, cachedIdeology.modified == modified { return cachedIdeology.text }
+        let text = (try? String(contentsOf: ideologyFile, encoding: .utf8)) ?? ""
+        cachedIdeology = (modified, text)
+        return text
+    }
+    static func saveIdeology(_ text: String) throws {
+        try FileManager.default.createDirectory(at: ideologyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: ideologyFile, options: .atomic)
+    }
+
     /// "@vello_ai", or empty.
     static var handle: String { XHandle.normalized(UserDefaults.standard.string(forKey: handleKey) ?? "") }
 
