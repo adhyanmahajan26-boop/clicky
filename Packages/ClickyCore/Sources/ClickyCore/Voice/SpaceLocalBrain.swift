@@ -6,6 +6,7 @@
 //  bot's X account from being banned, applied quietly to what the local model says.
 //
 
+import CryptoKit
 import Foundation
 
 public enum SpaceIdeology {
@@ -50,6 +51,11 @@ public enum SpaceIdeology {
         close()
         cleaned = sections.joined(separator: "\n")
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A hash of the file, for telling it changed without showing it (the file is the owner's and private).
+    public static func hash(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The line for the brain, or nil when the file says nothing.

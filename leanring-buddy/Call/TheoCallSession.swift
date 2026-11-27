@@ -1136,7 +1136,10 @@ final class TheoCallSession: ObservableObject {
     /// LM Studio reuses its cache for them and each turn only adds what was said (first word in about 0.5 s, not 2.5 to 6).
     /// A changed note or ideology starts a new local conversation with the new prompt.
     private var localSpacePrompt: String {
-        var parts = [spacePrompt]
+        // The owner's own rules for his bot: the base prompt's caution lines are left out for the local model.
+        let base = spacePrompt
+            .replacingOccurrences(of: #"Keep to X's rules:[^\n]*"#, with: "", options: .regularExpression)
+        var parts = [base]
         if let spaceNote, !spaceNote.isEmpty { parts.append(CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName)) }
         if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { parts.append(ideology) }
         parts.append("When you answer, give a real take in one to three short sentences, with a reason or a roast, never just one word.")
@@ -1663,8 +1666,9 @@ final class TheoCallSession: ObservableObject {
             sentence = String(sentence[..<sources.lowerBound])
             speaksNoMoreThisTurn = true
         }
-        // On the local model, the few things that get an X account banned aren't said (ClickyCore `SpaceSafetyFilter`).
-        if brain is FallbackConversation, let reason = SpaceSafetyFilter.reason(sentence) {
+        // On the local model, only when the owner turns it on: the few things that get an X account banned aren't said
+        // (ClickyCore `SpaceSafetyFilter`). Off by default: the owner wants the bot to speak naturally.
+        if brain is FallbackConversation, XAccountSettings.contentFilter, let reason = SpaceSafetyFilter.reason(sentence) {
             callLog("📞 Space: held back a sentence (\(reason.rawValue))")
             sentence = SpaceSafetyFilter.deflection(turn: turnNumber)
             speaksNoMoreThisTurn = true

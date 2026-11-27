@@ -131,6 +131,10 @@ enum XAccountSettings {
         return saved.isEmpty ? "xspace-qwen27b-nothink" : saved
     }
 
+    /// The local model's content filter (ClickyCore `SpaceSafetyFilter`): off unless the owner turns it on.
+    static let contentFilterKey = "v5.xAccount.contentFilter"
+    static var contentFilter: Bool { UserDefaults.standard.bool(forKey: contentFilterKey) }
+
     /// The owner's ideology for the bot (ClickyCore `SpaceIdeology`), in the Mac user's own home, read again when it changes.
     static var ideologyFile: URL { homes[0].appendingPathComponent("Library/Application Support/VelloXSpace/ideology.md") }
     nonisolated(unsafe) private static var cachedIdeology: (modified: Date?, text: String)?

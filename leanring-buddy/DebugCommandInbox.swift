@@ -77,7 +77,7 @@
 //    ownAccountClip {words}   → TEST ONLY: takes these words as heard in the Space for the owner's clip (plays it if they match)
 //    ownAccountClipPhrases {phrases?} → the phrases that play the owner's clips (a list like phrases.json; none: just read them)
 //    ownAccountBrain {brain?, model?} → the Space's brain: "claude" or "local" (LM Studio model id), switched from the next turn
-//    ownAccountIdeology {text?}  → the bot's ideology file (ideology.md): writes it, or just reads it
+//    ownAccountIdeology {text?}  → writes the bot's ideology file (ideology.md); replies with its size and hash only, never its words
 //    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
 //                               and the speaker watcher's frames
 //    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
@@ -431,9 +431,11 @@ final class DebugCommandInbox {
                     return
                 }
             }
+            // The owner's ideology is private: only its size and a hash ever leave the app, never its words.
             let text = XAccountSettings.ideology()
             reply(commandIdentifier: commandIdentifier, isSuccess: true,
-                  result: ["file": XAccountSettings.ideologyFile.path, "text": text, "forTheBot": SpaceIdeology.cleaned(text)], errorMessage: nil)
+                  result: ["file": XAccountSettings.ideologyFile.path, "bytes": text.utf8.count, "sha256": SpaceIdeology.hash(text),
+                           "charsForTheBot": SpaceIdeology.cleaned(text).count], errorMessage: nil)
         case "ownAccountNote":
             // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
             guard let session = TheoCallController.session, session.isOwnAccount else {
