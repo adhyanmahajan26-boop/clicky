@@ -91,8 +91,15 @@ public enum CallOwnAccount {
 
     /// When the bot may search the web (the owner turned it on): only when asked, said first, one search, a short answer.
     public static let webSearchRule = """
-    You can search the web, but only when someone asks you to search, Google, check or look something up, or asks for the latest news or a fact you'd need to check. Then first write a short line of three to five words on its own (like "Ek sec, check karti hun."), search once, and answer in one or two short sentences with what you found, saying it's from a quick search. Don't list sources or links: they're read aloud. Never search when nobody asked, and never search for anything about a person in the Space.
+    You can search the web, but only when someone asks you to search, Google, check or look something up, or asks for the latest news or a fact you'd need to check. Then first write a short line of three to five words on its own (like "Ek sec, check karta hun." or "Ek sec, check karti hun.", in your own grammatical gender), search once, and answer in one or two short sentences with what you found, saying it's from a quick search. Don't list sources or links: they're read aloud. Never search when nobody asked, and never search for anything about a person in the Space.
     """
+
+    /// Whether words ask the bot to search or check something ("Google karke batao", "latest news", "सर्च करो").
+    public static func asksForASearch(_ words: String) -> Bool {
+        let lower = " " + words.lowercased() + " "
+        return ["search", "google", "check kar", "check karo", "look up", "lookup", "latest", "news", "pata karo", "pata kar", "dhundh", "dhoondh",
+                "सर्च", "गूगल", "चेक कर", "न्यूज़", "न्यूज", "ताज़ा", "पता करो", "ढूंढ", "ढूँढ"].contains { lower.contains($0) }
+    }
 
     /// Which language to answer in, for a Space: the person who spoke rather than the owner.
     public static func languageRule(followsSpeaker: Bool, hinglishInDevanagari: Bool?, fixedLanguage: String?) -> String {

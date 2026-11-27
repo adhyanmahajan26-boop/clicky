@@ -615,7 +615,11 @@ final class TheoCallSession: ObservableObject {
             let ownSpeaker = CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .sarvam)
             // In a Space: one fixed, even voice at a neutral pace, whatever Pointer Assistant's voice is set to.
             let fallback = isOwnAccount ? CallOwnAccount.defaultSarvamSpeaker : SarvamVoiceConfig.speaker
-            let speaker = SarvamClient.speaker(ownSpeaker ?? fallback, in: voiceLanguage.setting)
+            // In a Space any of Sarvam's v4 voices is taken as picked (a Hindi one too: the voice gets Hindi in Devanagari);
+            // elsewhere the same person's voice in the call's language.
+            let picked = ownSpeaker ?? fallback
+            let speaker = isOwnAccount && SarvamClient.v4VoiceGroups.contains(where: { $0.speakers.contains(picked) })
+                ? picked : SarvamClient.speaker(picked, in: voiceLanguage.setting)
             let pace = isOwnAccount ? CallOwnAccount.sarvamPace : SarvamVoiceConfig.pace
             let sarvam = SarvamCallVoice(audio: audio, apiKey: key, speaker: speaker, languageCode: voiceLanguage.code, pace: pace)
             use(voice: sarvam)
@@ -1366,8 +1370,10 @@ final class TheoCallSession: ObservableObject {
                 lastReplyWasNotHeard = false
             }
             turnHadTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
+            // A search asked for: the bot says its own "Ek sec, check karti hun" first, so no second filler of the app's.
+            let asksForASearch = XAccountSettings.webSearch && CallOwnAccount.asksForASearch(words)
             ask(message,
-                acknowledgesIfSlow: isAddressed)
+                acknowledgesIfSlow: isAddressed && !asksForASearch)
             return
         }
         // A group: what was heard, by who it sounded like, and Vello answers only when it fits ([PASS] otherwise).

@@ -59,8 +59,11 @@ public enum SpaceSelfGender: String, Sendable, CaseIterable {
     /// first person ("… hun", "-unga") are changed anywhere; past forms ("gaya", "tha") only in a clause whose subject is
     /// "main"/"mai"/"मैं"/"I", and never after "main ne" or once someone else becomes the subject.
     public func applied(to text: String) -> String {
-        guard self == .feminine else { return text }
-        return SpaceFeminineSelf.feminized(text)
+        switch self {
+        case .feminine: return SpaceFeminineSelf.feminized(text)
+        case .masculine: return SpaceFeminineSelf.feminized(text, toFeminine: false)
+        case .unset: return text
+        }
     }
 }
 
@@ -106,7 +109,8 @@ enum SpaceFeminineSelf {
     ]
     static let questionWords: Set<String> = ["kya", "kuch", "sab", "jo", "aisa", "kaisa", "jaisa", "kya?", "क्या", "कुछ", "सब"]
 
-    static func feminized(_ text: String) -> String {
+    /// `toFeminine` false: the other way, a boy's own slips into girls' forms made masculine (\"main karti hun\" → \"main karta hun\").
+    static func feminized(_ text: String, toFeminine: Bool = true) -> String {
         var tokens = tokenize(text)
         guard !tokens.isEmpty else { return text }
         let clauseStarts = clauseStartFlags(text, tokens)
@@ -116,9 +120,9 @@ enum SpaceFeminineSelf {
             let lower = tokens[index].lower
             let next = index + 1 < tokens.count && !clauseStarts[index + 1] ? tokens[index + 1].lower : nil
             if let next, hun.contains(next) {
-                if let feminine = feminineBeforeAux(lower) { tokens[index].replacement = matchCase(feminine, tokens[index].word) }
+                if let other = beforeAux(lower, toFeminine: toFeminine) { tokens[index].replacement = matchCase(other, tokens[index].word) }
             }
-            if let future = feminineFuture(lower) { tokens[index].replacement = matchCase(future, tokens[index].word) }
+            if let future = future(lower, toFeminine: toFeminine) { tokens[index].replacement = matchCase(future, tokens[index].word) }
         }
 
         // 2. In a clause about "main": "tha" → "thi", "gaya" → "gayi", "karta tha" → "karti thi".
@@ -139,17 +143,20 @@ enum SpaceFeminineSelf {
             guard subjectIsMe else { continue }
             let next = index + 1 < tokens.count && !clauseStarts[index + 1] ? tokens[index + 1].lower : nil
             let previous = index > 0 ? tokens[index - 1].lower : ""
-            let nextIsAux = next.map { tha.contains($0) || hun.contains($0) } ?? false
+            let nextIsAux = next.map { tha.contains($0) || thi.contains($0) || hun.contains($0) } ?? false
             let clauseEnds = next == nil
-            if tha.contains(lower) {
-                tokens[index].replacement = lower == "था" ? "थी" : matchCase("thi", tokens[index].word)
-            } else if nextIsAux, let feminine = feminineBeforeAux(lower) {
-                tokens[index].replacement = matchCase(feminine, tokens[index].word)
-            } else if let feminine = romanForms[lower], !questionWords.contains(previous),
-                      !romanPastNeedsAux.contains(lower) || nextIsAux || clauseEnds {
-                tokens[index].replacement = matchCase(feminine, tokens[index].word)
-            } else if let feminine = devanagariForms[lower], !questionWords.contains(previous) {
-                tokens[index].replacement = feminine
+            let romanTable = toFeminine ? romanForms : romanMasculine
+            let devanagariTable = toFeminine ? devanagariForms : devanagariMasculine
+            if toFeminine ? tha.contains(lower) : thi.contains(lower) {
+                let devanagari = lower == "था" || lower == "थी"
+                tokens[index].replacement = devanagari ? (toFeminine ? "थी" : "था") : matchCase(toFeminine ? "thi" : "tha", tokens[index].word)
+            } else if nextIsAux, let other = beforeAux(lower, toFeminine: toFeminine) {
+                tokens[index].replacement = matchCase(other, tokens[index].word)
+            } else if let other = romanTable[lower], !questionWords.contains(previous),
+                      !(toFeminine ? romanPastNeedsAux : romanPastNeedsAuxFeminine).contains(lower) || nextIsAux || clauseEnds {
+                tokens[index].replacement = matchCase(other, tokens[index].word)
+            } else if let other = devanagariTable[lower], !questionWords.contains(previous) {
+                tokens[index].replacement = other
             }
         }
 
@@ -162,6 +169,50 @@ enum SpaceFeminineSelf {
         }
         result += text[cursor...]
         return result
+    }
+
+    static let thi: Set<String> = ["thi", "thii", "थी"]
+    /// The masculine of the forms above, one each ("rahi" → "raha", not "reha").
+    static let romanMasculine: [String: String] = {
+        var table: [String: String] = [:]
+        let preferred = ["raha", "rha", "chuka", "gaya", "gya", "aaya", "hua", "baitha", "betha", "khada", "khara", "thaka", "pada", "soya", "roya",
+                         "akela", "chhota", "chota", "bada", "accha", "achha", "acha", "bhookha", "bhukha", "pyaasa", "laga", "mila", "nikla",
+                         "pahuncha", "pohcha", "dekha", "socha", "samjha", "bola", "gaaya", "sunaa"]
+        for masculine in preferred { if let feminine = romanForms[masculine], feminine != masculine, table[feminine] == nil { table[feminine] = masculine } }
+        return table
+    }()
+    static let devanagariMasculine: [String: String] = Dictionary(devanagariForms.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+    static let romanPastNeedsAuxFeminine: Set<String> = Set(romanPastNeedsAux.compactMap { romanForms[$0] })
+    /// Words that end in "ti" but aren't verbs ("main tumhari dost hun" is fine; "pati", "shanti", "masti" aren't verbs).
+    static let notVerbsEndingInTi: Set<String> = ["pati", "masti", "dosti", "shanti", "bhakti", "shakti", "kirti", "jyoti", "aarti", "arti", "murti",
+                                                  "niti", "gati", "sati", "jati", "ti", "beti", "naughty", "party", "aunti"]
+
+    static func beforeAux(_ lower: String, toFeminine: Bool) -> String? {
+        if toFeminine { return feminineBeforeAux(lower) }
+        if let roman = romanMasculine[lower] { return roman }
+        if let devanagari = devanagariMasculine[lower] { return devanagari }
+        if lower.count >= 3, lower.hasSuffix("ti"), !notVerbsEndingInTi.contains(lower), lower.allSatisfy({ $0.isASCII }) {
+            return String(lower.dropLast()) + "a"
+        }
+        if lower.hasSuffix("ती"), lower.count >= 2 { return String(lower.dropLast()) + "ता" }
+        return nil
+    }
+
+    static func future(_ lower: String, toFeminine: Bool) -> String? {
+        if toFeminine { return feminineFuture(lower) }
+        for suffix in ["ungi", "oongi"] where lower.hasSuffix(suffix) && lower.count > suffix.count {
+            return String(lower.dropLast()) + "a"
+        }
+        let scalars = Array(lower.unicodeScalars)
+        for suffix in ["ूँगी", "ूंगी", "ऊँगी", "ऊंगी"] {
+            let ending = Array(suffix.unicodeScalars)
+            if scalars.count > ending.count, Array(scalars.suffix(ending.count)) == ending {
+                var masculine = String.UnicodeScalarView(scalars.dropLast())
+                masculine.append("ा")
+                return String(masculine)
+            }
+        }
+        return nil
     }
 
     /// The feminine of a word just before "hun"/"tha": "karta" → "karti", "raha" → "rahi", "करता" → "करती".

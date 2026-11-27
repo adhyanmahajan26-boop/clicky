@@ -705,6 +705,7 @@ struct SpaceSelfGenderTests {
         #expect(feminine("I think that's right.") == "I think that's right.")
         #expect(feminine("Main sochti hun, tum kya karte ho?") == "Main sochti hun, tum kya karte ho?")
         #expect(SpaceSelfGender.masculine.applied(to: "Main aata hun.") == "Main aata hun.")
+        #expect(SpaceSelfGender.unset.applied(to: "Main aati hun.") == "Main aati hun.")
     }
 }
 
@@ -802,5 +803,41 @@ struct SpokenMorseTests {
         // Talk that only mentions Morse isn't any.
         #expect(SpokenMorse.reading("Morse bhai, ek baar code do na") == nil)
         #expect(SpokenMorse.reading("visit example dot com") == nil)
+    }
+}
+
+struct SpaceWebSearchTests {
+    @Test func searchRequestsAreTold() {
+        #expect(CallOwnAccount.asksForASearch("Chhota Tiri, Google karke batao capital of Australia"))
+        #expect(CallOwnAccount.asksForASearch("please search the web for the latest news"))
+        #expect(CallOwnAccount.asksForASearch("छोटी Tirri, सर्च करके बताओ"))
+        #expect(!CallOwnAccount.asksForASearch("Chhota Tiri, how are you?"))
+        #expect(CallOwnAccount.webSearchRule.contains("Don't list sources or links"))
+    }
+}
+
+struct SpaceMasculineSelfTests {
+    private func masculine(_ text: String) -> String { SpaceSelfGender.masculine.applied(to: text) }
+
+    @Test func hisOwnVerbsBecomeMasculine() {
+        #expect(masculine("Main aati hun, ek minute.") == "Main aata hun, ek minute.")
+        #expect(masculine("Main soch rahi hun ki tum sahi ho.") == "Main soch raha hun ki tum sahi ho.")
+        #expect(masculine("Kal main wahan gayi thi.") == "Kal main wahan gaya tha.")
+        #expect(masculine("Main thak gayi yaar.") == "Main thak gaya yaar.")
+        #expect(masculine("Haan, main karungi.") == "Haan, main karunga.")
+        #expect(masculine("Karti hun, pakka.") == "Karta hun, pakka.")
+        #expect(masculine("Ek sec, check karti hun.") == "Ek sec, check karta hun.")
+        #expect(masculine("मैं यह करती हूँ।") == "मैं यह करता हूँ।")
+        #expect(masculine("मैं कल गई थी") == "मैं कल गया था")
+        #expect(masculine("मैं करूँगी") == "मैं करूँगा")
+    }
+
+    @Test func otherPeoplesFormsStay() {
+        #expect(masculine("Wo kal gayi thi.") == "Wo kal gayi thi.")
+        #expect(masculine("Priya kehti hai ki wo aati hai.") == "Priya kehti hai ki wo aati hai.")
+        #expect(masculine("Main gaya tha, aur Priya gayi thi.") == "Main gaya tha, aur Priya gayi thi.")
+        #expect(masculine("Maine dekhi thi wo movie.") == "Maine dekhi thi wo movie.")
+        #expect(masculine("Main tumhari dost hun.") == "Main tumhari dost hun.")
+        #expect(masculine("Ye meri masti hai.") == "Ye meri masti hai.")
     }
 }
