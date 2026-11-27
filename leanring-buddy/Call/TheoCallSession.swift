@@ -1124,11 +1124,25 @@ final class TheoCallSession: ObservableObject {
         let claude = spaceClaudeBrain ?? ConversationBrains.make(model: ClickyModels.sonnet, systemPrompt: spacePrompt,
                                                                  promptFileName: CallPrompt.otherBotFileName, effort: "low")
         guard XAccountSettings.brain == "local" else { return claude }
+        let prompt = localSpacePrompt
+        localPromptSignature = prompt
         let local = OneTurnConversation(model: BrainModel(provider: .api, modelIdentifier: "lmstudio/" + XAccountSettings.localModel),
-                                        systemPrompt: spacePrompt, keepsHistory: true)
+                                        systemPrompt: prompt, keepsHistory: true)
         callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel), Claude standing by")
         return FallbackConversation(primary: local, fallback: claude)
     }
+
+    /// The local model's system prompt: the Space's prompt, then the owner's standing note and ideology, all fixed, so
+    /// LM Studio reuses its cache for them and each turn only adds what was said (first word in about 0.5 s, not 2.5 to 6).
+    /// A changed note or ideology starts a new local conversation with the new prompt.
+    private var localSpacePrompt: String {
+        var parts = [spacePrompt]
+        if let spaceNote, !spaceNote.isEmpty { parts.append(CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName)) }
+        if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { parts.append(ideology) }
+        parts.append("When you answer, give a real take in one to three short sentences, with a reason or a roast, never just one word.")
+        return parts.joined(separator: "\n\n")
+    }
+    private var localPromptSignature = ""
 
     /// The owner switched the Space's brain (`ownAccountBrain`): the new one from the next turn, the Space and its
     /// listening untouched.
@@ -1399,6 +1413,10 @@ final class TheoCallSession: ObservableObject {
                                                  bossNames: ownAccount?.bossNames ?? [], owner: BotPrompts.ownerName)
             // Morse code read out ("dash dot dash dot"): decoded here, so the brain doesn't guess (ClickyCore `SpokenMorse`).
             for line in heard { if let morse = SpokenMorse.note(line.text) { message += "\n" + morse } }
+            // The local model has the note and the ideology in its fixed system prompt, so its cache is reused turn after
+            // turn (`localSpacePrompt`); Claude gets them with each turn as before.
+            var lean = ""
+            let usesLocal = brain is FallbackConversation
             if let spaceNote, !spaceNote.isEmpty { message += "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName) }
             if let stance = XAccountSettings.stance.instruction(target: XAccountSettings.stanceTarget) { message += "\n" + stance }
             if let tone = XAccountSettings.tone.instruction(custom: XAccountSettings.toneCustom) { message += "\n" + tone }
@@ -1409,7 +1427,18 @@ final class TheoCallSession: ObservableObject {
                 lastReplyWasNotHeard = false
             }
             turnHadTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
+            if usesLocal {
+                lean = message
+                if let spaceNote, !spaceNote.isEmpty {
+                    lean = lean.replacingOccurrences(of: "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName), with: "")
+                }
+            }
             if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { message += "\n" + ideology }
+            if usesLocal, localSpacePrompt != localPromptSignature { switchSpaceBrain() }
+            if let fallback = brain as? FallbackConversation, !lean.isEmpty {
+                fallback.claudeText = message
+                message = lean
+            }
             // A search asked for: the bot says its own "Ek sec, check karti hun" first, so no second filler of the app's.
             let asksForASearch = XAccountSettings.webSearch && CallOwnAccount.asksForASearch(words)
             // Only Claude's side can search: a search turn goes there when the local model is thinking.

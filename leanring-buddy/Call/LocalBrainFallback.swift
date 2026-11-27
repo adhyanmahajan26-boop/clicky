@@ -18,6 +18,9 @@ final class FallbackConversation: ConversationBrain {
     static let firstWordLimitSeconds: Double = 4
     /// The next turn goes straight to Claude (a web search). Reset after each turn.
     var nextTurnToFallback = false
+    /// What Claude is given for this turn if it answers it: the turn with the note and ideology the local model has in its
+    /// system prompt. Reset after each turn.
+    var claudeText: String?
     /// Which side answered each turn lately, for `ownAccountStatus`.
     private(set) var answeredBy: [String] = []
     private var current: ConversationBrain?
@@ -38,9 +41,11 @@ final class FallbackConversation: ConversationBrain {
     }
 
     func send(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void, onDone: @escaping (Result<String, Error>) -> Void) {
+        let forClaude = claudeText ?? text
+        claudeText = nil
         if nextTurnToFallback || !primary.isRunning {
             nextTurnToFallback = false
-            sendToFallback(text, images: images, onDelta: onDelta, onDone: onDone, why: "a search")
+            sendToFallback(forClaude, images: images, onDelta: onDelta, onDone: onDone, why: "a search")
             return
         }
         var gotWords = false
@@ -51,7 +56,7 @@ final class FallbackConversation: ConversationBrain {
             guard let self, !Task.isCancelled, !gotWords, !switched else { return }
             switched = true
             self.primary.interrupt()
-            self.sendToFallback(text, images: images, onDelta: onDelta, onDone: onDone, why: "no word in \(Int(Self.firstWordLimitSeconds)) s")
+            self.sendToFallback(forClaude, images: images, onDelta: onDelta, onDone: onDone, why: "no word in \(Int(Self.firstWordLimitSeconds)) s")
         }
         primary.send(text, images: images, onDelta: { delta in
             guard !switched else { return }
@@ -62,7 +67,7 @@ final class FallbackConversation: ConversationBrain {
             guard let self, !switched else { return }
             if case .failure(let error) = result, !gotWords {
                 switched = true
-                self.sendToFallback(text, images: images, onDelta: onDelta, onDone: onDone, why: "it failed (\(error.localizedDescription))")
+                self.sendToFallback(forClaude, images: images, onDelta: onDelta, onDone: onDone, why: "it failed (\(error.localizedDescription))")
                 return
             }
             self.note("local")
