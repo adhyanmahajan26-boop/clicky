@@ -184,6 +184,19 @@ public enum CallOwnAccount {
         }
     }
 
+    /// Whether the ears' final words are the turn just let go said again: Sarvam's final often comes after the turn was
+    /// taken from its partial words, spelled differently or in the other script ("Chotta Tirri" / "छोटा टिर्री"), and
+    /// taking it as a new turn asked the brain twice, the second time over the first answer (27 Nov). Most of its words,
+    /// by sound, are the released turn's.
+    public static func isTheSameTurnAgain(_ final: String, released: String, secondsSinceRelease: Double) -> Bool {
+        guard secondsSinceRelease <= 5 else { return false }
+        let heard = CallTurnEnd.simplifiedWords(final).map(spokenForm).filter { !$0.isEmpty }
+        let before = Set(CallTurnEnd.simplifiedWords(released).map(spokenForm))
+        guard !heard.isEmpty else { return false }
+        let shared = heard.filter { word in before.contains(word) || before.contains { SpaceSpeakerName.isMisreading(word, of: $0) } }.count
+        return Double(shared) / Double(heard.count) >= 0.6
+    }
+
     static let everydaySpokenWords: Set<String> = Set(["chhota", "chhoti", "chota", "choti", "chotta", "chotti", "bada", "badi", "pyari", "pyara", "मीठी", "छोटा", "छोटी"].map(spokenForm))
 
     /// A word by how it sounds: in Latin letters (Devanagari spelled out), with no accents, h after a consonant dropped,

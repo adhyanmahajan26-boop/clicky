@@ -893,3 +893,15 @@ struct SpaceLocalBrainTests {
         #expect(!SpaceSafetyFilter.deflection(turn: 1).isEmpty)
     }
 }
+
+struct SpaceRepeatFinalTests {
+    @Test func theSameWordsAgainAreNotANewTurn() {
+        #expect(CallOwnAccount.isTheSameTurnAgain("छोटा टिर्री, तुम कौन हो और तुम्हें किसने बनाया?", released: "Chhota Tirri, tum kaun ho aur tumhe kisne banaya",
+                                                  secondsSinceRelease: 2.6))
+        #expect(CallOwnAccount.isTheSameTurnAgain("Chotta Tirri roast Ambar a little, he says AI can't do anything useful.",
+                                                  released: "Chotta Tirri, roast Ambar a little, he says AI cannot do anything useful", secondsSinceRelease: 2.6))
+        #expect(!CallOwnAccount.isTheSameTurnAgain("Wait wait, I have a better question, who is the best cricketer ever?",
+                                                   released: "Chotta Tirri, roast Ambar a little", secondsSinceRelease: 2.0))
+        #expect(!CallOwnAccount.isTheSameTurnAgain("Chotta Tirri, roast Ambar a little", released: "Chotta Tirri, roast Ambar a little", secondsSinceRelease: 12))
+    }
+}

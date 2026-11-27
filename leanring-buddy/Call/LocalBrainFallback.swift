@@ -13,9 +13,11 @@ import Foundation
 @MainActor
 final class FallbackConversation: ConversationBrain {
     private let primary: ConversationBrain
-    private let fallback: ConversationBrain
-    /// No word from the local model in this long: the turn goes to Claude.
-    static let firstWordLimitSeconds: Double = 4
+    /// Claude, standing by; nil when the owner wants the local model alone (`XAccountSettings.localOnly`): a turn it can't
+    /// answer in time is then let pass quietly.
+    private let fallback: ConversationBrain?
+    /// No word from the local model in this long: the turn goes to Claude, or passes when there's no Claude.
+    let firstWordLimitSeconds: Double
     /// The next turn goes straight to Claude (a web search). Reset after each turn.
     var nextTurnToFallback = false
     /// What Claude is given for this turn if it answers it: the turn with the note and ideology the local model has in its
@@ -26,17 +28,18 @@ final class FallbackConversation: ConversationBrain {
     private var current: ConversationBrain?
     var onEnded: ((String) -> Void)?
 
-    init(primary: ConversationBrain, fallback: ConversationBrain) {
+    init(primary: ConversationBrain, fallback: ConversationBrain?, firstWordLimitSeconds: Double = 4) {
         self.primary = primary
         self.fallback = fallback
-        fallback.onEnded = { [weak self] message in self?.onEnded?(message) }
+        self.firstWordLimitSeconds = firstWordLimitSeconds
+        fallback?.onEnded = { [weak self] message in self?.onEnded?(message) }
     }
 
-    var isRunning: Bool { primary.isRunning || fallback.isRunning }
+    var isRunning: Bool { primary.isRunning || fallback?.isRunning == true }
 
     func start() throws {
         // Claude is kept warm for a fallback; the local server only needs to answer.
-        try? fallback.start()
+        try? fallback?.start()
         do { try primary.start() } catch { callLog("📞 Space: the local brain isn't there (\(error.localizedDescription)), Claude answers") }
     }
 
@@ -52,11 +55,11 @@ final class FallbackConversation: ConversationBrain {
         var switched = false
         current = primary
         let timer = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.firstWordLimitSeconds * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64((self?.firstWordLimitSeconds ?? 4) * 1_000_000_000))
             guard let self, !Task.isCancelled, !gotWords, !switched else { return }
             switched = true
             self.primary.interrupt()
-            self.sendToFallback(forClaude, images: images, onDelta: onDelta, onDone: onDone, why: "no word in \(Int(Self.firstWordLimitSeconds)) s")
+            self.sendToFallback(forClaude, images: images, onDelta: onDelta, onDone: onDone, why: "no word in \(Int(self.firstWordLimitSeconds)) s")
         }
         primary.send(text, images: images, onDelta: { delta in
             guard !switched else { return }
@@ -77,6 +80,13 @@ final class FallbackConversation: ConversationBrain {
 
     private func sendToFallback(_ text: String, images: [ClaudeContentBlock], onDelta: @escaping (String) -> Void,
                                 onDone: @escaping (Result<String, Error>) -> Void, why: String) {
+        guard let fallback else {
+            // The local model alone: the turn passes quietly.
+            callLog("📞 Space: the local model let this turn pass (\(why))")
+            note("passed")
+            onDone(.success(CallGroupMode.passMarker))
+            return
+        }
         callLog("📞 Space: Claude answers this turn (\(why))")
         current = fallback
         fallback.send(text, images: images, onDelta: onDelta, onDone: { [weak self] result in
@@ -94,7 +104,7 @@ final class FallbackConversation: ConversationBrain {
     func forgetTheTurnBeingAnswered() { (current ?? primary).forgetTheTurnBeingAnswered() }
     func stop() {
         primary.stop()
-        fallback.stop()
+        fallback?.stop()
     }
 
     /// Switching back to Claude alone: the local side stops, Claude's (kept warm) carries on.

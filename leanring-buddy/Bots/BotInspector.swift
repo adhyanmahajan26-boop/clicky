@@ -64,6 +64,7 @@ struct BotInspector: View {
                     if bot.id == BotsStore.xSpaceBotID {
                         // The X Space bot's account, browser and voice, and Join a Space.
                         XAccountSettingsSection()
+                        XSpaceIdeologySection()
                         InspectorSection("Voice in Spaces", hint: "The voice \(bot.name) speaks with in a Space.") {
                             BotCallSettings(bot: bot) { voice in
                                 draft?.callVoice = voice

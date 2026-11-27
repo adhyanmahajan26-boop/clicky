@@ -131,6 +131,10 @@ enum XAccountSettings {
         return saved.isEmpty ? "xspace-qwen27b-nothink" : saved
     }
 
+    /// The local model alone, with no Claude standing by: a turn it can't answer within 12 s passes quietly.
+    static let localOnlyKey = "v5.xAccount.localOnly"
+    static var localOnly: Bool { UserDefaults.standard.bool(forKey: localOnlyKey) }
+
     /// The local model's content filter (ClickyCore `SpaceSafetyFilter`): off unless the owner turns it on.
     static let contentFilterKey = "v5.xAccount.contentFilter"
     static var contentFilter: Bool { UserDefaults.standard.bool(forKey: contentFilterKey) }

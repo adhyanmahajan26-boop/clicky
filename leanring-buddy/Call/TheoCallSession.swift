@@ -426,6 +426,7 @@ final class TheoCallSession: ObservableObject {
     /// The turn Vello is answering now: if the owner turns out to be still talking before any of the answer is heard, the
     /// answer is dropped and the turn carries on (`heardFinal`).
     private var lastReleasedTurn: (words: String, lineID: UUID?)?
+    private var lastReleasedAt: Date?
     /// Some of this turn's answer has been heard.
     private var turnHasSounded = false
     /// Times the answer being written now was dropped and started over with more words (`CallCutIn`).
@@ -1012,6 +1013,9 @@ final class TheoCallSession: ObservableObject {
         // The same goes for a stretch of speech the ears hand over again while a turn is held (`CallHeldWords`).
         let isRepeat = !words.isEmpty && (
             (lastReleasedTurn != nil && heldTurnWords.isEmpty && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn))
+            || (isOwnAccount && heldTurnWords.isEmpty && lastReleasedTurn.map {
+                CallOwnAccount.isTheSameTurnAgain(words, released: $0.words, secondsSinceRelease: Date().timeIntervalSince(lastReleasedAt ?? .distantPast))
+            } == true)
             || (!heldTurnWords.isEmpty && CallHeldWords.adding(words, to: heldTurnWords) == heldTurnWords.trimmingCharacters(in: .whitespacesAndNewlines)))
         if isRepeat { callLog("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
         if isOwnAccount, !words.isEmpty, !isRepeat, listenForTheClip(words) { return }
@@ -1128,6 +1132,10 @@ final class TheoCallSession: ObservableObject {
         localPromptSignature = prompt
         let local = OneTurnConversation(model: BrainModel(provider: .api, modelIdentifier: "lmstudio/" + XAccountSettings.localModel),
                                         systemPrompt: prompt, keepsHistory: true)
+        if XAccountSettings.localOnly {
+            callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel) alone")
+            return FallbackConversation(primary: local, fallback: nil, firstWordLimitSeconds: 12)
+        }
         callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel), Claude standing by")
         return FallbackConversation(primary: local, fallback: claude)
     }
@@ -1302,6 +1310,7 @@ final class TheoCallSession: ObservableObject {
         turnWaits.append(quietSeconds)
         callLog("📞 Call: turn ends after \(String(format: "%.1f", quietSeconds)) s of quiet (\(words.split(separator: " ").count) words)")
         lastReleasedTurn = (words, lineID)
+        lastReleasedAt = Date()
         // The line may have been reopened by a sound that brought no words.
         if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) {
             lines[index].isLive = false

@@ -217,3 +217,74 @@ struct XSpaceBotLinkSection: View {
         }
     }
 }
+
+/// The X Space bot's ideology, written by the owner (ideology.md in ~/Library/Application Support/VelloXSpace), and which
+/// brain it thinks with. Saved atomically; the bot reads it again on its next turn, no restart. The text is private: it's
+/// never logged, only its size is shown.
+struct XSpaceIdeologySection: View {
+    @AppStorage(XAccountSettings.brainKey) private var brain = "claude"
+    @State private var text = ""
+    @State private var savedText = ""
+    @State private var status = ""
+    @State private var loaded = false
+
+    var body: some View {
+        TheoSection(title: "Ideology", hint: "How the bot thinks and talks in Spaces, in your words: worldview, opinions, style, catchphrases, people it likes or roasts. Saved to ideology.md; the bot uses it from its next turn, no restart.") {
+            SettingRow(title: "Brain", detail: "Claude, or the local Qwen model on this Mac's LM Studio (with Claude taking over if it's slow or fails, and for web searches). Switches from the next turn.") {
+                Picker("Brain", selection: Binding(get: { brain }, set: { choice in
+                    brain = choice
+                    TheoCallController.session?.switchSpaceBrain()
+                })) {
+                    Text("Claude").tag("claude")
+                    Text("Local Qwen").tag("local")
+                }
+                .labelsHidden().frame(width: 150)
+            }
+            RowDivider()
+            VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: $text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 220, maxHeight: 360)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(DS.Colors.borderSubtle))
+                HStack(spacing: 8) {
+                    Button("Save") { save() }
+                        .buttonStyle(.theo(.primary, .small)).pointerCursor()
+                        .disabled(text == savedText)
+                        .keyboardShortcut("s", modifiers: .command)
+                    Button("Open in TextEdit") {
+                        _ = XAccountSettings.ideology()
+                        NSWorkspace.shared.open([XAccountSettings.ideologyFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                                configuration: NSWorkspace.OpenConfiguration())
+                    }
+                    .buttonStyle(.theo(.secondary, .small)).pointerCursor()
+                    Button("Reload") { load() }
+                        .buttonStyle(.theo(.ghost, .small)).pointerCursor()
+                    Spacer()
+                    Text(text == savedText ? status : "Not saved yet")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+        }
+        .onAppear { if !loaded { load() } }
+    }
+
+    private func load() {
+        // Read off the main thread's way: the file is small, so this is quick and the window opens with no lag.
+        let current = XAccountSettings.ideology()
+        text = current
+        savedText = current
+        loaded = true
+        status = "Loaded, \(SpaceIdeology.cleaned(current).count) chars for the bot"
+    }
+
+    private func save() {
+        do {
+            try XAccountSettings.saveIdeology(text)
+            savedText = text
+            status = "Saved ✓, \(SpaceIdeology.cleaned(text).count) chars for the bot"
+        } catch {
+            status = "Couldn't save: \(error.localizedDescription)"
+        }
+    }
+}
