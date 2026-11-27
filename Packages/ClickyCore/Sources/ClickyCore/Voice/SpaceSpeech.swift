@@ -278,6 +278,12 @@ public struct SpaceSentenceGatherer: Sendable {
 
     /// The sentences finished by this piece of text.
     public mutating func add(_ piece: String) -> [String] {
+        // The reply comes in pieces cut at spaces with the space trimmed off, so words ran together for the voice
+        // ("kamaalhai", "भाई,क्योंकि", a live Space, 27 Nov): a space goes back between two pieces that need one.
+        if let last = held.last, let first = piece.first, !last.isWhitespace, !first.isWhitespace,
+           first.isLetter || first.isNumber, last.isLetter || last.isNumber || ",;:".contains(last) {
+            held += " "
+        }
         held += piece
         var sentences: [String] = []
         while let end = held.firstIndex(where: { ".?!।\n".contains($0) }) {

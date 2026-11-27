@@ -1600,7 +1600,7 @@ final class TheoCallSession: ObservableObject {
         var text = SpeakableText.speakable(SpaceVoiceText.sanitized(ownForms))
         // Sarvam's Hindi voice reads Roman Hindi like English ("main" as "mey"): its Hindi words go in Devanagari, for the
         // voice only (ClickyCore `HinglishVoiceText`).
-        if voice is SarvamCallVoice, XAccountSettings.devanagariForTheVoice { text = HinglishVoiceText.spoken(text) }
+        if voice is SarvamCallVoice, XAccountSettings.devanagariForTheVoice { text = HinglishVoiceText.spoken(text, script: XAccountSettings.voiceScript) }
         spokenLately.append(text)
         if spokenLately.count > 6 { spokenLately.removeFirst(spokenLately.count - 6) }
         guard text.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return }

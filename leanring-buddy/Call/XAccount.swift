@@ -110,6 +110,11 @@ enum XAccountSettings {
     /// the owner turns it off.
     static let devanagariForTheVoiceKey = "v5.xAccount.devanagariForTheVoice"
     static var devanagariForTheVoice: Bool { UserDefaults.standard.object(forKey: devanagariForTheVoiceKey) as? Bool ?? true }
+    /// How a Roman Hinglish sentence goes to the voice (ClickyCore `HinglishVoiceText.Script`): "mixed", "whole" or "roman".
+    static let voiceScriptKey = "v5.xAccount.voiceScript"
+    static var voiceScript: HinglishVoiceText.Script {
+        UserDefaults.standard.string(forKey: voiceScriptKey).flatMap(HinglishVoiceText.Script.init(rawValue:)) ?? .whole
+    }
 
     /// The bot may search the web when someone in the Space asks it to (Claude Code's own web search, on the owner's
     /// Claude plan). Off until the owner turns it on.

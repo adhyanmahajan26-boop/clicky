@@ -101,6 +101,22 @@ public enum HinglishVoiceText {
         withMainInRoman(spokenInDevanagari(sentence))
     }
 
+    /// How a Roman Hinglish sentence goes to the voice. `mixed`: its known Hindi words in Devanagari, the rest as written.
+    /// `whole`: all its Hindi words in Devanagari when every word is either a known Hindi word or an English one, else the
+    /// whole sentence in Roman letters, so a sentence is never half and half. `roman`: as written.
+    public enum Script: String, Sendable, CaseIterable { case mixed, whole, roman }
+
+    public static func spoken(_ sentence: String, script: Script, isEnglishWord: (String) -> Bool = EnglishWords.contains) -> String {
+        switch script {
+        case .mixed: return spoken(sentence)
+        case .roman: return sentence
+        case .whole:
+            let romanWords = sentence.split(whereSeparator: { !($0.isASCII && $0.isLetter) }).map { $0.lowercased() }
+            let unknown = romanWords.filter { words[$0] == nil && stems[$0] == nil && !isEnglishWord($0) }
+            return unknown.isEmpty ? spoken(sentence) : sentence
+        }
+    }
+
     static func spokenInDevanagari(_ sentence: String) -> String {
         var pieces: [(range: Range<String.Index>, lower: String)] = []
         var start: String.Index?
@@ -207,4 +223,17 @@ public enum SpokenMorse {
         if reading.letters.contains("?") { note += " A \"?\" is dots and dashes with no pause heard between letters: ask for a short pause after each letter." }
         return note + ")"
     }
+}
+
+/// English words, from the Mac's own word list, for telling an English word from Hindi in Roman letters.
+public enum EnglishWords {
+    static let list: Set<String> = {
+        guard let text = try? String(contentsOfFile: "/usr/share/dict/words", encoding: .utf8) else { return [] }
+        var set = Set<String>()
+        for line in text.split(separator: "\n") where line.count >= 2 { set.insert(line.lowercased()) }
+        // Short everyday words the list leaves out or that read as English anyway.
+        for word in ["i", "a", "ok", "okay", "yeah", "lol", "bro", "hey", "hi", "hello", "bye", "sorry", "thanks", "please", "ai", "bot"] { set.insert(word) }
+        return set
+    }()
+    public static func contains(_ word: String) -> Bool { list.contains(word.lowercased()) }
 }

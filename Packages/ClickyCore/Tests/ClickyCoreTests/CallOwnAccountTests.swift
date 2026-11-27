@@ -841,3 +841,30 @@ struct SpaceMasculineSelfTests {
         #expect(masculine("Ye meri masti hai.") == "Ye meri masti hai.")
     }
 }
+
+struct HinglishVoiceScriptTests {
+    private let english: (String) -> Bool = { ["side", "court", "vote", "bank", "setting", "popcorn", "debate", "interesting", "bot"].contains($0) }
+
+    @Test func aSentenceIsNeverHalfAndHalf() {
+        // Every word known: all Hindi in Devanagari ("main" stays Roman for the voice).
+        #expect(HinglishVoiceText.spoken("Haan bhai, ye debate interesting hai.", script: .whole, isEnglishWord: english) == "हाँ भाई, ये debate interesting है.")
+        // An unknown word ("pakad", "baitha"): the whole sentence stays Roman.
+        #expect(HinglishVoiceText.spoken("Main bas popcorn pakad ke baitha hun.", script: .whole, isEnglishWord: english) == "Main bas popcorn pakad ke baitha hun.")
+        #expect(HinglishVoiceText.spoken("Main bas popcorn pakad ke baitha hun.", script: .roman) == "Main bas popcorn pakad ke baitha hun.")
+        #expect(HinglishVoiceText.spoken("Main bas popcorn pakad ke baitha hun.", script: .mixed) == "Main बस popcorn pakad के baitha हूँ.")
+    }
+}
+
+struct SpaceSentencePiecesTests {
+    @Test func piecesCutAtSpacesKeepTheirSpace() {
+        var gatherer = SpaceSentenceGatherer()
+        #expect(gatherer.add("Arre boss, itna dimaag toh sirf aapki training ka kamaal").isEmpty)
+        #expect(gatherer.add("hai!") == ["Arre boss, itna dimaag toh sirf aapki training ka kamaal hai!"])
+        #expect(gatherer.add("Vastu ka touch isliye bhai,").isEmpty)
+        #expect(gatherer.add("kyunki energy sahi hai.") == ["Vastu ka touch isliye bhai, kyunki energy sahi hai."])
+        // Pieces that already carry their space, or end a word with punctuation next, are left alone.
+        #expect(gatherer.add("Haan ") .isEmpty)
+        #expect(gatherer.add("bhai") .isEmpty)
+        #expect(gatherer.add("!") == ["Haan bhai!"])
+    }
+}
