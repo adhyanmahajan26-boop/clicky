@@ -116,15 +116,30 @@ final class FallbackConversation: ConversationBrain {
 /// The web search for the local model: DuckDuckGo's plain results page, then Wikipedia's API when that finds nothing.
 /// Both are free and need no key or install. A few seconds at most.
 enum SpaceSearchClient {
+    /// DuckDuckGo first; when it gives nothing (it starts showing a bot check after some use), news goes to GDELT's free
+    /// headline index and anything else to Wikipedia, read from the top articles' leads.
     static func search(_ query: String) async -> [SpaceWebSearch.Result] {
         if let results = try? await duckDuckGo(query), !results.isEmpty { return results }
+        if SpaceWebSearch.isNewsQuery(query), let news = try? await gdelt(query), !news.isEmpty { return news }
         return (try? await wikipedia(query)) ?? []
+    }
+
+    private static func gdelt(_ query: String) async throws -> [SpaceWebSearch.Result] {
+        let topic = query.replacingOccurrences(of: #"(?i)\b(latest|today'?s?|top|breaking|news|headlines?)\b"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        var components = URLComponents(string: "https://api.gdeltproject.org/api/v2/doc/doc")!
+        components.queryItems = [URLQueryItem(name: "query", value: (topic.isEmpty ? "India" : topic) + " sourcelang:english"),
+                                 URLQueryItem(name: "mode", value: "artlist"), URLQueryItem(name: "maxrecords", value: "5"),
+                                 URLQueryItem(name: "format", value: "json"), URLQueryItem(name: "sort", value: "datedesc"),
+                                 URLQueryItem(name: "timespan", value: "1d")]
+        guard let url = components.url else { return [] }
+        return SpaceWebSearch.gdeltHeadlines(json: try await fetch(url))
     }
 
     private static func fetch(_ url: URL) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 4)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-                         forHTTPHeaderField: "User-Agent")
+        // An honest, generic client name: Wikimedia blocks automated requests that pretend to be a browser.
+        request.setValue("VelloSpaceBot/1.0 (local voice bot; occasional single queries)", forHTTPHeaderField: "User-Agent")
         let (data, _) = try await URLSession.shared.data(for: request)
         return data
     }
@@ -140,6 +155,18 @@ enum SpaceSearchClient {
         var components = URLComponents(string: "https://en.wikipedia.org/w/rest.php/v1/search/page")!
         components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "3")]
         guard let url = components.url else { return [] }
-        return SpaceWebSearch.wikipediaResults(json: try await fetch(url))
+        let pages = SpaceWebSearch.wikipediaResults(json: try await fetch(url))
+        // The top two articles' leads hold more than the search excerpts ("the final … Australia won by six wickets").
+        var results: [SpaceWebSearch.Result] = []
+        for page in pages.prefix(2) {
+            let title = page.url.components(separatedBy: "/wiki/").last ?? page.title
+            if let summaryURL = URL(string: "https://en.wikipedia.org/api/rest_v1/page/summary/" + (title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? title)),
+               let summary = SpaceWebSearch.wikipediaSummary(json: (try? await fetch(summaryURL)) ?? Data()) {
+                results.append(summary)
+            } else {
+                results.append(page)
+            }
+        }
+        return results.isEmpty ? pages : results
     }
 }

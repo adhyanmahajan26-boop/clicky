@@ -56,6 +56,30 @@ public enum SpaceWebSearch {
         }
     }
 
+    /// Wikipedia's page summary (/api/rest_v1/page/summary/<title>): the lead of the article, which usually holds the answer.
+    public static func wikipediaSummary(json: Data) -> Result? {
+        guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any], let title = object["title"] as? String,
+              let extract = object["extract"] as? String, !extract.isEmpty else { return nil }
+        let url = ((object["content_urls"] as? [String: Any])?["desktop"] as? [String: Any])?["page"] as? String ?? ""
+        return Result(title: title, snippet: String(extract.prefix(700)), url: url)
+    }
+
+    /// GDELT's free news index (api.gdeltproject.org/api/v2/doc/doc, mode=artlist): the latest headlines on a topic.
+    public static func gdeltHeadlines(json: Data, limit: Int = 5) -> [Result] {
+        guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any], let articles = object["articles"] as? [[String: Any]] else { return [] }
+        return articles.prefix(limit).compactMap { article in
+            guard let title = article["title"] as? String else { return nil }
+            let when = (article["seendate"] as? String).map { String($0.prefix(8)) } ?? ""
+            return Result(title: title, snippet: "\(article["domain"] as? String ?? "") \(when)", url: article["url"] as? String ?? "")
+        }
+    }
+
+    /// Whether a query is about the news (latest headlines, today), which an encyclopedia doesn't have.
+    public static func isNewsQuery(_ query: String) -> Bool {
+        let lower = query.lowercased()
+        return ["news", "latest", "today", "headline", "breaking", "this week", "aaj", "abhi"].contains { lower.contains($0) }
+    }
+
     /// The turn that gives the model what was found.
     public static func resultsMessage(query: String, results: [Result]) -> String {
         guard !results.isEmpty else {

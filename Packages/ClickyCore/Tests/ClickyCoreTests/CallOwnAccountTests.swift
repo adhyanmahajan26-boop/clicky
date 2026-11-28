@@ -933,3 +933,15 @@ struct SpaceLocalWebSearchTests {
         #expect(SpaceWebSearch.resultsMessage(query: "x", results: []).contains("found nothing"))
     }
 }
+
+struct SpaceSearchSourcesTests {
+    @Test func wikipediaLeadsAndNewsHeadlinesAreRead() {
+        let summary = SpaceWebSearch.wikipediaSummary(json: Data(#"{"title":"2023 Cricket World Cup final","extract":"Australia won by six wickets.","content_urls":{"desktop":{"page":"https://en.wikipedia.org/wiki/2023_Cricket_World_Cup_final"}}}"#.utf8))
+        #expect(summary?.snippet == "Australia won by six wickets.")
+        let news = SpaceWebSearch.gdeltHeadlines(json: Data(#"{"articles":[{"title":"RBI holds rates","domain":"example.in","seendate":"20261128T061500Z","url":"https://example.in/a"}]}"#.utf8))
+        #expect(news.first?.title == "RBI holds rates")
+        #expect(news.first?.snippet == "example.in 20261128")
+        #expect(SpaceWebSearch.isNewsQuery("today top news India"))
+        #expect(!SpaceWebSearch.isNewsQuery("2023 cricket world cup winner"))
+    }
+}
