@@ -36,6 +36,8 @@ final class FallbackConversation: ConversationBrain {
     }
 
     var isRunning: Bool { primary.isRunning || fallback?.isRunning == true }
+    /// Claude is standing by (not the local model alone).
+    var hasClaude: Bool { fallback != nil }
 
     func start() throws {
         // Claude is kept warm for a fallback; the local server only needs to answer.

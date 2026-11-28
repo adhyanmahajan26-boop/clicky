@@ -1471,7 +1471,8 @@ final class TheoCallSession: ObservableObject {
             // A search asked for: the bot says its own "Ek sec, check karti hun" first, so no second filler of the app's.
             let asksForASearch = XAccountSettings.webSearch && CallOwnAccount.asksForASearch(words)
             // Only Claude's side can search: a search turn goes there when the local model is thinking.
-            if asksForASearch, let fallback = brain as? FallbackConversation { fallback.nextTurnToFallback = true }
+            // With no Claude (local alone), the local model searches itself (SEARCH: …, `SpaceWebSearch`).
+            if asksForASearch, let fallback = brain as? FallbackConversation, fallback.hasClaude { fallback.nextTurnToFallback = true }
             ask(message,
                 acknowledgesIfSlow: isAddressed && !asksForASearch)
             return
