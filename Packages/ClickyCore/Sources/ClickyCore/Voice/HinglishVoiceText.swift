@@ -111,6 +111,9 @@ public enum HinglishVoiceText {
         case .mixed: return spoken(sentence)
         case .roman: return sentence
         case .whole:
+            // "AI" in a Devanagari sentence came back as "hai" (read back through Sarvam's ears, 27 Nov): such a sentence
+            // stays in Roman letters, where it's read right.
+            if sentence.range(of: #"\bA\.?I\b"#, options: .regularExpression) != nil { return withMainInRoman(sentence) }
             let romanWords = sentence.split(whereSeparator: { !($0.isASCII && $0.isLetter) }).map { $0.lowercased() }
             let unknown = romanWords.filter { words[$0] == nil && stems[$0] == nil && !isEnglishWord($0) }
             return unknown.isEmpty ? spoken(sentence) : sentence

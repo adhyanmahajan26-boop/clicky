@@ -94,6 +94,28 @@ public enum SpaceWebSearch {
         return ["news", "latest", "today", "headline", "breaking", "this week", "aaj", "abhi"].contains { lower.contains($0) }
     }
 
+    /// A model's query cut to its keywords: long questions ("death toll last few years statistics") found nothing.
+    public static func keywords(_ query: String) -> String {
+        let drop: Set<String> = ["what", "who", "which", "when", "where", "how", "is", "are", "was", "were", "the", "a", "an", "of", "in", "on", "for", "to",
+                                 "and", "about", "last", "few", "years", "statistics", "stats", "list", "current", "currently", "please", "tell", "me", "does",
+                                 "did", "do", "many", "much", "number", "recent", "recently"]
+        let words = query.lowercased().replacingOccurrences(of: #"[^\p{L}\p{N} ]"#, with: " ", options: .regularExpression)
+            .split(separator: " ").map(String.init).filter { !drop.contains($0) }
+        return words.isEmpty ? query : words.joined(separator: " ")
+    }
+
+    /// Wikipedia's full-text search (action=query&list=search): titles with matching snippets and the page's date.
+    public static func wikipediaFullText(json: Data, limit: Int = 5) -> [Result] {
+        guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let search = (object["query"] as? [String: Any])?["search"] as? [[String: Any]] else { return [] }
+        return search.prefix(limit).compactMap { item in
+            guard let title = item["title"] as? String else { return nil }
+            let date = (item["timestamp"] as? String).map { " (updated " + String($0.prefix(10)) + ")" } ?? ""
+            return Result(title: title, snippet: plainText(item["snippet"] as? String ?? "") + date,
+                          url: "https://en.wikipedia.org/wiki/" + title.replacingOccurrences(of: " ", with: "_"))
+        }
+    }
+
     /// The turn that gives the model what was found.
     public static func resultsMessage(query: String, results: [Result]) -> String {
         guard !results.isEmpty else {
@@ -103,7 +125,7 @@ public enum SpaceWebSearch {
         return """
         (What your search for "\(query)" found, top results:
         \(lines)
-        Now answer what was asked in one or two short sentences, in the language of whoever asked, saying it's from a quick search. No links, no list, and don't write SEARCH: again.)
+        Now answer what was asked in one or two short sentences, in the language of whoever asked, using ONLY these results and saying it's from a quick search. If they don't answer it, say \"pakka nahi pata\" and what they did say. No links, no list, and don't write SEARCH: again.)
         """
     }
 

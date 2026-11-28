@@ -1160,6 +1160,12 @@ final class TheoCallSession: ObservableObject {
 
     /// A search the local model asked for this turn.
     private var pendingSearchQuery: String?
+    /// The bot's recent sentences, so it doesn't repeat itself, and the turn asked last, for one more try when a reply
+    /// starts with a repeat.
+    private var spaceRecentSentences = SpaceRecentSentences()
+    private var lastSpaceTurnMessage: String?
+    private var regenerateAfterThisReply = false
+    private var regeneratedThisTurn = false
     /// Someone asked the local model alone to search this turn (their words), in case it forgets its SEARCH: line.
     private var searchAskedThisTurn: String?
 
@@ -1478,6 +1484,8 @@ final class TheoCallSession: ObservableObject {
             // With no Claude (local alone), the local model searches itself (SEARCH: …, `SpaceWebSearch`).
             if asksForASearch, let fallback = brain as? FallbackConversation, fallback.hasClaude { fallback.nextTurnToFallback = true }
             searchAskedThisTurn = asksForASearch && (brain as? FallbackConversation)?.hasClaude == false ? words : nil
+            lastSpaceTurnMessage = message
+            regeneratedThisTurn = false
             ask(message,
                 acknowledgesIfSlow: isAddressed && !asksForASearch)
             return
@@ -1694,6 +1702,21 @@ final class TheoCallSession: ObservableObject {
         // The local model's search line is for the app, never said (ClickyCore `SpaceWebSearch`).
         if let query = SpaceWebSearch.query(in: sentence) {
             if brain is FallbackConversation, XAccountSettings.webSearch { pendingSearchQuery = query }
+            // Anything after its search line would be a guess at the answer: not said.
+            speaksNoMoreThisTurn = true
+            return
+        }
+        // The same thing said again in other words isn't said (ClickyCore `SpaceRecentSentences`).
+        if spaceRecentSentences.isARepeat(sentence) {
+            // Its first sentence a repeat: nothing of this reply is said, and it's asked once more for something new.
+            // A repeat later in a reply is just left out.
+            if !hasStartedSpeakingThisTurn, heldSentences.isEmpty, !regeneratedThisTurn, lastSpaceTurnMessage != nil {
+                regenerateAfterThisReply = true
+                speaksNoMoreThisTurn = true
+                callLog("📞 Space: its reply began with something it had said already, asking for a new one")
+            } else {
+                callLog("📞 Space: left out a sentence it had as good as said already")
+            }
             return
         }
         guard !speaksNoMoreThisTurn else { return }
@@ -1854,7 +1877,12 @@ final class TheoCallSession: ObservableObject {
                 }
                 if let emptyLineID, !answerText.isEmpty { checkTheReplyWasHeard(lineID: emptyLineID, text: answerText, turn: turnNumber, isRetry: false) }
                 // The local model asked for a search (SEARCH: …): the app searches and the model answers from it next.
-                if let query = pendingSearchQuery {
+                if regenerateAfterThisReply, let message = lastSpaceTurnMessage {
+                    regenerateAfterThisReply = false
+                    regeneratedThisTurn = true
+                    ask(message + "\n(Your first try repeated something you'd already said in this Space. Say something new, in one line.)",
+                        acknowledgesIfSlow: false)
+                } else if let query = pendingSearchQuery {
                     pendingSearchQuery = nil
                     searchForTheLocalModel(query)
                 } else if let asked = searchAskedThisTurn, answerText.count < 60 {

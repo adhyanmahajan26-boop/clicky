@@ -152,10 +152,15 @@ enum SpaceSearchClient {
     }
 
     private static func wikipedia(_ query: String) async throws -> [SpaceWebSearch.Result] {
-        var components = URLComponents(string: "https://en.wikipedia.org/w/rest.php/v1/search/page")!
-        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "3")]
-        guard let url = components.url else { return [] }
-        let pages = SpaceWebSearch.wikipediaResults(json: try await fetch(url))
+        // Full-text search on the query's keywords: the top five articles with matching snippets.
+        var search = URLComponents(string: "https://en.wikipedia.org/w/api.php")!
+        search.queryItems = [URLQueryItem(name: "action", value: "query"), URLQueryItem(name: "list", value: "search"),
+                             URLQueryItem(name: "srsearch", value: SpaceWebSearch.keywords(query)), URLQueryItem(name: "srlimit", value: "5"),
+                             URLQueryItem(name: "format", value: "json")]
+        guard let searchURL = search.url else { return [] }
+        let found = SpaceWebSearch.wikipediaFullText(json: try await fetch(searchURL))
+        guard !found.isEmpty else { return [] }
+        let pages = found
         // The top two articles' leads hold more than the search excerpts ("the final … Australia won by six wickets").
         var results: [SpaceWebSearch.Result] = []
         for page in pages.prefix(2) {
@@ -167,6 +172,7 @@ enum SpaceSearchClient {
                 results.append(page)
             }
         }
-        return results.isEmpty ? pages : results
+        // The top two articles' leads, then the other matches' snippets: five results in all.
+        return results + pages.dropFirst(2)
     }
 }

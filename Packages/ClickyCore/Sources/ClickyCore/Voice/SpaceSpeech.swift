@@ -272,7 +272,8 @@ public struct SpaceSentenceGatherer: Sendable {
     private var held = ""
     /// A sentence this long with no end in sight goes anyway, at its last comma or space, so a run-on doesn't keep
     /// the Space waiting.
-    public static let longestSentence = 220
+    /// 160 characters since 28 Nov: long run-ons were hard to follow in one breath; they're split at a comma.
+    public static let longestSentence = 160
 
     public init() {}
 
@@ -311,5 +312,45 @@ public struct SpaceSentenceGatherer: Sendable {
         let rest = held.trimmingCharacters(in: .whitespacesAndNewlines)
         held = ""
         return rest.isEmpty ? nil : rest
+    }
+}
+
+/// The X Space bot's own recent sentences, so it doesn't say the same thing again: the local model came back to the same
+/// stock lines (28 Nov). A sentence that's more than 60% the same (by word trigrams) as one of its last sentences, or ends
+/// in the same four words, isn't said.
+public struct SpaceRecentSentences: Sendable {
+    private var recent: [Set<String>] = []
+    public static let limit = 40
+    public static let mostSimilar = 0.6
+
+    public init() {}
+
+    public static func trigrams(_ sentence: String) -> Set<String> {
+        let words = CallTurnEnd.simplifiedWords(sentence).map(CallOwnAccount.spokenForm).filter { !$0.isEmpty }
+        guard words.count >= 3 else { return Set(words.isEmpty ? [] : [words.joined(separator: " ")]) }
+        return Set((0...(words.count - 3)).map { words[$0..<($0 + 3)].joined(separator: " ") })
+    }
+
+    public static func similarity(_ first: Set<String>, _ second: Set<String>) -> Double {
+        guard !first.isEmpty, !second.isEmpty else { return 0 }
+        return Double(first.intersection(second).count) / Double(min(first.count, second.count))
+    }
+
+    /// Whether the sentence was as good as said already; if not, it's remembered as said.
+    /// Each recent sentence's last four words: a stock closer said again in other words is a repeat too.
+    private var endings: [String] = []
+
+    public mutating func isARepeat(_ sentence: String) -> Bool {
+        let grams = Self.trigrams(sentence)
+        guard grams.count >= 2 else { return false }
+        let words = CallTurnEnd.simplifiedWords(sentence).map(CallOwnAccount.spokenForm).filter { !$0.isEmpty }
+        let ending = words.count >= 6 ? words.suffix(4).joined(separator: " ") : ""
+        if recent.contains(where: { Self.similarity(grams, $0) > Self.mostSimilar }) { return true }
+        if !ending.isEmpty, endings.contains(ending) { return true }
+        recent.append(grams)
+        if !ending.isEmpty { endings.append(ending) }
+        if recent.count > Self.limit { recent.removeFirst(recent.count - Self.limit) }
+        if endings.count > Self.limit { endings.removeFirst(endings.count - Self.limit) }
+        return false
     }
 }

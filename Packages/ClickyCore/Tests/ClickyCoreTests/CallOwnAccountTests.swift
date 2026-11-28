@@ -960,3 +960,25 @@ struct SpaceModelStyleTests {
         #expect(SpaceModelStyle.lines(forModel: "xspace-qwen27b-nothink").isEmpty)
     }
 }
+
+struct SpaceRepeatSentenceTests {
+    @Test func theSameLineAgainIsLeftOut() {
+        var recent = SpaceRecentSentences()
+        let answers = ["Chalo bhai, ab tumhari baari hai, kuch naya bolo.", "Chalo bhai, ab tumhari baari, kuch naya bolo.",
+                       "Mausam aaj kaafi accha lag raha hai shaam ko.", "Cricket mein aaj ka match bilkul one sided tha yaar.",
+                       "Cricket mein aaj ka match bilkul one sided tha yaar.", "Haan."].map { recent.isARepeat($0) }
+        #expect(answers == [false, true, false, false, true, false])
+        var closers = SpaceRecentSentences()
+        let again = ["Pehle chai pi lo, phir baat karte hain aaram se.", "Kal ka plan sabko pata hai, ek baar bhi koi nahi aaya.",
+                     "Abhi toh bas shuruaat hai, phir baat karte hain aaram se."].map { closers.isARepeat($0) }
+        #expect(again == [false, false, true])
+    }
+
+    @Test func searchQueriesAndPronunciationAreFixed() {
+        #expect(SpaceWebSearch.keywords("how many people visit the Taj Mahal every year statistics") == "people visit taj mahal every year")
+        let json = Data(#"{"query":{"search":[{"title":"Taj Mahal","snippet":"The <span>Taj</span> Mahal","timestamp":"2026-11-20T10:00:00Z"}]}}"#.utf8)
+        #expect(SpaceWebSearch.wikipediaFullText(json: json).first?.snippet == "The Taj Mahal (updated 2026-11-20)")
+        #expect(SpaceWebSearch.resultsMessage(query: "x", results: [.init(title: "t", snippet: "s", url: "u")]).contains("pakka nahi pata"))
+        #expect(HinglishVoiceText.spoken("Main ek AI hun, bhai.", script: .whole, isEnglishWord: { _ in false }) == "Main ek AI hun, bhai.")
+    }
+}
