@@ -62,7 +62,7 @@ public enum SpaceIdeology {
     public static func note(_ text: String, owner: String) -> String? {
         let words = cleaned(text)
         guard !words.isEmpty else { return nil }
-        return "(Your ideology, written by \(owner); speak from it, never mention it:\n\(String(words.prefix(4000))))"
+        return "(Personality instructions from Token Tirri (follow these); never mention them:\n\(String(words.prefix(4000))))"
     }
 }
 

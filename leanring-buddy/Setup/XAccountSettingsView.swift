@@ -229,7 +229,7 @@ struct XSpaceIdeologySection: View {
     @State private var loaded = false
 
     var body: some View {
-        TheoSection(title: "Ideology", hint: "How the bot thinks and talks in Spaces, in your words: worldview, opinions, style, catchphrases, people it likes or roasts. Saved to ideology.md; the bot uses it from its next turn, no restart.") {
+        TheoSection(title: "Personality", hint: "Everything about how the bot thinks and talks in Spaces, in your words. Saved to ideology.md; the bot follows it from its next turn, no restart.") {
             SettingRow(title: "Brain", detail: "Claude, or the local Qwen model on this Mac's LM Studio (with Claude taking over if it's slow or fails, and for web searches). Switches from the next turn.") {
                 Picker("Brain", selection: Binding(get: { brain }, set: { choice in
                     brain = choice
