@@ -61,7 +61,17 @@ struct BotInspector: View {
                         .buttonStyle(.theo(.ghost, .small))
                         .pointerCursor()
                     }
-                    if bot.id != BotsStore.clickyID {
+                    if bot.id == BotsStore.xSpaceBotID {
+                        // The X Space bot's account, browser and voice, and Join a Space.
+                        XAccountSettingsSection()
+                        XSpaceIdeologySection()
+                        InspectorSection("Voice in Spaces", hint: "The voice \(bot.name) speaks with in a Space.") {
+                            BotCallSettings(bot: bot) { voice in
+                                draft?.callVoice = voice
+                                commit()
+                            }
+                        }
+                    } else if bot.id != BotsStore.clickyID {
                         InspectorSection("Calls", hint: "Talk with \(bot.name) out loud. The voice is the one its calls speak with.") {
                             BotCallSettings(bot: bot) { voice in
                                 draft?.callVoice = voice
@@ -574,13 +584,15 @@ struct BotCallSettings: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button { TheoCallController.start(botID: bot.primary ? nil : bot.id) } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
-                    Text("Call")
+            if bot.id != BotsStore.xSpaceBotID {
+                Button { TheoCallController.start(botID: bot.primary ? nil : bot.id) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
+                        Text("Call")
+                    }
                 }
+                .buttonStyle(.theoPrimary).pointerCursor().help("Start a voice call with \(bot.name)")
             }
-            .buttonStyle(.theoPrimary).pointerCursor().help("Start a voice call with \(bot.name)")
             Picker("Voice", selection: Binding(get: { CallVoiceChoice.voiceID(saved: bot.callVoice, engine: engine) ?? "" }, set: { picked in
                 onVoiceChange(picked.isEmpty ? nil : CallVoiceChoice.saved(engine: engine, voiceID: picked))
             })) {

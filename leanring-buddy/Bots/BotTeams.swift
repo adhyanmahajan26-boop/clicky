@@ -501,7 +501,7 @@ struct OrgChart: View {
                         MotionSymbol(name: "plus", size: 16, weight: .semibold)
                         Text("New category").font(.system(size: 12.5, weight: .medium)).foregroundColor(DS.Colors.textSecondary)
                     }
-                    .frame(maxWidth: .infinity).frame(height: 218)
+                    .frame(maxWidth: .infinity).frame(height: 240)
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(DS.Colors.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                     .contentShape(Rectangle())
@@ -548,11 +548,13 @@ struct OrgChart: View {
                     }
                 }
                 Spacer(minLength: 0)
+                // What the team is doing right now, in the colour of whatever needs the owner most.
+                TeamTallyPill(states: members.map { store.pixelState(of: $0).state })
                 Text(manager == nil ? "Everyone reports to \(ceo)" : "Members → \(manager!.name) → \(ceo)")
                     .font(.system(size: 10.5)).foregroundColor(DS.Colors.textTertiary).lineLimit(1)
             }
             .padding(12)
-            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 218, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 240, alignment: .topLeading)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(hex: CategoryTile.swatch(for: team).from).opacity(0.28)))
         }
@@ -573,7 +575,7 @@ struct OrgChart: View {
             Text(store.layout.sections.isEmpty ? "Make a category, then drag them onto it in the sidebar." : "Drag them onto a category in the sidebar.").font(.system(size: 11)).foregroundColor(DS.Colors.textTertiary)
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 218, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 240, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(DS.Colors.surface))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(DS.Colors.borderSubtle))
     }

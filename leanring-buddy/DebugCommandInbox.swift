@@ -69,6 +69,20 @@
 //                               app's front window, or Notes' Edit ▸ Delete; never types
 //                               (both: TextEdit / Notes only; Safari and Clicky refused)
 //
+//    ownAccountStart {link?, handle?, browser?, output?, monitor?} → joins a Space as Vello on its own X account, as
+//                               "Join a Space as Vello" does (the settings given are saved first; link opens in the bot's
+//                               browser): {started, problem} and the call's status
+//    ownAccountStop           → ends it
+//    ownAccountNote {text}    → a standing instruction from the owner for the Space going on, added to each turn
+//    ownAccountClip {words}   → TEST ONLY: takes these words as heard in the Space for the owner's clip (plays it if they match)
+//    ownAccountClipPhrases {phrases?} → the phrases that play the owner's clips (a list like phrases.json; none: just read them)
+//    ownAccountBrain {brain?, model?} → the Space's brain: "claude" or "local" (LM Studio model id), switched from the next turn
+//    ownAccountIdeology {text?}  → writes the bot's ideology file (ideology.md); replies with its size and hash only, never its words
+//    ownAccountStatus         → the call's status (uiCallStatus) with what the bot's browser tap heard, the voice's device
+//                               and the speaker watcher's frames
+//    ownAccountRecord {device, seconds=4, path?} → TEST ONLY: records an input device (BlackHole) and says how loud it was
+//    ownAccountLook {path?}   → one frame of the speaker watcher now: rings, names (path: TEST ONLY, the frame as a PNG)
+//
 //  Replies are `{ok, result, error, turnDir}` written to `<id>.json.tmp` then
 //  renamed, so a reader never sees a half-written file.
 //
@@ -289,6 +303,170 @@ final class DebugCommandInbox {
             }
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["workers": 3], errorMessage: nil)
 
+        case "ownAccountStart":
+            let defaults = UserDefaults.standard
+            if let handle = commandObject["handle"] as? String { defaults.set(handle, forKey: XAccountSettings.handleKey) }
+            if let displayName = commandObject["displayName"] as? String { defaults.set(displayName, forKey: XAccountSettings.displayNameKey) }
+            if let boss = commandObject["boss"] as? String { defaults.set(boss, forKey: XAccountSettings.bossKey) }
+            if let tone = commandObject["tone"] as? String, let picked = SpaceTone(rawValue: tone) {
+                XAccountSettings.setTone(picked, custom: commandObject["toneCustom"] as? String ?? "")
+            }
+            if let stance = commandObject["stance"] as? String, let picked = SpaceStance(rawValue: stance) {
+                XAccountSettings.setStance(picked, target: commandObject["stanceTarget"] as? String ?? "")
+            }
+            if let browser = commandObject["browser"] as? String { defaults.set(browser, forKey: XAccountSettings.browserKey) }
+            if let output = commandObject["output"] as? String {
+                // A device's name or its unique id.
+                let uid = AudioDevices.outputs().first { $0.uid == output || $0.name == output }?.uid ?? output
+                defaults.set(uid, forKey: XAccountSettings.outputDeviceKey)
+            }
+            if let monitor = commandObject["monitor"] as? Bool { defaults.set(monitor, forKey: XAccountSettings.monitorKey) }
+            let link = (commandObject["link"] as? String).flatMap { XAccountSettings.spaceLink(from: $0) }
+            let problem = TheoCallController.joinSpace(link: link, activates: false)
+            reply(commandIdentifier: commandIdentifier, isSuccess: problem == nil,
+                  result: ["started": problem == nil, "problem": problem ?? "", "status": TheoCallController.session?.report() ?? [:]], errorMessage: problem)
+        case "ownAccountStop":
+            let wasOwnAccount = TheoCallController.session?.isOwnAccount == true
+            if wasOwnAccount { TheoCallController.end() }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["ended": wasOwnAccount], errorMessage: nil)
+        case "ownAccountProbe":
+            // {browser, seconds=5, method: processTap|screenCapture}: hears that browser for a few seconds with no call, and
+            // says what it matched and how loud it was. For telling which way hears Chromium's helper process.
+            guard let browser = commandObject["browser"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Needs browser.")
+                return
+            }
+            let seconds = min(max(commandObject["seconds"] as? Double ?? 5, 1), 20)
+            let appPath = XAccountSettings.appURL(bundleID: browser)?.path
+            Task { @MainActor in
+                var result: [String: Any] = ["method": commandObject["method"] as? String ?? "screenCapture",
+                                             "audioCapturePermission": AudioCapturePermission.isGranted.map { $0 ? "granted" : "refused" } ?? "unknown"]
+                if commandObject["method"] as? String == "processTap" {
+                    let tap = BotBrowserAudioTap(browserBundleID: browser, browserAppPath: appPath)
+                    result["matchedProcesses"] = BotBrowserAudioTap.audioProcesses().filter {
+                        BotBrowserChoice.processBelongs(processBundleID: $0.bundleID, processPath: $0.path, browserBundleID: browser, browserAppPath: appPath)
+                    }.map { "\($0.bundleID ?? "?") \($0.path ?? "")" }
+                    tap.start()
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    result["buffers"] = tap.buffersHeard
+                    result["loudestDecibels"] = tap.loudestDecibels
+                    result["tapped"] = tap.tappedProcessNames
+                    result["error"] = tap.lastError ?? ""
+                    tap.stop()
+                } else {
+                    let screenAudio = BotBrowserScreenAudio(browserBundleID: browser, browserAppPath: appPath)
+                    await screenAudio.start()
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    result["buffers"] = screenAudio.buffersHeard
+                    result["loudestDecibels"] = screenAudio.loudestDecibels
+                    result["apps"] = screenAudio.capturedAppNames
+                    result["error"] = screenAudio.lastError ?? ""
+                    screenAudio.stop()
+                }
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: result, errorMessage: nil)
+            }
+        case "ownAccountTee":
+            // TEST ONLY {path}: the voice's audio also written to this file ("" stops).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile and a Space only.")
+                return
+            }
+            let path = commandObject["path"] as? String ?? ""
+            session.teeVoiceForTest(to: path.isEmpty ? nil : URL(fileURLWithPath: path))
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["tee": path], errorMessage: nil)
+        case "ownAccountSay":
+            // TEST ONLY {text}: said in the Space through the reply's own path (sentences, clean-up, the floor rules).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount, let text = commandObject["text"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile, a Space and text only.")
+                return
+            }
+            session.sayInTheSpaceForTest(text)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["said": text], errorMessage: nil)
+        case "ownAccountClip":
+            // TEST ONLY {words}: the words as if heard in the Space, through the clip's own path (match, cooldown, quiet, play).
+            guard TheoProfile.isTest, let session = TheoCallController.session, session.isOwnAccount, let words = commandObject["words"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Test profile, a Space and words only.")
+                return
+            }
+            let taken = session.clipForTest(words: words)
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["taken": taken], errorMessage: nil)
+        case "ownAccountClipPhrases":
+            // {phrases?}: the list of phrases that play the owner's clips, saved to phrases.json in the clips folder and
+            // used from the next words heard. Without phrases, the list in effect.
+            if let entries = commandObject["phrases"] {
+                guard let data = try? JSONSerialization.data(withJSONObject: entries), let phrases = SpaceClipPhrase.list(fromJSON: data), !phrases.isEmpty else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "No phrase could be read.")
+                    return
+                }
+                do { try XAccountSettings.saveClipPhrases(phrases) } catch {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.localizedDescription)
+                    return
+                }
+            }
+            let phrases = XAccountSettings.clipPhrases()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: [
+                "file": XAccountSettings.clipPhrasesFile.path,
+                "phrases": phrases.map { ["name": $0.name, "clip": $0.clip, "words": $0.words.map { $0.sorted() },
+                                          "found": XAccountSettings.clipFile(named: $0.clip) != nil] as [String: Any] },
+            ], errorMessage: nil)
+        case "ownAccountBrain":
+            // {brain?, model?}: "claude" or "local", and the local model's LM Studio id; a Space going on switches at once.
+            if let choice = commandObject["brain"] as? String {
+                guard ["claude", "local"].contains(choice) else {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "brain is \"claude\" or \"local\".")
+                    return
+                }
+                UserDefaults.standard.set(choice, forKey: XAccountSettings.brainKey)
+            }
+            if let model = commandObject["model"] as? String { UserDefaults.standard.set(model, forKey: XAccountSettings.localModelKey) }
+            if commandObject["brain"] != nil || commandObject["model"] != nil { TheoCallController.session?.switchSpaceBrain() }
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: TheoCallController.session?.spaceBrainReport ?? ["brain": XAccountSettings.brain, "localModel": XAccountSettings.localModel],
+                  errorMessage: nil)
+        case "ownAccountIdeology":
+            // {text?}: the bot's ideology file, written (read on the bot's next turn), or just read.
+            if let text = commandObject["text"] as? String {
+                do { try XAccountSettings.saveIdeology(text) } catch {
+                    reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: error.localizedDescription)
+                    return
+                }
+            }
+            // The owner's ideology is private: only its size and a hash ever leave the app, never its words.
+            let text = XAccountSettings.ideology()
+            reply(commandIdentifier: commandIdentifier, isSuccess: true,
+                  result: ["file": XAccountSettings.ideologyFile.path, "bytes": text.utf8.count, "sha256": SpaceIdeology.hash(text),
+                           "charsForTheBot": SpaceIdeology.cleaned(text).count], errorMessage: nil)
+        case "ownAccountNote":
+            // {text}: a standing instruction from the owner for the Space going on now, added to each of its turns ("" clears it).
+            guard let session = TheoCallController.session, session.isOwnAccount else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "No Space on the X account is going.")
+                return
+            }
+            let text = (commandObject["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            session.spaceNote = text.isEmpty ? nil : text
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: ["note": session.spaceNote ?? ""], errorMessage: nil)
+        case "ownAccountStatus":
+            reply(commandIdentifier: commandIdentifier, isSuccess: true, result: TheoCallController.session?.report() ?? [:], errorMessage: nil)
+        case "ownAccountLook":
+            guard let session = TheoCallController.session, session.isOwnAccount else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "No Space on Vello's own account is going.")
+                return
+            }
+            Task { @MainActor in
+                let report = await session.lookForSpeakerNow(savingTo: (commandObject["path"] as? String).map { URL(fileURLWithPath: $0) })
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: true, result: report, errorMessage: nil)
+            }
+        case "ownAccountRecord":
+            guard TheoProfile.isTest || CommandLine.arguments.contains("--debug-inbox"), let device = commandObject["device"] as? String else {
+                reply(commandIdentifier: commandIdentifier, isSuccess: false, result: nil, errorMessage: "Needs device.")
+                return
+            }
+            let seconds = min(max(commandObject["seconds"] as? Double ?? 4, 0.5), 20)
+            let path = (commandObject["path"] as? String).map { URL(fileURLWithPath: $0) }
+            Task { @MainActor in
+                let result = await DeviceInputCheck.record(deviceUID: device, seconds: seconds, saveTo: path)
+                self.reply(commandIdentifier: commandIdentifier, isSuccess: result["error"] == nil, result: result, errorMessage: result["error"] as? String)
+            }
         case "ping":
             reply(commandIdentifier: commandIdentifier, isSuccess: true, result: pingResult(), errorMessage: nil)
 

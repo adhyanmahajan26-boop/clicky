@@ -8,6 +8,9 @@
 //
 //  In the test profile there's no mic: a sound file goes in through `feed` and the voice plays at zero volume.
 //
+//  A Space on Vello's own X account has no mic either: it hears only the bot's browser (`BotBrowserAudioTap`) and speaks
+//  to the virtual mic (`DeviceVoicePlayer` on BlackHole), and to this Mac's speakers too when the owner wants to listen.
+//
 
 import AudioToolbox
 import AVFoundation
@@ -30,8 +33,13 @@ final class CallMicConverter: @unchecked Sendable {
     private var pending = Data()
     private let blockBytes = Int(Double(CallAudioBlock.sampleRate) * CallAudioBlock.seconds) * 2
     var onBlock: (@Sendable (CallAudioBlock) -> Void)?
+    /// One caller at a time: a Space's process tap is made again when the browser's helpers change, and for a moment the
+    /// old and new taps both deliver, from two threads. Unguarded, that crashed the app twice in a public Space (25 Nov).
+    private let lock = NSLock()
 
     func append(_ input: AVAudioPCMBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
         guard let buffer = Self.firstChannel(of: input) else { return }
         if converter == nil || converter?.inputFormat != buffer.format { converter = AVAudioConverter(from: buffer.format, to: output) }
         guard let converter else { return }
@@ -242,6 +250,16 @@ final class CallAudio {
     private var scheduled = 0
     private var segmentOpen = false
     private(set) var isOpen = false
+    /// A Space on Vello's own X account: what it hears and where its voice goes.
+    private let ownAccount: XAccountSetup?
+    private var browserTap: BotBrowserAudioTap?
+    private var browserScreenAudio: BotBrowserScreenAudio?
+    private var virtualMic: DeviceVoicePlayer?
+    private var monitor: DeviceVoicePlayer?
+    private var monitorSegmentOpen = false
+    /// In own-account mode: why the voice can't reach the Space (no BlackHole), or the hearing can't start.
+    private(set) var ownAccountProblem: String?
+    var onOwnAccountProblem: ((String) -> Void)?
 
     /// Mic blocks, on the main actor.
     var onBlock: ((CallAudioBlock) -> Void)?
@@ -249,11 +267,35 @@ final class CallAudio {
     var onDrained: (() -> Void)?
     /// How loud the voice is right now, for the avatar.
     private(set) var voiceLevel: CGFloat = 0
+    /// The loudest voice audio handed to the player (and taken) since `resetLoudness`, for telling a reply that made no
+    /// sound in a Space.
+    private(set) var loudestDecibelsSinceReset = -100.0
 
-    init(hub: AudioEngineHub, isLive: Bool) {
+    func resetLoudness() { loudestDecibelsSinceReset = -100 }
+
+    /// Test only (`ownAccountTee`): every buffer of the voice handed to the player, also written to this file, to hear and
+    /// measure exactly what the voice produced without touching a live device.
+    private var teeFile: AVAudioFile?
+    private var teeURL: URL?
+    func teeVoice(to url: URL?) {
+        teeURL = url
+        teeFile = nil
+    }
+
+    private func writeTee(_ buffer: AVAudioPCMBuffer) {
+        guard let teeURL else { return }
+        if teeFile == nil { teeFile = try? AVAudioFile(forWriting: teeURL, settings: buffer.format.settings, commonFormat: buffer.format.commonFormat, interleaved: buffer.format.isInterleaved) }
+        try? teeFile?.write(from: buffer)
+    }
+
+    init(hub: AudioEngineHub, isLive: Bool, ownAccount: XAccountSetup? = nil) {
         self.hub = hub
         self.isLive = isLive
-        if isLive {
+        self.ownAccount = ownAccount
+        if ownAccount != nil {
+            // Its own player on its own engine: the hub's echo-cancelling engine and the Mac's speakers stay out of it.
+            channel = SharedEnginePlayerChannel()
+        } else if isLive {
             // One player for every call: the hub keeps each channel it makes.
             let shared = Self.liveChannel ?? hub.makePlayerChannel()
             Self.liveChannel = shared
@@ -270,7 +312,9 @@ final class CallAudio {
 
     func open() throws {
         guard !isOpen else { return }
-        if isLive {
+        if let ownAccount {
+            openOwnAccount(ownAccount)
+        } else if isLive {
             let converter = self.converter
             do {
                 _ = try hub.startVoiceProcessingCapture(keepsDistanceInLoudness: true) { buffer, _ in converter.append(buffer) }
@@ -303,8 +347,83 @@ final class CallAudio {
         plainEngine = engine
     }
 
+    /// Hearing the bot's browser and speaking to the virtual mic. Either can fail on its own (no BlackHole yet): the call
+    /// still runs, and says why.
+    private func openOwnAccount(_ setup: XAccountSetup) {
+        if let deviceUID = setup.outputDeviceUID {
+            let player = DeviceVoicePlayer(channel: channel)
+            do {
+                try player.start(deviceUID: deviceUID, fullVolume: true)
+                virtualMic = player
+                callLog("📞 Space: Vello's voice goes to \(player.deviceName)")
+            } catch {
+                reportOwnAccountProblem("Vello's voice can't reach the Space: \(error.localizedDescription)")
+            }
+        } else {
+            reportOwnAccountProblem("BlackHole isn't installed, so the Space can't hear Vello. Install BlackHole 2ch and pick it in Settings › Voice › Vello's X account.")
+        }
+        if setup.monitors {
+            let player = DeviceVoicePlayer(channel: SharedEnginePlayerChannel())
+            do {
+                try player.start(deviceUID: nil, fullVolume: false)
+                monitor = player
+            } catch {
+                callLog("📞 Space: couldn't also play Vello on this Mac: \(error.localizedDescription)")
+            }
+        }
+        guard let browser = setup.browser else {
+            reportOwnAccountProblem("No bot's browser is picked, so Vello can't hear the Space.")
+            return
+        }
+        let converter = self.converter
+        switch BotBrowserHearing.method {
+        case .processTap:
+            let tap = BotBrowserAudioTap(browserBundleID: browser.bundleID, browserAppPath: setup.browserAppURL?.path)
+            tap.onSamples = { buffer in converter.append(buffer) }
+            tap.onProblem = { [weak self] message in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.reportOwnAccountProblem(message) } }
+            }
+            tap.start()
+            browserTap = tap
+        case .screenCapture:
+            let screenAudio = BotBrowserScreenAudio(browserBundleID: browser.bundleID, browserAppPath: setup.browserAppURL?.path)
+            screenAudio.onSamples = { buffer in converter.append(buffer) }
+            screenAudio.onProblem = { [weak self] message in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.reportOwnAccountProblem(message) } }
+            }
+            browserScreenAudio = screenAudio
+            Task { await screenAudio.start() }
+            callLog("📞 Space: hearing the bot's browser through screen capture audio")
+        }
+    }
+
+    private func reportOwnAccountProblem(_ message: String) {
+        ownAccountProblem = message
+        callLog("📞 Space: \(message)")
+        onOwnAccountProblem?(message)
+    }
+
+    /// What the own-account sound is doing, for `ownAccountStatus`.
+    var ownAccountReport: [String: Any] {
+        ["hearingMethod": BotBrowserHearing.method.rawValue,
+         "hearing": browserTap?.tappedProcessNames ?? browserScreenAudio?.capturedAppNames ?? [],
+         "buffersHeard": browserTap?.buffersHeard ?? browserScreenAudio?.buffersHeard ?? 0,
+         "loudestHeardDecibels": browserTap?.loudestDecibels ?? browserScreenAudio?.loudestDecibels ?? -100,
+         "hearingProblem": browserTap?.lastError ?? browserScreenAudio?.lastError ?? "",
+         "voiceDevice": virtualMic?.deviceName ?? "", "monitor": monitor != nil, "problem": ownAccountProblem ?? "",
+         "voiceEngineRunning": channel.isEngineRunning, "loudestVoiceDecibels": loudestDecibelsSinceReset]
+    }
+
     func close() {
         stopVoice()
+        browserTap?.stop()
+        browserTap = nil
+        browserScreenAudio?.stop()
+        browserScreenAudio = nil
+        virtualMic?.stop()
+        virtualMic = nil
+        monitor?.stop()
+        monitor = nil
         if isEchoCancelled { hub.stopVoiceProcessingCapture() }
         plainEngine?.inputNode.removeTap(onBus: 0)
         plainEngine?.stop()
@@ -322,6 +441,10 @@ final class CallAudio {
 
     /// Plays this after what's already queued.
     func play(_ buffer: AVAudioPCMBuffer) {
+        // A Space's virtual mic engine can stop under a device change: started again before anything is lost.
+        virtualMic?.ensureRunning()
+        writeTee(buffer)
+        monitor?.ensureRunning()
         if !segmentOpen {
             channel.startSegment(rate: 1)
             segmentOpen = true
@@ -329,6 +452,14 @@ final class CallAudio {
         let turn = generation
         scheduled += 1
         voiceLevel = Self.level(of: buffer)
+        // The owner listening along on this Mac: the same voice, on its own player, not counted for when the turn ends.
+        if let monitor {
+            if !monitorSegmentOpen {
+                monitor.channel.startSegment(rate: 1)
+                monitorSegmentOpen = true
+            }
+            _ = monitor.channel.schedule(buffer) {}
+        }
         let accepted = channel.schedule(buffer) { [weak self] in
             guard let self, self.generation == turn else { return }
             self.scheduled -= 1
@@ -337,10 +468,58 @@ final class CallAudio {
                 self.onDrained?()
             }
         }
-        if !accepted {
+        if accepted {
+            loudestDecibelsSinceReset = max(loudestDecibelsSinceReset, Self.decibels(of: buffer))
+        } else {
             scheduled -= 1
             if scheduled == 0 { onDrained?() }
         }
+    }
+
+    /// The owner's clip, once, into the Space's virtual mic only (never the monitor or this Mac's speakers), `gainDecibels`
+    /// down, as one mono buffer. Its length in seconds, or nil when it couldn't be read or played.
+    @discardableResult
+    func playClip(_ url: URL, gainDecibels: Double) -> TimeInterval? {
+        guard let virtualMic else { return nil }
+        virtualMic.ensureRunning()
+        guard let file = try? AVAudioFile(forReading: url),
+              let read = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: read)) != nil, read.frameLength > 0, let channels = read.floatChannelData,
+              let mono = AVAudioPCMBuffer(pcmFormat: AVAudioFormat(standardFormatWithSampleRate: file.processingFormat.sampleRate, channels: 1)!,
+                                          frameCapacity: read.frameLength),
+              let out = mono.floatChannelData?[0] else {
+            callLog("📞 Space: couldn't read the clip \(url.lastPathComponent)")
+            return nil
+        }
+        let gain = Float(pow(10, gainDecibels / 20))
+        let channelCount = Int(read.format.channelCount)
+        for frame in 0..<Int(read.frameLength) {
+            var sum: Float = 0
+            for channel in 0..<channelCount { sum += channels[channel][frame] }
+            out[frame] = max(-1, min(1, sum / Float(channelCount) * gain))
+        }
+        mono.frameLength = read.frameLength
+        writeTee(mono)
+        if !segmentOpen {
+            channel.startSegment(rate: 1)
+            segmentOpen = true
+        }
+        let turn = generation
+        scheduled += 1
+        let accepted = channel.schedule(mono) { [weak self] in
+            guard let self, self.generation == turn else { return }
+            self.scheduled -= 1
+            if self.scheduled == 0 {
+                self.voiceLevel = 0
+                self.onDrained?()
+            }
+        }
+        guard accepted else {
+            scheduled -= 1
+            return nil
+        }
+        loudestDecibelsSinceReset = max(loudestDecibelsSinceReset, Self.decibels(of: mono))
+        return Double(mono.frameLength) / file.processingFormat.sampleRate
     }
 
     /// Silence, now. What was queued is dropped.
@@ -350,6 +529,15 @@ final class CallAudio {
         segmentOpen = false
         voiceLevel = 0
         channel.stop()
+        monitorSegmentOpen = false
+        monitor?.channel.stop()
+    }
+
+    private static func decibels(of buffer: AVAudioPCMBuffer) -> Double {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return -100 }
+        var sum: Float = 0
+        for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
+        return 20 * log10(Double(max(sqrt(sum / Float(buffer.frameLength)), 0.000_01)))
     }
 
     private static func level(of buffer: AVAudioPCMBuffer) -> CGFloat {

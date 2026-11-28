@@ -63,27 +63,41 @@ struct BotTeamsSettingsContent: View {
     private func teamCard(_ team: ReadyMadeTeam) -> some View {
         let isOpen = openTeamIDs.contains(team.id)
         let isBuiltIn = ReadyMadeTeams.isBuiltIn(team.id)
+        let live = TeamLive.of(team, in: store)
+        let accent = Self.accent(for: team, live: live)
         return TheoSection(title: "") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(team.name).font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
-                    if !isBuiltIn { chip("Yours") } else if ReadyMadeTeams.isChanged(team) { chip("Changed") }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    teamBadge(team, live: live, accent: accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(team.name).font(TheoType.headline).foregroundColor(DS.Colors.textPrimary)
+                            if !isBuiltIn { chip("Yours") } else if ReadyMadeTeams.isChanged(team) { chip("Changed") }
+                        }
+                        if !team.purpose.isEmpty {
+                            Text(team.purpose).font(TheoType.caption).foregroundColor(DS.Colors.textSecondary).lineLimit(2)
+                        }
+                    }
                     Spacer(minLength: 8)
-                    Text("\(team.members.count) bots").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                    if live.isAdded {
+                        TeamTallyPill(states: live.states(in: store))
+                            .help(live.copies > 1 ? "The first of \(live.copies) copies in your sidebar." : "In your sidebar now.")
+                    } else {
+                        Text("Not in Vello yet · \(team.members.count) bots").font(TheoType.caption).foregroundColor(DS.Colors.textTertiary)
+                    }
                 }
-                if !team.purpose.isEmpty {
-                    Text(team.purpose).font(TheoType.body).foregroundColor(DS.Colors.textSecondary).fixedSize(horizontal: false, vertical: true)
-                }
-                memberRow(team.manager, isManager: true, showsJob: true)
+                TeamStage(live: live, accent: accent) { bot in BotsSelection.shared.pane = .bot(bot.id) }
                 if isOpen {
+                    memberRow(team.manager, isManager: true, showsJob: true)
                     ForEach(Array(team.workers.enumerated()), id: \.offset) { _, worker in memberRow(worker, isManager: false, showsJob: true) }
-                } else {
-                    Text("Reporting to \(team.manager.name): " + TeamBuildOrder.listedInWords(team.workers.map(\.name)) + ".")
-                        .font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 24)
                 }
                 HStack(spacing: 8) {
-                    Button("Add to Vello") { add(team) }.buttonStyle(.theoPrimary).pointerCursor()
+                    if let section = live.section {
+                        Button("Open team") { BotsSelection.shared.pane = .category(section.id) }.buttonStyle(.theoPrimary).pointerCursor()
+                        Button("Add another copy") { add(team) }.buttonStyle(.theoSecondary).pointerCursor()
+                    } else {
+                        Button("Add to Vello") { add(team) }.buttonStyle(.theoPrimary).pointerCursor()
+                    }
                     Button("Edit") { editing = team }.buttonStyle(.theoSecondary).pointerCursor()
                     Button(isOpen ? "Hide jobs" : "Show every job") {
                         if isOpen { openTeamIDs.remove(team.id) } else { openTeamIDs.insert(team.id) }
@@ -129,6 +143,24 @@ struct BotTeamsSettingsContent: View {
                     Text(member.does).font(TheoType.caption).foregroundColor(DS.Colors.textTertiary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    /// The team's colour: its category's once added, otherwise one picked from its id the way a new category's is.
+    static func accent(for team: ReadyMadeTeam, live: TeamLive) -> Color {
+        if let section = live.section { return Color(hex: CategoryTile.swatch(for: section).from) }
+        let index = Int(team.id.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) & 0xFFFF }) % BotPalette.swatches.count
+        return Color(hex: BotPalette.swatches[index].from)
+    }
+
+    /// The category's tile once added; a quiet tile in the team's colour before.
+    @ViewBuilder private func teamBadge(_ team: ReadyMadeTeam, live: TeamLive, accent: Color) -> some View {
+        if let section = live.section {
+            CategoryTile(section: section, size: 34)
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.18))
+                .overlay(Image(systemName: "person.3.fill").font(.system(size: 13, weight: .semibold)).foregroundColor(accent))
+                .frame(width: 34, height: 34)
         }
     }
 

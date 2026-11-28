@@ -456,6 +456,8 @@ enum BotRunner {
                          // Bash outright: Claude Code lets read-only commands (ls, cat, grep) run in the working folder without a rule.
                          ["Bash"] + otherBotsFolders(than: bot.id)
             if let effort = bot.effort, !effort.isEmpty { arguments += ["--effort", effort] }
+            // Chrome's tools are built into Claude Code and only there when it's asked for them.
+            if bot.apps.contains("chrome"), BotConnectors.claudeHasChrome { arguments.append("--chrome") }
             var settings: [String: Bool] = [:]
             if let thinking = bot.thinking { settings["alwaysThinkingEnabled"] = thinking }
             // Fast mode only runs on Opus and Fable (ClickyCore `ClaudeFastMode`). Asked for on another model, Claude Code would

@@ -213,7 +213,7 @@ public struct CallBracketLineStream: Sendable {
     private static let longestHead = 16
     private static let maximumHeld = 1600
     /// Tags with no colon that are dropped too.
-    private static let bareTags: Set<String> = ["SILENT"]
+    private static let bareTags: Set<String> = ["SILENT", "PASS", "BOSS"]
 
     public init() {}
 

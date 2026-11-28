@@ -96,22 +96,26 @@ public enum CallGroupMode {
     public struct HeardLine: Equatable, Sendable {
         public var isOwner: Bool
         public var text: String
+        /// The name read off the Space's screen for who said it, when Vello is in the Space on its own X account
+        /// (`CallOwnAccount`). Nil: someone whose name couldn't be read, labelled "Someone".
+        public var speaker: String?
 
-        public init(isOwner: Bool, text: String) {
+        public init(isOwner: Bool, text: String, speaker: String? = nil) {
             self.isOwner = isOwner
             self.text = text
+            self.speaker = speaker
         }
     }
 
     /// `lines` with `text` added: joined to the last line when the same voice is still talking.
-    public static func adding(_ text: String, isOwner: Bool, to lines: [HeardLine]) -> [HeardLine] {
+    public static func adding(_ text: String, isOwner: Bool, speaker: String? = nil, to lines: [HeardLine]) -> [HeardLine] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return lines }
         var lines = lines
-        if let last = lines.last, last.isOwner == isOwner {
+        if let last = lines.last, last.isOwner == isOwner, last.speaker == speaker {
             lines[lines.count - 1].text = last.text + " " + trimmed
         } else {
-            lines.append(HeardLine(isOwner: isOwner, text: trimmed))
+            lines.append(HeardLine(isOwner: isOwner, text: trimmed, speaker: speaker))
         }
         return lines
     }
@@ -124,7 +128,7 @@ public enum CallGroupMode {
     /// The lines as they're shown and saved: "Addy: …" and "Someone: …", one per line.
     public static func labelled(_ lines: [HeardLine], owner: String) -> String {
         let ownerWord = hasNoName(owner) ? "Owner" : owner
-        return lines.map { ($0.isOwner ? ownerWord : "Someone") + ": " + $0.text }.joined(separator: "\n")
+        return lines.map { ($0.isOwner ? ownerWord : ($0.speaker ?? "Someone")) + ": " + $0.text }.joined(separator: "\n")
     }
 
     /// Passes in a row after which Vello is nudged to join in. On the Air (24 Nov, build 202611242224) it let 60 turns in

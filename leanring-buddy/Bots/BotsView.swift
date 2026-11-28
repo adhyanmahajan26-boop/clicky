@@ -1063,7 +1063,10 @@ struct BotChatScreen: View {
             Spacer()
             // Every bot's own chat: the call is one click away, not only under More. Group chats have none, and Pointer
             // Assistant has its own push-to-talk.
-            if let callableBot = bot, callableBot.id != BotsStore.clickyID {
+            // The X Space bot only joins Spaces: its button is Join a Space, never a call.
+            if bot?.id == BotsStore.xSpaceBotID {
+                JoinSpaceButton()
+            } else if let callableBot = bot, callableBot.id != BotsStore.clickyID {
                 Button { TheoCallController.start(botID: callableBot.primary ? nil : callableBot.id) } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "phone.fill").font(.system(size: 12, weight: .semibold))
@@ -1083,7 +1086,7 @@ struct BotChatScreen: View {
             }
             HairlineIcon(name: "more", size: 18, color: DS.Colors.textSecondary).frame(width: 30, height: 30)
                 .coverMenu(help: "More") {
-                    if let callableBot = bot, callableBot.id != BotsStore.clickyID {
+                    if let callableBot = bot, callableBot.id != BotsStore.clickyID, callableBot.id != BotsStore.xSpaceBotID {
                         Button { TheoCallController.start(botID: callableBot.primary ? nil : callableBot.id) } label: { Label("Call \(callableBot.name)", systemImage: "phone") }
                     }
                     Button {
@@ -1783,7 +1786,8 @@ struct ConnectorsScreen: View {
                 }
             }
             Spacer(minLength: 12)
-            StatusPill(text: pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
+            // Composio waits for an API key, not a sign-in.
+            StatusPill(text: hubRecord?.isComposio == true && state == .needsSignIn ? "Needs your key" : pill.text, tone: PixelCard<EmptyView>.legacy(pill.tone))
             Group {
                 switch state {
                 case .needsSignIn where hubRecord?.takesPastedToken == true:

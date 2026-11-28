@@ -155,6 +155,24 @@ enum CallPrompt {
                                        recentChat: Array(recent), carriedOverLimit: carriedOverCharacters)
     }
 
+    /// A Space on Vello's own X account: Vello's persona and the Space's rules, and nothing from the owner's chats, team,
+    /// runs or memory, since everything it knows it could say in public (ClickyCore `CallOwnAccount`).
+    @MainActor
+    static func ownAccount(bot: NativeBot?, handle: String, usesSarvamVoice: Bool, language: CallSettings.Language,
+                           canSearchTheWeb: Bool = false) -> String {
+        let theo = bot
+        let fixedLanguage: String?
+        switch language {
+        case .english: fixedLanguage = "English"
+        case .hindi: fixedLanguage = "Hindi, in Devanagari"
+        case .auto, .hinglish: fixedLanguage = nil
+        }
+        // Hinglish in a Space is written in Roman letters, one script per reply (`CallOwnAccount.languageRule`).
+        let rule = CallOwnAccount.languageRule(followsSpeaker: true, hinglishInDevanagari: language.meansHinglish ? false : nil, fixedLanguage: fixedLanguage)
+        return CallOwnAccount.systemPrompt(personaHead: theo?.personaHead ?? "You are Vello.", handle: handle, owner: BotPrompts.ownerName,
+                                           botName: theo?.name ?? "Vello", languageRule: rule, canSearchTheWeb: canSearchTheWeb)
+    }
+
     /// Which language to answer in.
     static func languageRule(owner: String, usesSarvamVoice: Bool, language: CallSettings.Language) -> String {
         switch language {
@@ -242,6 +260,8 @@ final class TheoCallSession: ObservableObject {
         var wasOnlyHeard = false
         /// Heard in group mode: the owner and other people, marked by who it sounded like ("Addy: …", "Someone: …").
         var isGroupTalk = false
+        /// In a Space: written but never heard there, since the voice couldn't play it even after a second try.
+        var wasNotHeard = false
     }
 
     /// One turn's timings, from the moment the owner's voice stopped.
@@ -270,7 +290,70 @@ final class TheoCallSession: ObservableObject {
     /// lines are marked by who they sounded like, other people's words never throw an answer away, and Vello answers only
     /// when spoken to or when it has something to add.
     @Published private(set) var isGroupMode = false
+    /// In a Space on Vello's own X account, who the Space's screen shows talking now (`SpaceSpeakerWatcher`).
+    @Published private(set) var currentSpeaker: String?
     let startedAt = Date()
+    /// A Space joined on Vello's own X account: heard only from the bot's browser, spoken into its virtual mic, in group
+    /// mode for good, with nobody at the mic counted as the owner (ClickyCore `CallOwnAccount`).
+    let ownAccount: XAccountSetup?
+    var isOwnAccount: Bool { ownAccount != nil }
+    /// Vello's call controls (its hands on the screen, orders, routines, switches): only on its own call with the owner.
+    /// In a Space on its own account everyone it hears is a stranger, so it only talks.
+    private var hasCallControls: Bool { isVellosOwnBot && !isOwnAccount }
+    private var speakerWatcher: SpaceSpeakerWatcher?
+    /// When the last words were given a speaker: the next words' name is the one seen most since then.
+    private var wordsLastNamedAt: Date?
+    /// The Space's prompt and its Claude brain, kept so the brain can be switched to the local model and back mid-Space
+    /// (`switchSpaceBrain`).
+    private var spacePrompt = ""
+    private var spaceClaudeBrain: ConversationBrain?
+
+    /// A standing instruction for this Space from the owner (debug inbox `ownAccountNote`), added to every turn.
+    var spaceNote: String?
+    /// Which forms the bot uses for itself in Hindi, from its voice or the owner's setting (ClickyCore `SpaceSelfGender`).
+    private var spaceSelfGender: SpaceSelfGender {
+        XAccountSettings.selfGender(sarvamSpeaker: CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .sarvam) ?? CallOwnAccount.defaultSarvamSpeaker)
+    }
+    /// The owner's clip on its phrase (ClickyCore `SpaceClipTrigger`): the last two finals heard, so a phrase split across
+    /// them still counts, when it last played, and the wait for quiet before it plays.
+    private var recentFinalsForClip: [String] = []
+    private var clipCooldown = SpaceClipCooldown()
+    private var clipTask: Task<Void, Never>?
+    private(set) var clipLog: [[String: Any]] = []
+    /// The last sentences sent to the voice in a Space, exactly as the voice got them (`ownAccountStatus`).
+    private var spokenLately: [String] = []
+    /// Someone talked over the bot in a Space: it finishes what's already playing and says no more this turn
+    /// (ClickyCore `SpaceInterruption`).
+    private var speaksNoMoreThisTurn = false
+    /// Someone talked over the bot in a Space: it says the rest of the sentence it's on, then no more this turn.
+    private var stopsAfterThisSentence = false
+    /// In a Space the voice gets whole sentences (ClickyCore `SpaceSentenceGatherer`).
+    private var sentenceGatherer = SpaceSentenceGatherer()
+    /// Sentences ready while someone was talking: they start at real quiet, or are dropped (`SpaceFloor`).
+    private var heldSentences: [String] = []
+    private var heldSentencesSince: Date?
+    private var sentenceStartWaiter: Task<Void, Never>?
+    private var hasStartedSpeakingThisTurn = false
+    private var endOfTurnWaits = false
+    /// New words were heard from the Space since the turn being answered was let go: a held reply's moment has passed.
+    private var talkMovedOnSinceRelease = false
+    /// When the Space's audio last went quiet.
+    private var spaceVoiceEndedAt: Date?
+    /// The quiet the turn being answered needs before the bot's voice starts (`CallOwnAccount.pauseBeforeAnswering`).
+    private var requiredQuietBeforeVoice = CallOwnAccount.pauseBeforeAnswering
+    /// How long another voice has gone on while the bot speaks (`SpaceFloor.yields`).
+    private var talkOverSeconds = 0.0
+    /// Told to stop (a stop word): it says nothing until it's named again or the boss tells it to talk.
+    private(set) var isSilenced = false
+    private var silencedAt: Date?
+    /// Lines heard while silenced, given to the brain with the next turn it answers.
+    private var silencedBacklog: [CallGroupMode.HeardLine] = []
+    /// The last turn's reply wasn't heard in the Space: the brain is told with the next turn, so it doesn't count it as said.
+    private var lastReplyWasNotHeard = false
+    /// The turn being answered had a line from the boss, who may switch the stance ([STANCE: …]).
+    private var turnHadTheBoss = false
+    /// Waiting to take a partial as the words when the ears' final is slow (`takePartialIfTheFinalIsSlow`).
+    private var earlyPartialTask: Task<Void, Never>?
 
     private let audio: CallAudio
     private let isLive: Bool
@@ -343,6 +426,7 @@ final class TheoCallSession: ObservableObject {
     /// The turn Vello is answering now: if the owner turns out to be still talking before any of the answer is heard, the
     /// answer is dropped and the turn carries on (`heardFinal`).
     private var lastReleasedTurn: (words: String, lineID: UUID?)?
+    private var lastReleasedAt: Date?
     /// Some of this turn's answer has been heard.
     private var turnHasSounded = false
     /// Times the answer being written now was dropped and started over with more words (`CallCutIn`).
@@ -355,6 +439,8 @@ final class TheoCallSession: ObservableObject {
     private var turnActedOnTheCall = false
     /// When the ears last gave words in a partial: the owner is still going, so the turn isn't let go yet.
     private var lastPartialWordsAt: Date?
+    /// Words in the last partial, so a partial that only respells them doesn't count as more talk (`heardPartial`).
+    private var lastPartialWordCount = 0
     /// Only the voice near the Mac counts (Settings › Voice, on by default): someone talking across the room opens the
     /// gate too, and the ears write their words down, so a stretch of speech counts only when it's about as loud as the
     /// owner's own (ClickyCore `CallNearVoice`).
@@ -386,11 +472,16 @@ final class TheoCallSession: ObservableObject {
     private var turnPassed = false
 
     /// `botID` nil, or Vello's own bot's id: the call with Vello. Any other bot: a call with that bot.
-    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil) {
+    init(store: BotsStore, hub: AudioEngineHub, isLive: Bool, botID: String? = nil, ownAccount: XAccountSetup? = nil) {
         self.store = store
         self.isLive = isLive
-        audio = CallAudio(hub: hub, isLive: isLive)
-        if let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
+        self.ownAccount = ownAccount
+        audio = CallAudio(hub: hub, isLive: isLive, ownAccount: ownAccount)
+        // A Space on the X account is always the X Space bot, a bot of its own apart from Vello.
+        if ownAccount != nil {
+            bot = store.ensureXSpaceBot()
+            isVellosOwnBot = false
+        } else if let chosen = botID.flatMap({ store.bot($0) }), !chosen.primary {
             bot = chosen
             isVellosOwnBot = false
         } else {
@@ -407,14 +498,31 @@ final class TheoCallSession: ObservableObject {
         liveActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Voice call with \(botName)")
         audio.onBlock = { [weak self] block in self?.handle(block) }
         audio.onDrained = { [weak self] in self?.voiceDrained() }
+        audio.onOwnAccountProblem = { [weak self] message in self?.problem = message }
         do {
             try audio.open()
         } catch {
             problem = "The microphone didn't start."
             callLog("📞 Call audio: \(error)")
         }
-        // Theo's voice reaches the mic with no echo cancelling: it takes a much louder voice to count as a cut-in.
-        if isLive && !audio.isEchoCancelled { gate.bargeInMarginDecibels = 34 }
+        if let ownAccount {
+            problem = audio.ownAccountProblem
+            if let browser = ownAccount.browser {
+                let watcher = SpaceSpeakerWatcher(browserBundleID: browser.bundleID, handle: ownAccount.handle, botName: botName,
+                                                  displayName: ownAccount.displayName)
+                watcher.onCurrentSpeaker = { [weak self] name in
+                    if self?.currentSpeaker != name { self?.currentSpeaker = name }
+                }
+                speakerWatcher = watcher
+                // The first look loads Vision and finds the window, which took 17 s on the Studio: done now, while the
+                // Space is quiet, so the first speaker is named.
+                Task { await watcher.lookOnce() }
+            }
+            callLog("📞 Space: joined as \(ownAccount.handle.isEmpty ? "Vello's own account" : ownAccount.handle), hearing \(ownAccount.browser?.name ?? "no browser")")
+        }
+        // Theo's voice reaches the mic with no echo cancelling: it takes a much louder voice to count as a cut-in. The
+        // bot's browser never hears Vello's voice, so a Space on its own account needs no margin.
+        if isLive && !audio.isEchoCancelled && !isOwnAccount { gate.bargeInMarginDecibels = 34 }
         startVoice()
         startEars()
         // Any other bot thinks with its own engine and model. One that can't take a call says why and what fixes it.
@@ -433,11 +541,19 @@ final class TheoCallSession: ObservableObject {
             }
         }
         brainNameForWords = BrainAvailability.name(of: brainSetting)
-        // The call starts with as much of the chat as its brain has room for.
-        let prompt = CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
-                                       carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
-        let brain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
-                                            promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low")
+        // The call starts with as much of the chat as its brain has room for. A public Space gets none of it.
+        // A Space may search the web when the owner turned it on and the brain is Claude Code's (`XAccountSettings.webSearch`).
+        let searchesTheWeb = isOwnAccount && XAccountSettings.webSearch && BrainModel(setting: brainSetting).isClaude
+        let prompt = ownAccount.map { CallPrompt.ownAccount(bot: bot, handle: $0.handle, usesSarvamVoice: voice is SarvamCallVoice, language: language,
+                                                            canSearchTheWeb: searchesTheWeb) }
+            ?? CallPrompt.system(store: store, bot: bot, isVellosOwnBot: isVellosOwnBot, usesSarvamVoice: voice is SarvamCallVoice, language: language,
+                                 carriedOverCharacters: CallPrompt.carriedOverCharacters(brainSetting: brainSetting))
+        let claudeBrain = ConversationBrains.make(model: brainSetting, systemPrompt: prompt,
+                                                  promptFileName: isVellosOwnBot ? CallPrompt.fileName : CallPrompt.otherBotFileName, effort: "low",
+                                                  tools: searchesTheWeb ? ["WebSearch"] : [])
+        spacePrompt = prompt
+        spaceClaudeBrain = claudeBrain
+        let brain = isOwnAccount ? makeSpaceBrain() : claudeBrain
         brain.onEnded = { [weak self] message in self?.problem = message }
         self.brain = brain
         do {
@@ -446,6 +562,13 @@ final class TheoCallSession: ObservableObject {
             problem = error.localizedDescription
         }
         state = .listening
+        if isOwnAccount {
+            // Group mode for good. No hello: Vello may not be a speaker yet, and nobody asked. A first turn it lets pass
+            // warms up the brain, so the first answer in the Space is as quick as the rest.
+            setGroupMode(true)
+            ask("(You just joined the Space. Nobody has spoken to you yet: write only \(CallGroupMode.passMarker).)")
+            return
+        }
         // Called with "hey vello, …": the words said with the name are the first turn, answered straight away.
         if !openingWords.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             takeWordsSaidBeforeTheCall(openingWords)
@@ -473,7 +596,8 @@ final class TheoCallSession: ObservableObject {
         state = .ended
         heldTurnTask?.cancel()
         screenTurnPump?.cancel()
-        if isVellosOwnBot { CompanionManager.current?.actionTaskController.endCallTask() }
+        speakerWatcher?.stop()
+        if hasCallControls { CompanionManager.current?.actionTaskController.endCallTask() }
         if let liveActivity { ProcessInfo.processInfo.endActivity(liveActivity) }
         liveActivity = nil
         ears?.stop()
@@ -481,7 +605,7 @@ final class TheoCallSession: ObservableObject {
         brain?.stop()
         audio.close()
         store.recordCall(lines.filter { !$0.text.isEmpty }.map { line in
-                             let prefix = line.wasOnlyHeard ? "(heard in listen mode) " : (line.isGroupTalk ? "(in the group) " : "")
+                             let prefix = line.wasOnlyHeard ? "(heard in listen mode) " : (line.isGroupTalk ? (isOwnAccount ? "(in the X Space) " : "(in the group) ") : "")
                              return (line.who == .addy, prefix + line.text)
                          },
                          startedAt: startedAt, botID: isVellosOwnBot ? nil : bot?.id)
@@ -498,8 +622,15 @@ final class TheoCallSession: ObservableObject {
         if let key = ProviderKeychain.get("sarvam") {
             let voiceLanguage = language.sarvamVoice
             let ownSpeaker = CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .sarvam)
-            let speaker = SarvamClient.speaker(ownSpeaker ?? SarvamVoiceConfig.speaker, in: voiceLanguage.setting)
-            let sarvam = SarvamCallVoice(audio: audio, apiKey: key, speaker: speaker, languageCode: voiceLanguage.code, pace: SarvamVoiceConfig.pace)
+            // In a Space: one fixed, even voice at a neutral pace, whatever Pointer Assistant's voice is set to.
+            let fallback = isOwnAccount ? CallOwnAccount.defaultSarvamSpeaker : SarvamVoiceConfig.speaker
+            // In a Space any of Sarvam's v4 voices is taken as picked (a Hindi one too: the voice gets Hindi in Devanagari);
+            // elsewhere the same person's voice in the call's language.
+            let picked = ownSpeaker ?? fallback
+            let speaker = isOwnAccount && SarvamClient.v4VoiceGroups.contains(where: { $0.speakers.contains(picked) })
+                ? picked : SarvamClient.speaker(picked, in: voiceLanguage.setting)
+            let pace = isOwnAccount ? CallOwnAccount.sarvamPace : SarvamVoiceConfig.pace
+            let sarvam = SarvamCallVoice(audio: audio, apiKey: key, speaker: speaker, languageCode: voiceLanguage.code, pace: pace)
             use(voice: sarvam)
         } else {
             use(voice: AppleCallVoice(audio: audio, voiceIdentifier: CallVoiceChoice.voiceID(saved: bot?.callVoice, engine: .apple)))
@@ -608,7 +739,9 @@ final class TheoCallSession: ObservableObject {
             return
         }
         micLevel = CGFloat(min(max((block.levelDecibels + 55) / 40, 0), 1))
-        let voiceIsOn = state == .speaking || audio.isVoicePlaying
+        // The bot's browser never hears Vello's own voice, so in a Space on its own account the gate needn't wait for a
+        // voice above it.
+        let voiceIsOn = (state == .speaking || audio.isVoicePlaying) && !isOwnAccount
         let now = Date()
         recentBlockLevels.append(block.levelDecibels)
         if recentBlockLevels.count > Self.onsetBlockCount { recentBlockLevels.removeFirst(recentBlockLevels.count - Self.onsetBlockCount) }
@@ -618,7 +751,8 @@ final class TheoCallSession: ObservableObject {
         switch event {
         case .speechStarted:
             stretchBlockLevels = recentBlockLevels
-            stretchSoundsLikeOwner = nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
+            // On its own account nobody heard is the owner, however loud.
+            stretchSoundsLikeOwner = !isOwnAccount && nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now)
             // In group mode every voice counts: the other people in the Space come out of a phone's speaker well below the
             // owner's level, and turning them away left Vello deaf to everyone but the owner (Air, 24 Nov).
             stretchIsNear = !nearVoiceOnly || isGroupMode || stretchSoundsLikeOwner
@@ -631,7 +765,7 @@ final class TheoCallSession: ObservableObject {
         case .speechEnded, nil:
             if gate.isSpeaking { stretchBlockLevels.append(block.levelDecibels) }
             // Someone far away was talking and the owner joined in, louder: from here it's the owner's.
-            if gate.isSpeaking, !stretchSoundsLikeOwner, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
+            if gate.isSpeaking, !isOwnAccount, !stretchSoundsLikeOwner, nearVoice.isNear(levelDecibels: recentBlockLevels.max() ?? block.levelDecibels, now: now) {
                 stretchSoundsLikeOwner = true
                 if !stretchIsNear {
                     stretchIsNear = true
@@ -644,6 +778,9 @@ final class TheoCallSession: ObservableObject {
         if isOwnerSpeaking && isTheOwnersOwnVoice { nearVoice.heardNearSpeech(at: now) }
         // The ears get the audio before the event is acted on, so the first words aren't missing.
         ears?.feed(block, isSpeech: isOwnerSpeaking)
+        // Who's talking is looked for on the Space's screen only while someone is.
+        speakerWatcher?.setSpeechGoingOn(gate.isSpeaking)
+        if isOwnAccount { applyTheFloorRules() }
         if ownerStartedTalking { speechStarted() }
         if event == .speechEnded {
             let wasTheOwner = stretchIsNear
@@ -655,6 +792,40 @@ final class TheoCallSession: ObservableObject {
             stretchBlockLevels = []
             if wasTheOwner { speechEnded() }
         }
+    }
+
+    /// In a Space, per 50 ms of the browser's audio: another voice that has gone on for more than 2 s while the bot talks
+    /// stops it at once and drops the rest of the reply; shorter sounds (a laugh, a "haan") don't (`SpaceFloor`).
+    private func applyTheFloorRules() {
+        if !gate.isSpeaking, spaceVoiceEndedAt == nil || talkOverSeconds > 0 { spaceVoiceEndedAt = Date() }
+        if gate.isSpeaking { spaceVoiceEndedAt = nil }
+        let botIsTalking = audio.isVoicePlaying || state == .speaking
+        talkOverSeconds = botIsTalking && gate.isSpeaking ? talkOverSeconds + CallAudioBlock.seconds : 0
+        if botIsTalking, SpaceFloor.yields(otherVoiceSeconds: talkOverSeconds) {
+            callLog("📞 Space: someone kept talking over it for 2 s, stopping")
+            talkOverSeconds = 0
+            stopSpeakingThisTurn()
+        }
+    }
+
+    /// Stops the voice at once and says nothing more of this reply.
+    private func stopSpeakingThisTurn() {
+        heldSentences = []
+        sentenceStartWaiter?.cancel()
+        sentenceStartWaiter = nil
+        speaksNoMoreThisTurn = true
+        bargeIn()
+    }
+
+    /// A stop word from anyone in the Space ("stop", "ruko", "bas", "chup", "Chotta Tirri stop"): the voice stops at once,
+    /// and the bot stays quiet until it's named again or its boss tells it to talk.
+    private func heardAStopWord(_ words: String) -> Bool {
+        guard SpaceStopWords.isStop(words, isAddressed: isAddressedInTheGroup(words)) else { return false }
+        if !isSilenced { callLog("📞 Space: told to stop (\(words)), staying quiet until named") }
+        if !isSilenced { silencedAt = Date() }
+        isSilenced = true
+        if replyInProgress || audio.isVoicePlaying || state == .speaking || !heldSentences.isEmpty { stopSpeakingThisTurn() }
+        return true
     }
 
     /// Words from the ears that came from someone else in the room: none of the owner's own voice near the Mac lately.
@@ -682,10 +853,15 @@ final class TheoCallSession: ObservableObject {
 
     /// The owner's words came in while Vello was still answering: if none of the answer was heard yet, the owner was just
     /// carrying on and the turn goes on as one; otherwise Vello stops.
-    private func ownerWordsCameDuringTheAnswer() {
+    private func ownerWordsCameDuringTheAnswer(_ words: String = "") {
         // In a group the talk goes on while Vello writes: those words wait and go with the next turn. Starting the answer
         // over for each of them meant it came late or never (Air, 24 Nov, in an X Space).
         if isGroupMode, replyInProgress, !turnHasSounded, !audio.isVoicePlaying { return }
+        // In a Space only the boss, or someone calling the bot by name and going on, stops it mid-sentence; anyone else
+        // lets it finish what's already playing. Stopping for everyone left half its answers unsaid (a public Space, 25 Nov).
+        // In a Space words alone never cut the bot off: only a voice that keeps going for 2 s does (`applyTheFloorRules`),
+        // or a stop word (`heardAStopWord`). Stopping for a few words left half its answers unsaid (a public Space, 25 Nov).
+        if isOwnAccount { return }
         if replyInProgress, !turnHasSounded, lastReleasedTurn != nil {
             // Started over twice already: the answer is kept, and the new words wait for it and are answered next.
             guard CallCutIn.restartsTheAnswer(restartsSoFar: restartsOfThisAnswer) else { return }
@@ -729,7 +905,7 @@ final class TheoCallSession: ObservableObject {
         if replyInProgress { brain?.interrupt() }
         replyInProgress = false
         // A screen turn cut off before its steps came: the task isn't left waiting for an answer that won't arrive.
-        if screenReplyWasCut, isVellosOwnBot { screenReplyEnded(failed: !replyHadBlock) }
+        if screenReplyWasCut, hasCallControls { screenReplyEnded(failed: !replyHadBlock) }
         flushTimer?.cancel()
         chunker = CallSpeechChunker()
         if let theoLineID, let index = lines.firstIndex(where: { $0.id == theoLineID }) {
@@ -756,6 +932,8 @@ final class TheoCallSession: ObservableObject {
     private func heardPartial(_ text: String) {
         // Vello's own voice coming back through the mic: not the owner, so no line and no turn.
         if isVellosOwnVoiceComingBack(text) || isSomeoneElseTalking() { return }
+        // A stop word acts on the fast partial words, before anything else.
+        if isOwnAccount { _ = heardAStopWord(text) }
         // A partial only stops Vello's voice. An answer not heard yet is started over only by a final with new words: a
         // partial often re-hears words already taken in other spellings, and starting over on it, then getting a final
         // that was only a repeat, asked the same turn again after another full pause (Air, 24 Nov: "137 words" let go
@@ -764,18 +942,50 @@ final class TheoCallSession: ObservableObject {
         if replyInProgress || audio.isVoicePlaying, !answerNotHeardYet,
            CallCutIn.bringsNewWords(text, alreadyHeard: wordsOfThisTurn,
                                     atLeast: isGroupMode ? CallGroupMode.partialWordsToCutIn : Self.partialWordsToCutIn) {
-            ownerWordsCameDuringTheAnswer()
+            ownerWordsCameDuringTheAnswer(text)
         }
         startAddyLine()
         lastWordsAt = Date()
-        lastPartialWordsAt = lastWordsAt
+        // In a Space only a partial with more words than the last restarts the wait for the end of the turn: Sarvam
+        // rewrites the same words in other spellings for a second or more after the voice stops, and every rewrite
+        // restarted it (a public Space, 26 Nov: turns let go 2.5 s after the voice stopped, not 0.5 to 1.3 s).
+        let partialWordCount = text.split(whereSeparator: { $0.isWhitespace }).count
+        if !isOwnAccount || partialWordCount > lastPartialWordCount { lastPartialWordsAt = lastWordsAt }
+        lastPartialWordCount = partialWordCount
         guard let index = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) else { return }
         lines[index].text = lines[index].id == heldTurnLineID && !heldTurnWords.isEmpty ? CallHeldWords.adding(text, to: heldTurnWords) : text
+        if isOwnAccount { takePartialIfTheFinalIsSlow(text) }
+    }
+
+    /// In a Space, someone who calls the bot by name and stops shouldn't wait for the ears' final words: Sarvam's came
+    /// 1.5 to 2 s after the voice stopped (Studio, 25 Nov), most of the wait before an answer. Once their voice has been
+    /// quiet for the addressed wait with no final yet, the last partial is taken as the words; the final that follows
+    /// with nothing new is dropped as a repeat, as usual.
+    private func takePartialIfTheFinalIsSlow(_ text: String) {
+        earlyPartialTask?.cancel()
+        let words = CallHeardWords.withoutRunawayRepeats(text)
+        guard !words.isEmpty, isAddressedInTheGroup(words) else { return }
+        earlyPartialTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, !Task.isCancelled, self.state != .ended else { return }
+                if self.gate.isSpeaking || self.replyInProgress { continue }
+                guard let speechEndedAt = self.speechEndedAt,
+                      Date().timeIntervalSince(speechEndedAt) >= self.releaseQuiet(for: words) else { continue }
+                self.earlyPartialTask = nil
+                callLog("📞 Space: took the words before the ears' final (\(words.split(separator: " ").count) words)")
+                self.heardFinal(words)
+                return
+            }
+        }
     }
 
     /// The ears give their words after about half a second of quiet, far less than people pause mid-thought. The words are
     /// held, and Vello answers only once the pause is a real one (`waitForTheEndOfTheTurn`).
     private func heardFinal(_ text: String) {
+        lastPartialWordCount = 0
+        earlyPartialTask?.cancel()
+        earlyPartialTask = nil
         let words = CallHeardWords.withoutRunawayRepeats(text)
         if !words.isEmpty, isVellosOwnVoiceComingBack(words) {
             // The ears wrote down Vello's own voice. Taking it as the owner cut Vello off mid-answer (the voice stopped and
@@ -803,9 +1013,17 @@ final class TheoCallSession: ObservableObject {
         // The same goes for a stretch of speech the ears hand over again while a turn is held (`CallHeldWords`).
         let isRepeat = !words.isEmpty && (
             (lastReleasedTurn != nil && heldTurnWords.isEmpty && !CallCutIn.bringsNewWords(words, alreadyHeard: wordsOfThisTurn))
+            || (isOwnAccount && heldTurnWords.isEmpty && lastReleasedTurn.map {
+                CallOwnAccount.isTheSameTurnAgain(words, released: $0.words, secondsSinceRelease: Date().timeIntervalSince(lastReleasedAt ?? .distantPast))
+            } == true)
             || (!heldTurnWords.isEmpty && CallHeldWords.adding(words, to: heldTurnWords) == heldTurnWords.trimmingCharacters(in: .whitespacesAndNewlines)))
         if isRepeat { callLog("📞 Call: the ears repeated words already taken (\(words.split(separator: " ").count) words)") }
-        if !words.isEmpty, !isRepeat, replyInProgress || audio.isVoicePlaying { ownerWordsCameDuringTheAnswer() }
+        if isOwnAccount, !words.isEmpty, !isRepeat, listenForTheClip(words) { return }
+        if isOwnAccount, !words.isEmpty, !isRepeat {
+            _ = heardAStopWord(words)
+            if replyInProgress || !heldSentences.isEmpty || audio.isVoicePlaying { talkMovedOnSinceRelease = true }
+        }
+        if !words.isEmpty, !isRepeat, replyInProgress || audio.isVoicePlaying { ownerWordsCameDuringTheAnswer(words) }
         let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive })
         if words.isEmpty || isRepeat {
             // A cough, or the room. No new words; whatever was held still waits for its pause.
@@ -827,7 +1045,11 @@ final class TheoCallSession: ObservableObject {
         if isGroupMode {
             // Only the part that's new goes on the speaker's line (`CallHeldWords` leaves a repeat out).
             let added = heldTurnWords.hasPrefix(wordsHeldBefore) ? String(heldTurnWords.dropFirst(wordsHeldBefore.count)) : words
-            heldGroupLines = CallGroupMode.adding(added, isOwner: wordsSoundLikeTheOwner(), to: heldGroupLines)
+            if isOwnAccount {
+                heldGroupLines = CallGroupMode.adding(added, isOwner: false, speaker: speakerOfWordsJustHeard(), to: heldGroupLines)
+            } else {
+                heldGroupLines = CallGroupMode.adding(added, isOwner: wordsSoundLikeTheOwner(), to: heldGroupLines)
+            }
         }
         if let liveIndex {
             lines[liveIndex].text = heldTurnWords
@@ -844,6 +1066,154 @@ final class TheoCallSession: ObservableObject {
         waitForTheEndOfTheTurn()
     }
 
+    /// The owner's clip, when someone in the Space says its phrase (ClickyCore `SpaceClipTrigger`): the reply to those words
+    /// is dropped, and once there's 0.7 s of quiet (3 s at most) the clip plays once into the Space, then the bot listens on.
+    /// True when the words were the clip's phrase and were taken for it.
+    private func listenForTheClip(_ words: String) -> Bool {
+        recentFinalsForClip.append(words)
+        if recentFinalsForClip.count > 2 { recentFinalsForClip.removeFirst(recentFinalsForClip.count - 2) }
+        guard let phrase = SpaceClipTrigger.phraseSaid(in: recentFinalsForClip.joined(separator: " "), among: XAccountSettings.clipPhrases()) else { return false }
+        recentFinalsForClip = []
+        let now = Date()
+        guard clipCooldown.allows(at: now), clipTask == nil else {
+            callLog("📞 Space: heard \"\(phrase.name)\" again within \(Int(SpaceClipTrigger.cooldownSeconds)) s, not playing the clip")
+            return false
+        }
+        guard let file = XAccountSettings.clipFile(named: phrase.clip) else {
+            callLog("📞 Space: heard \"\(phrase.name)\" but its clip file is missing")
+            clipLog.append(["at": now.timeIntervalSince1970, "words": words, "played": false, "why": "clip missing"])
+            return false
+        }
+        clipCooldown.played(at: now)
+        callLog("📞 Space: heard \"\(phrase.name)\" (\(words)), playing its clip")
+        // The reply to these words, held or already being written, is dropped.
+        heldTurnTask?.cancel()
+        heldTurnTask = nil
+        heldTurnWords = ""
+        heldGroupLines = []
+        heldTurnStartedAt = nil
+        isHoldingTurn = false
+        if let heldTurnLineID, let index = lines.firstIndex(where: { $0.id == heldTurnLineID }) {
+            lines[index].isLive = false
+        } else if let liveIndex = lines.lastIndex(where: { $0.who == .addy && $0.isLive }) {
+            lines[liveIndex].text = words
+            lines[liveIndex].isLive = false
+        }
+        heldTurnLineID = nil
+        if replyInProgress || audio.isVoicePlaying || state == .speaking || !heldSentences.isEmpty { stopSpeakingThisTurn() }
+        if state == .thinking || state == .userSpeaking { state = .listening }
+        let heardAt = now
+        clipTask = Task { @MainActor [weak self] in
+            var waited = 0.0
+            while !Task.isCancelled, let self, self.state != .ended {
+                let quiet = self.gate.isSpeaking ? 0 : self.spaceVoiceEndedAt.map { Date().timeIntervalSince($0) } ?? 10
+                waited = Date().timeIntervalSince(heardAt)
+                if quiet >= SpaceClipTrigger.quietBeforePlaying || waited >= SpaceClipTrigger.longestWaitForQuiet { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard let self, self.state != .ended else { return }
+            let seconds = self.audio.playClip(file, gainDecibels: SpaceClipTrigger.gainDecibels)
+            callLog("📞 Space: played the clip after \(String(format: "%.1f", waited)) s (\(seconds.map { String(format: "%.2f s long", $0) } ?? "couldn't play it"))")
+            self.clipLog.append(["at": heardAt.timeIntervalSince1970, "words": words, "played": seconds != nil, "waitedSeconds": waited,
+                                 "clipSeconds": seconds ?? 0, "file": file.lastPathComponent])
+            if self.clipLog.count > 20 { self.clipLog.removeFirst(self.clipLog.count - 20) }
+            self.clipTask = nil
+        }
+        return true
+    }
+
+    /// A Space's brain: Claude Code's, or the local model on LM Studio with Claude standing by
+    /// (`XAccountSettings.brain`, `FallbackConversation`).
+    private func makeSpaceBrain() -> ConversationBrain {
+        let claude = spaceClaudeBrain ?? ConversationBrains.make(model: ClickyModels.sonnet, systemPrompt: spacePrompt,
+                                                                 promptFileName: CallPrompt.otherBotFileName, effort: "low")
+        guard XAccountSettings.brain == "local" else { return claude }
+        let prompt = localSpacePrompt
+        localPromptSignature = prompt
+        let local = OneTurnConversation(model: BrainModel(provider: .api, modelIdentifier: "lmstudio/" + XAccountSettings.localModel),
+                                        systemPrompt: prompt, keepsHistory: true)
+        if XAccountSettings.localOnly {
+            callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel) alone")
+            return FallbackConversation(primary: local, fallback: nil, firstWordLimitSeconds: 12)
+        }
+        callLog("📞 Space: thinking with the local model \(XAccountSettings.localModel), Claude standing by")
+        return FallbackConversation(primary: local, fallback: claude)
+    }
+
+    /// The local model's system prompt: the Space's prompt, then the owner's standing note and ideology, all fixed, so
+    /// LM Studio reuses its cache for them and each turn only adds what was said (first word in about 0.5 s, not 2.5 to 6).
+    /// A changed note or ideology starts a new local conversation with the new prompt.
+    private var localSpacePrompt: String {
+        // The owner's own rules for his bot: the base prompt's caution lines are left out for the local model.
+        let base = spacePrompt
+            .replacingOccurrences(of: #"Keep to X's rules:[^\n]*"#, with: "", options: .regularExpression)
+        var parts = [base]
+        if let spaceNote, !spaceNote.isEmpty { parts.append(CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName)) }
+        if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { parts.append(ideology) }
+        parts.append("When you answer, give a real take in one to three short sentences, with a reason or a roast, never just one word.")
+        let modelStyle = SpaceModelStyle.lines(forModel: XAccountSettings.localModel)
+        if !modelStyle.isEmpty { parts.append(modelStyle) }
+        if XAccountSettings.webSearch { parts.append(SpaceWebSearch.rule) }
+        return parts.joined(separator: "\n\n")
+    }
+    private var localPromptSignature = ""
+
+    /// A search the local model asked for this turn.
+    private var pendingSearchQuery: String?
+    /// The bot's recent sentences, so it doesn't repeat itself, and the turn asked last, for one more try when a reply
+    /// starts with a repeat.
+    private var spaceRecentSentences = SpaceRecentSentences()
+    private var lastSpaceTurnMessage: String?
+    private var regenerateAfterThisReply = false
+    private var regeneratedThisTurn = false
+    /// Someone asked the local model alone to search this turn (their words), in case it forgets its SEARCH: line.
+    private var searchAskedThisTurn: String?
+
+    /// Searches for the local model (DuckDuckGo, then Wikipedia; free, no key) and gives it what was found as its next
+    /// turn, which it answers in a sentence or two.
+    private func searchForTheLocalModel(_ query: String) {
+        callLog("📞 Space: searching the web for the local model")
+        let started = Date()
+        Task { @MainActor [weak self] in
+            let results = await SpaceSearchClient.search(query)
+            guard let self, self.state != .ended else { return }
+            callLog("📞 Space: \(results.count) results in \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
+            self.ask(SpaceWebSearch.resultsMessage(query: query, results: results), acknowledgesIfSlow: false)
+        }
+    }
+
+    /// The owner switched the Space's brain (`ownAccountBrain`): the new one from the next turn, the Space and its
+    /// listening untouched.
+    func switchSpaceBrain() {
+        guard isOwnAccount, state != .ended else { return }
+        if replyInProgress { brain?.interrupt(); replyInProgress = false }
+        if let fallback = brain as? FallbackConversation { fallback.stopLocalOnly() } else if brain !== spaceClaudeBrain { brain?.stop() }
+        let next = makeSpaceBrain()
+        next.onEnded = { [weak self] message in self?.problem = message }
+        try? next.start()
+        brain = next
+        callLog("📞 Space: brain switched to \(XAccountSettings.brain)")
+    }
+
+    var spaceBrainReport: [String: Any] {
+        ["brain": XAccountSettings.brain, "localModel": XAccountSettings.localModel,
+         "answeredBy": (brain as? FallbackConversation)?.answeredBy ?? [], "ideologyFile": XAccountSettings.ideologyFile.path,
+         "ideologyChars": SpaceIdeology.cleaned(XAccountSettings.ideology()).count]
+    }
+
+    /// TEST ONLY (`ownAccountClip`): plays the clip as if its phrase was just heard, through the same path.
+    func clipForTest(words: String) -> Bool { isOwnAccount && listenForTheClip(words) }
+
+    /// In a Space on Vello's own account, the name seen speaking most since the last words were named, or nil ("Someone").
+    private func speakerOfWordsJustHeard() -> String? {
+        let now = Date()
+        let from = wordsLastNamedAt ?? startedAt
+        wordsLastNamedAt = now
+        let name = speakerWatcher?.speaker(from: from, to: now)
+        callLog("📞 Space: words from \(SpaceSpeakerVotes.label(name))")
+        return name
+    }
+
     /// In group mode, whether words the ears just gave were the owner's: their voice right at the Mac was going a moment ago.
     /// A guess from loudness, said as one to the brain.
     private func wordsSoundLikeTheOwner() -> Bool {
@@ -858,6 +1228,11 @@ final class TheoCallSession: ObservableObject {
     /// speakers. Just after the voice stops, the ears can still hand over its last words: those are told by how much of them
     /// Vello had just said.
     private func isVellosOwnVoiceComingBack(_ heard: String) -> Bool {
+        // The bot's browser doesn't play Vello's own voice back, so only words that are mostly what it just said are its
+        // own (someone's phone in the Space playing it back).
+        if isOwnAccount {
+            return CallEcho.soundsLikeVello(heard, vellosRecentWords: lines.last(where: { $0.who == .theo })?.text ?? "")
+        }
         let voiceIsOn = audio.isVoicePlaying || state == .speaking
         if voiceIsOn { return !isOwnerSpeaking }
         guard let voiceLastStoppedAt, Date().timeIntervalSince(voiceLastStoppedAt) < 2.0 else { return false }
@@ -930,7 +1305,8 @@ final class TheoCallSession: ObservableObject {
                 let releases: Bool
                 if self.isGroupMode {
                     // A group takes the floor at shorter pauses, and long talk is let go at its first gap.
-                    wait = CallGroupMode.waitSeconds(ownWait: wait, isAddressed: CallGroupMode.isAddressed(self.heldTurnWords, assistantNames: self.assistantNames))
+                    wait = self.isOwnAccount ? self.releaseQuiet(for: self.heldTurnWords)
+                        : CallGroupMode.waitSeconds(ownWait: wait, isAddressed: self.isAddressedInTheGroup(self.heldTurnWords))
                     releases = CallGroupMode.releasesTurn(someoneIsTalking: self.isOwnerSpeaking, secondsSinceVoiceStopped: secondsSinceVoiceStopped,
                                                           secondsSincePartialWords: secondsSincePartialWords, waitSeconds: wait,
                                                           secondsHeld: now.timeIntervalSince(self.heldTurnStartedAt ?? now))
@@ -951,7 +1327,7 @@ final class TheoCallSession: ObservableObject {
     private func releaseHeldTurn(quietSeconds: TimeInterval) {
         let words = heldTurnWords
         let lineID = heldTurnLineID
-        let groupLines = isGroupMode ? (heldGroupLines.isEmpty ? [CallGroupMode.HeardLine(isOwner: true, text: words)] : heldGroupLines) : nil
+        let groupLines = isGroupMode ? (heldGroupLines.isEmpty ? [CallGroupMode.HeardLine(isOwner: !isOwnAccount, text: words)] : heldGroupLines) : nil
         heldTurnWords = ""
         heldGroupLines = []
         heldTurnStartedAt = nil
@@ -961,6 +1337,7 @@ final class TheoCallSession: ObservableObject {
         turnWaits.append(quietSeconds)
         callLog("📞 Call: turn ends after \(String(format: "%.1f", quietSeconds)) s of quiet (\(words.split(separator: " ").count) words)")
         lastReleasedTurn = (words, lineID)
+        lastReleasedAt = Date()
         // The line may have been reopened by a sound that brought no words.
         if let lineID, let index = lines.firstIndex(where: { $0.id == lineID }) {
             lines[index].isLive = false
@@ -988,7 +1365,9 @@ final class TheoCallSession: ObservableObject {
     /// for one), taken once Vello isn't in the middle of writing an answer so none are lost.
     func takeOwnerWordsFromOutside(_ words: String) {
         let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard state != .ended, !words.isEmpty else { return }
+        // A Space on Vello's own account only takes what's said in the Space: the owner's words at the Mac would be
+        // spoken into it as a stranger's.
+        guard state != .ended, !words.isEmpty, !isOwnAccount else { return }
         Task { @MainActor [weak self] in
             for _ in 0..<200 {
                 guard let self, self.state != .ended else { return }
@@ -1002,9 +1381,10 @@ final class TheoCallSession: ObservableObject {
 
     /// The owner's whole turn: a Listen mode switch, something heard in Listen mode, or a question for Vello.
     private func takeTurn(_ words: String, lineID: UUID?, groupLines: [CallGroupMode.HeardLine]? = nil) {
-        // Only the owner switches group mode by voice: someone else in the Space saying "group mode off" doesn't.
-        let saidByTheOwner = groupLines.map { lines in lines.contains(where: \.isOwner) } ?? true
-        if saidByTheOwner, let groupCommand = CallGroupMode.command(in: words) {
+        // Only the owner switches group mode by voice: someone else in the Space saying "group mode off" doesn't. On
+        // Vello's own account nobody heard is the owner, so nothing said there switches anything.
+        let saidByTheOwner = !isOwnAccount && (groupLines.map { lines in lines.contains(where: \.isOwner) } ?? true)
+        if CallOwnAccount.acceptsSpokenSwitches(isOwnAccount: isOwnAccount, saidByTheOwner: saidByTheOwner), let groupCommand = CallGroupMode.command(in: words) {
             let turnOn = groupCommand == .start
             if turnOn != isGroupMode {
                 setGroupMode(turnOn)
@@ -1015,7 +1395,7 @@ final class TheoCallSession: ObservableObject {
                 return
             }
         }
-        switch CallListenMode.command(in: words) {
+        switch isOwnAccount ? nil : CallListenMode.command(in: words) {
         case .start?:
             startListenMode(announce: true)
             return
@@ -1043,7 +1423,73 @@ final class TheoCallSession: ObservableObject {
         }
         // Vello is working on screen: a yes or no to a step is answered at once, and anything else pauses the steps and
         // reaches the brain with what was done and the screen as it is now. In a group only the owner's words do that.
-        if isVellosOwnBot, saidByTheOwner, ownerWordsReachTheScreenWork(words) { return }
+        if hasCallControls, saidByTheOwner, ownerWordsReachTheScreenWork(words) { return }
+        // A Space on Vello's own account: what was said, by the names on the Space's screen.
+        if isOwnAccount {
+            var heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: false, text: words)]
+            let isAddressed = isAddressedInTheGroup(words)
+            // Quiet for a minute at most: a stop that wasn't meant for it doesn't keep it quiet for the rest of the Space.
+            if isSilenced, let silencedAt, Date().timeIntervalSince(silencedAt) > SpaceStopWords.silenceLastsSeconds {
+                isSilenced = false
+                silencedBacklog = []
+                callLog("📞 Space: a minute since it was told to stop, talking again when there's something to say")
+            }
+            if isSilenced {
+                let fromTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
+                // Told to stop: quiet until named again (not in the stop itself) or the boss speaks to it.
+                guard (isAddressed || fromTheBoss), !SpaceStopWords.isStop(words, isAddressed: isAddressed) else {
+                    silencedBacklog += heard
+                    callLog("📞 Space: staying quiet (told to stop)")
+                    return
+                }
+                isSilenced = false
+                heard = silencedBacklog + heard
+                silencedBacklog = []
+                callLog("📞 Space: talking again")
+            }
+            var message = CallOwnAccount.message(lines: heard, handle: ownAccount?.handle ?? "", botName: botName, isAddressed: isAddressed,
+                                                 passesInARow: groupPassesInARow, onStage: speakerWatcher?.onStage ?? [],
+                                                 bossNames: ownAccount?.bossNames ?? [], owner: BotPrompts.ownerName)
+            // Morse code read out ("dash dot dash dot"): decoded here, so the brain doesn't guess (ClickyCore `SpokenMorse`).
+            for line in heard { if let morse = SpokenMorse.note(line.text) { message += "\n" + morse } }
+            // The local model has the note and the ideology in its fixed system prompt, so its cache is reused turn after
+            // turn (`localSpacePrompt`); Claude gets them with each turn as before.
+            var lean = ""
+            let usesLocal = brain is FallbackConversation
+            if let spaceNote, !spaceNote.isEmpty { message += "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName) }
+            if let stance = XAccountSettings.stance.instruction(target: XAccountSettings.stanceTarget) { message += "\n" + stance }
+            if let tone = XAccountSettings.tone.instruction(custom: XAccountSettings.toneCustom) { message += "\n" + tone }
+            let selfGenderRule = spaceSelfGender.instruction
+            if !selfGenderRule.isEmpty { message += "\n(" + selfGenderRule + ")" }
+            if lastReplyWasNotHeard {
+                message = "(Your last reply wasn't heard in the Space, so it doesn't count as said.)\n" + message
+                lastReplyWasNotHeard = false
+            }
+            turnHadTheBoss = heard.contains { SpaceBoss.isBoss($0.speaker, bossNames: ownAccount?.bossNames ?? []) }
+            if usesLocal {
+                lean = message
+                if let spaceNote, !spaceNote.isEmpty {
+                    lean = lean.replacingOccurrences(of: "\n" + CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName), with: "")
+                }
+            }
+            if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { message += "\n" + ideology }
+            if usesLocal, localSpacePrompt != localPromptSignature { switchSpaceBrain() }
+            if let fallback = brain as? FallbackConversation, !lean.isEmpty {
+                fallback.claudeText = message
+                message = lean
+            }
+            // A search asked for: the bot says its own "Ek sec, check karti hun" first, so no second filler of the app's.
+            let asksForASearch = XAccountSettings.webSearch && CallOwnAccount.asksForASearch(words)
+            // Only Claude's side can search: a search turn goes there when the local model is thinking.
+            // With no Claude (local alone), the local model searches itself (SEARCH: …, `SpaceWebSearch`).
+            if asksForASearch, let fallback = brain as? FallbackConversation, fallback.hasClaude { fallback.nextTurnToFallback = true }
+            searchAskedThisTurn = asksForASearch && (brain as? FallbackConversation)?.hasClaude == false ? words : nil
+            lastSpaceTurnMessage = message
+            regeneratedThisTurn = false
+            ask(message,
+                acknowledgesIfSlow: isAddressed && !asksForASearch)
+            return
+        }
         // A group: what was heard, by who it sounded like, and Vello answers only when it fits ([PASS] otherwise).
         if isGroupMode {
             let heard = groupLines ?? [CallGroupMode.HeardLine(isOwner: true, text: words)]
@@ -1060,6 +1506,23 @@ final class TheoCallSession: ObservableObject {
         ask(words, acknowledgesIfSlow: true, ownerWords: words)
     }
 
+    /// In a Space, how much quiet lets a turn go to the brain. Named, with words that sound finished: very little, so the
+    /// answer is being written while the pause is confirmed (its voice still waits for `requiredQuietBeforeVoice`, and the
+    /// answer is dropped if the speaker goes on). Otherwise the whole pause.
+    private func releaseQuiet(for words: String) -> Double {
+        let isAddressed = isAddressedInTheGroup(words)
+        let pause = CallOwnAccount.pauseBeforeAnswering(isAddressed: isAddressed, words: words)
+        requiredQuietBeforeVoice = pause
+        return pause == CallOwnAccount.quickPauseWhenNamed ? CallOwnAccount.speculativeStartQuiet : pause
+    }
+
+    /// Whether group talk calls the bot: in a Space on its own account, its name one letter off counts too
+    /// (ClickyCore `CallOwnAccount.isAddressed`).
+    private func isAddressedInTheGroup(_ words: String) -> Bool {
+        isOwnAccount ? CallOwnAccount.isAddressed(words, botName: botName, assistantNames: assistantNames)
+            : CallGroupMode.isAddressed(words, assistantNames: assistantNames)
+    }
+
     /// Vello's name as the ears hear it: its own name and the usual mishearings.
     private var assistantNames: [String] {
         // Another bot also answers to a word of its name on its own ("Observer"), as people call it.
@@ -1067,12 +1530,14 @@ final class TheoCallSession: ObservableObject {
     }
 
     func setListenMode(_ on: Bool) {
+        // A Space on Vello's own account is always in group mode, never Listen mode.
+        if on, isOwnAccount { return }
         if on { startListenMode(announce: false) } else { stopListenMode(announce: false) }
     }
 
     /// Group mode on or off: from the call window, the owner's words, or Vello's own [GROUP: on].
     func setGroupMode(_ on: Bool) {
-        guard on != isGroupMode else { return }
+        guard on != isGroupMode, on || !isOwnAccount else { return }
         isGroupMode = on
         callLog("📞 Call: group mode \(on ? "on" : "off")")
         // What's held so far was all taken as one voice: from here it's marked by speaker.
@@ -1097,6 +1562,19 @@ final class TheoCallSession: ObservableObject {
         pendingTurnTiming = nil
         lines.append(Line(who: .theo, text: text, isLive: false))
         state = .thinking
+        if isOwnAccount {
+            // The same whole-sentence, never-over-a-voice path a reply takes.
+            sentenceGatherer = SpaceSentenceGatherer()
+            speaksNoMoreThisTurn = false
+            hasStartedSpeakingThisTurn = false
+            heldSentences = []
+            heldSentencesSince = nil
+            talkMovedOnSinceRelease = false
+            speak(text)
+            if let rest = sentenceGatherer.finish() { sayInTheSpace(rest) }
+            if !heldSentences.isEmpty { endOfTurnWaits = true } else { voice?.endOfTurn() }
+            return
+        }
         speak(text)
         voice?.endOfTurn()
     }
@@ -1123,6 +1601,17 @@ final class TheoCallSession: ObservableObject {
         pendingTurnTiming = timing
         replyInProgress = true
         turnHasSounded = false
+        speaksNoMoreThisTurn = false
+        stopsAfterThisSentence = false
+        sentenceGatherer = SpaceSentenceGatherer()
+        heldSentences = []
+        heldSentencesSince = nil
+        sentenceStartWaiter?.cancel()
+        sentenceStartWaiter = nil
+        hasStartedSpeakingThisTurn = false
+        endOfTurnWaits = false
+        talkMovedOnSinceRelease = false
+        audio.resetLoudness()
         turnActedOnTheCall = false
         turnPassed = false
         rawAnswerOfThisTurn = ""
@@ -1165,7 +1654,7 @@ final class TheoCallSession: ObservableObject {
             if let speechEndedAt { pendingTurnTiming?.firstText = firstTextAt?.timeIntervalSince(speechEndedAt) }
         }
         let delta: String
-        if isVellosOwnBot {
+        if hasCallControls {
             let looked = screenPieces.feed(rawDelta)
             looked.pieces.forEach(takeScreenPiece)
             let switched = controls.feed(looked.speech)
@@ -1190,9 +1679,114 @@ final class TheoCallSession: ObservableObject {
     }
 
     private func speak(_ piece: String) {
-        let text = CallPrompt.speakable(piece)
+        if isOwnAccount {
+            guard !speaksNoMoreThisTurn else { return }
+            for sentence in sentenceGatherer.add(piece) { sayInTheSpace(sentence) }
+            return
+        }
+        var text = CallPrompt.speakable(piece)
+        if isOwnAccount { text = SpeakableText.speakable(text) }
         guard !text.isEmpty else { return }
         voice?.speak(text)
+        // The rest of the sentence is said; at its end the bot stops for whoever talked over it.
+        if isOwnAccount, stopsAfterThisSentence, let last = text.trimmingCharacters(in: .whitespaces).last, ".?!।…".contains(last) {
+            speaksNoMoreThisTurn = true
+            voice?.endOfTurn()
+        }
+    }
+
+    /// One whole sentence into the Space: cleaned of what the voice says oddly, in a script it reads, and never started
+    /// over someone. The first sentence of a reply waits for real quiet, and is dropped with the rest of the reply when
+    /// the talk moves on or it's waited more than 4 s (`SpaceFloor`).
+    private func sayInTheSpace(_ sentence: String) {
+        // The local model's search line is for the app, never said (ClickyCore `SpaceWebSearch`).
+        if let query = SpaceWebSearch.query(in: sentence) {
+            if brain is FallbackConversation, XAccountSettings.webSearch { pendingSearchQuery = query }
+            // Anything after its search line would be a guess at the answer: not said.
+            speaksNoMoreThisTurn = true
+            return
+        }
+        // The same thing said again in other words isn't said (ClickyCore `SpaceRecentSentences`).
+        if spaceRecentSentences.isARepeat(sentence) {
+            // Its first sentence a repeat: nothing of this reply is said, and it's asked once more for something new.
+            // A repeat later in a reply is just left out.
+            if !hasStartedSpeakingThisTurn, heldSentences.isEmpty, !regeneratedThisTurn, lastSpaceTurnMessage != nil {
+                regenerateAfterThisReply = true
+                speaksNoMoreThisTurn = true
+                callLog("📞 Space: its reply began with something it had said already, asking for a new one")
+            } else {
+                callLog("📞 Space: left out a sentence it had as good as said already")
+            }
+            return
+        }
+        guard !speaksNoMoreThisTurn else { return }
+        // A web search's answer ends with its sources: links aren't said, and nothing after them is.
+        var sentence = sentence
+        if let sources = sentence.range(of: #"(?i)\bsources?\s*:"#, options: .regularExpression) {
+            sentence = String(sentence[..<sources.lowerBound])
+            speaksNoMoreThisTurn = true
+        }
+        // On the local model, only when the owner turns it on: the few things that get an X account banned aren't said
+        // (ClickyCore `SpaceSafetyFilter`). Off by default: the owner wants the bot to speak naturally.
+        if brain is FallbackConversation, XAccountSettings.contentFilter, let reason = SpaceSafetyFilter.reason(sentence) {
+            callLog("📞 Space: held back a sentence (\(reason.rawValue))")
+            sentence = SpaceSafetyFilter.deflection(turn: turnNumber)
+            speaksNoMoreThisTurn = true
+        }
+        sentence = sentence.replacingOccurrences(of: #"\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
+        let written = CallPrompt.speakable(sentence)
+        let ownForms = spaceSelfGender.applied(to: written)
+        if ownForms != written { callLog("📞 Space: said its own verbs in the \(spaceSelfGender.rawValue) forms") }
+        var text = SpeakableText.speakable(SpaceVoiceText.sanitized(ownForms))
+        // Sarvam's Hindi voice reads Roman Hindi like English ("main" as "mey"): its Hindi words go in Devanagari, for the
+        // voice only (ClickyCore `HinglishVoiceText`).
+        if voice is SarvamCallVoice, XAccountSettings.devanagariForTheVoice { text = HinglishVoiceText.spoken(text, script: XAccountSettings.voiceScript) }
+        spokenLately.append(text)
+        if spokenLately.count > 6 { spokenLately.removeFirst(spokenLately.count - 6) }
+        guard text.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return }
+        if hasStartedSpeakingThisTurn {
+            voice?.speak(text)
+            return
+        }
+        heldSentences.append(text)
+        if heldSentencesSince == nil { heldSentencesSince = Date() }
+        guard sentenceStartWaiter == nil else { return }
+        sentenceStartWaiter = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.state != .ended else { return }
+                let quiet = self.gate.isSpeaking ? 0 : self.spaceVoiceEndedAt.map { Date().timeIntervalSince($0) } ?? 10
+                switch SpaceFloor.startDecision(someoneIsSpeaking: self.gate.isSpeaking, quietSeconds: quiet,
+                                                secondsWaiting: Date().timeIntervalSince(self.heldSentencesSince ?? Date()),
+                                                talkMovedOn: self.talkMovedOnSinceRelease,
+                                                requiredQuiet: self.requiredQuietBeforeVoice) {
+                case .start:
+                    self.sentenceStartWaiter = nil
+                    self.hasStartedSpeakingThisTurn = true
+                    let sentences = self.heldSentences
+                    self.heldSentences = []
+                    sentences.forEach { self.voice?.speak($0) }
+                    if self.endOfTurnWaits { self.endOfTurnWaits = false; self.voice?.endOfTurn() }
+                    return
+                case .drop:
+                    self.sentenceStartWaiter = nil
+                    callLog("📞 Space: dropped a reply, the moment passed")
+                    self.heldSentences = []
+                    self.speaksNoMoreThisTurn = true
+                    if let theoLineID = self.theoLineID ?? self.lines.last(where: { $0.who == .theo })?.id,
+                       let index = self.lines.firstIndex(where: { $0.id == theoLineID }) {
+                        self.lines[index].wasNotHeard = true
+                    }
+                    self.lastReplyWasNotHeard = true
+                    if self.replyInProgress { self.brain?.interrupt(); self.replyInProgress = false }
+                    if self.endOfTurnWaits { self.endOfTurnWaits = false; self.voice?.endOfTurn() }
+                    if self.state == .thinking { self.state = .listening }
+                    return
+                case .wait:
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+        }
     }
 
     private func replyFinished(_ result: Result<String, Error>) {
@@ -1202,7 +1796,7 @@ final class TheoCallSession: ObservableObject {
         let neverStreamed = firstTextAt == nil
         var unstreamed = ""
         let restSpeech: String
-        if isVellosOwnBot {
+        if hasCallControls {
             if case .success(let whole) = result, neverStreamed {
                 let looked = CallScreenStream.extract(from: whole)
                 looked.pieces.forEach(takeScreenPiece)
@@ -1268,16 +1862,73 @@ final class TheoCallSession: ObservableObject {
             if neverStreamed { for piece in chunker.feed(unstreamed) { speak(piece) } }
             for piece in chunker.feed(restSpeech) { speak(piece) }
             if let piece = chunker.finish() { speak(piece) }
-            voice?.endOfTurn()
+            if isOwnAccount, let rest = sentenceGatherer.finish() { sayInTheSpace(rest) }
+            // A reply still waiting for quiet ends its turn when it starts (or is dropped).
+            if isOwnAccount, !heldSentences.isEmpty { endOfTurnWaits = true } else { voice?.endOfTurn() }
+            if isOwnAccount {
+                // The boss switched the stance ([STANCE: debate PEW]): kept for this Space and the next.
+                if turnHadTheBoss, let command = SpaceStance.command(in: rawAnswerOfThisTurn) {
+                    XAccountSettings.setStance(command.stance, target: command.target)
+                    callLog("📞 Space: the boss switched the stance to \(command.stance.rawValue)\(command.target.isEmpty ? "" : " for \(command.target)")")
+                }
+                if turnHadTheBoss, let command = SpaceTone.command(in: rawAnswerOfThisTurn) {
+                    XAccountSettings.setTone(command.tone, custom: command.custom)
+                    callLog("📞 Space: the boss switched the tone to \(command.tone.rawValue)")
+                }
+                if let emptyLineID, !answerText.isEmpty { checkTheReplyWasHeard(lineID: emptyLineID, text: answerText, turn: turnNumber, isRetry: false) }
+                // The local model asked for a search (SEARCH: …): the app searches and the model answers from it next.
+                if regenerateAfterThisReply, let message = lastSpaceTurnMessage {
+                    regenerateAfterThisReply = false
+                    regeneratedThisTurn = true
+                    ask(message + "\n(Your first try repeated something you'd already said in this Space. Say something new, in one line.)",
+                        acknowledgesIfSlow: false)
+                } else if let query = pendingSearchQuery {
+                    pendingSearchQuery = nil
+                    searchForTheLocalModel(query)
+                } else if let asked = searchAskedThisTurn, answerText.count < 60 {
+                    // It said "Ek sec, check karta hun" but forgot its SEARCH: line: the question itself is searched.
+                    searchForTheLocalModel(SpaceWebSearch.queryFromQuestion(asked, botName: botName))
+                }
+                searchAskedThisTurn = nil
+            }
         case .failure(let error):
             problem = error.localizedDescription
             if state == .thinking { state = .listening }
             sayTheBrainFailed(error.localizedDescription)
         }
-        if isVellosOwnBot {
+        if hasCallControls {
             var failed = false
             if case .failure = result { failed = true }
             screenReplyEnded(failed: failed)
+        }
+    }
+
+    /// In a Space, whether a reply really reached the virtual mic: the voice's audio for it must have had some sound. If it
+    /// didn't (an empty clip, a script the voice can't read, a voice error), it's said once more in Roman letters; if that
+    /// fails too, the line is marked not heard and the brain is told with the next turn. The bot thought it had spoken
+    /// when nobody heard a thing (a public Space, 25 Nov).
+    private func checkTheReplyWasHeard(lineID: UUID, text: String, turn: Int, isRetry: Bool) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            for _ in 0..<120 {
+                guard let self, self.state != .ended, self.turnNumber == turn else { return }
+                if !self.audio.isVoicePlaying && self.state != .speaking { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard let self, self.state != .ended, self.turnNumber == turn, !self.speaksNoMoreThisTurn else { return }
+            if self.audio.loudestDecibelsSinceReset > -55 { return }
+            if !isRetry {
+                callLog("📞 Space: that reply made no sound, saying it again in Roman letters")
+                self.audio.resetLoudness()
+                let roman = SpeakableText.speakable(text).applyingTransform(.toLatin, reverse: false) ?? text
+                self.voice?.speak(CallPrompt.speakable(roman))
+                self.voice?.endOfTurn()
+                self.checkTheReplyWasHeard(lineID: lineID, text: text, turn: turn, isRetry: true)
+                return
+            }
+            callLog("📞 Space: not heard (the voice couldn't play it)")
+            if let index = self.lines.firstIndex(where: { $0.id == lineID }) { self.lines[index].wasNotHeard = true }
+            self.lastReplyWasNotHeard = true
         }
     }
 
@@ -1287,8 +1938,11 @@ final class TheoCallSession: ObservableObject {
         guard state != .ended, !CallBrainFailure.isTheCallsOwnDoing(detail) else { return }
         callLog("📞 Call: \(brainNameForWords) gave no answer: \(CallBrainFailure.shortReason(detail))")
         let speaksHindi = language == .hindi || language.meansHinglish
-        let words = CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
-                                                 speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
+        // In a public Space the brain's name and error mean nothing to anyone: a short sorry, the reason in the window.
+        let words = isOwnAccount
+            ? CallOwnAccount.brainFailureWords(speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice, failuresSoFar: brainFailures)
+            : CallBrainFailure.spokenWords(brainName: brainNameForWords, detail: detail, failuresSoFar: brainFailures,
+                                           speaksHindi: speaksHindi, readsDevanagari: voice is SarvamCallVoice)
         brainFailures += 1
         sayWithoutThinking(words)
     }
@@ -1580,6 +2234,43 @@ final class TheoCallSession: ObservableObject {
         return true
     }
 
+    /// A Space on Vello's own account: its handle, what it hears and where its voice goes, and who it has seen talking.
+    private var ownAccountReport: [String: Any]? {
+        guard let ownAccount else { return nil }
+        var report = audio.ownAccountReport
+        report["handle"] = ownAccount.handle
+        report["browser"] = ownAccount.browser?.bundleID ?? ""
+        report["currentSpeaker"] = currentSpeaker ?? ""
+        report["bot"] = bot?.id ?? ""
+        report["speakers"] = speakerWatcher?.report() ?? [:]
+        report["selfGender"] = spaceSelfGender.rawValue
+        report["brain"] = spaceBrainReport
+        report["spokenLately"] = spokenLately
+        let phrases = XAccountSettings.clipPhrases()
+        report["clip"] = ["phrases": phrases.map { phrase -> [String: Any] in
+                              let file = XAccountSettings.clipFile(named: phrase.clip)
+                              return ["name": phrase.name, "words": phrase.words.map { $0.sorted() }, "file": file?.path ?? "", "found": file != nil]
+                          },
+                          "phrasesFile": XAccountSettings.clipPhrasesFile.path, "heard": clipLog] as [String: Any]
+        return report
+    }
+
+    /// `ownAccountTee`: the voice's audio also written to a file. Test use.
+    func teeVoiceForTest(to url: URL?) { audio.teeVoice(to: url) }
+
+    /// `ownAccountSay`: a line said in the Space through the same path a reply takes, with no turn for the brain. Test use.
+    func sayInTheSpaceForTest(_ text: String) {
+        guard isOwnAccount else { return }
+        sayWithoutThinking(text)
+    }
+
+    /// `ownAccountLook`: one frame of the speaker watcher now, whoever is talking.
+    func lookForSpeakerNow(savingTo fileURL: URL? = nil) async -> [String: Any] {
+        guard let speakerWatcher else { return ["error": "No speaker watcher."] }
+        await speakerWatcher.lookOnce(savingTo: fileURL)
+        return speakerWatcher.report()
+    }
+
     /// What `uiCallStatus` shows.
     func report() -> [String: Any] {
         [
@@ -1601,6 +2292,7 @@ final class TheoCallSession: ObservableObject {
             "listenMode": isListenMode,
             "groupMode": isGroupMode,
             "holdingTurn": isHoldingTurn,
+            "ownAccount": ownAccountReport as Any? ?? NSNull(),
             "lines": lines.map { ["who": $0.who == .addy ? "addy" : "theo", "text": $0.text, "live": $0.isLive, "cut": $0.wasCut, "heard": $0.wasOnlyHeard, "group": $0.isGroupTalk] as [String: Any] },
         ]
     }

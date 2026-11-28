@@ -52,10 +52,12 @@ extension ConversationBrain {
 enum ConversationBrains {
     /// Claude Code's kept-open process when the model is Claude's and Claude Code is here; a turn-by-turn conversation
     /// on any other brain. `keepsHistory` false sends each message on its own (dictation clean-up needs no memory).
-    static func make(model: String, systemPrompt: String, promptFileName: String, effort: String? = nil, keepsHistory: Bool = true) -> ConversationBrain {
+    /// `tools`: Claude Code's own tools it may use without asking ("WebSearch"), none by default.
+    static func make(model: String, systemPrompt: String, promptFileName: String, effort: String? = nil, keepsHistory: Bool = true,
+                     tools: [String] = []) -> ConversationBrain {
         let brainModel = BrainModel(setting: model)
         if brainModel.isClaude {
-            return ClaudeConversation(model: brainModel.modelIdentifier, systemPrompt: systemPrompt, promptFileName: promptFileName, effort: effort)
+            return ClaudeConversation(model: brainModel.modelIdentifier, systemPrompt: systemPrompt, promptFileName: promptFileName, effort: effort, tools: tools)
         }
         return OneTurnConversation(model: brainModel, systemPrompt: systemPrompt, keepsHistory: keepsHistory)
     }
@@ -220,12 +222,14 @@ final class ClaudeConversation: ConversationBrain {
     var onEnded: ((String) -> Void)?
 
     /// `effort` nil keeps the model's own. Thinking is always off: nobody waits for it on a call or while dictating.
-    init(model: String, systemPrompt: String, promptFileName: String, effort: String? = nil) {
+    init(model: String, systemPrompt: String, promptFileName: String, effort: String? = nil, tools: [String] = []) {
         self.model = model
         self.systemPrompt = systemPrompt
         self.promptFileName = promptFileName
         self.effort = effort
+        self.tools = tools
     }
+    private let tools: [String]
 
     var isRunning: Bool { process?.isRunning == true }
 
@@ -239,6 +243,10 @@ final class ClaudeConversation: ConversationBrain {
         var arguments = ClaudeArgs(model: model, systemPromptFileURL: promptFile, effortLevel: effort).arguments
         if let settings = arguments.firstIndex(of: "--settings"), arguments.indices.contains(settings + 1) {
             arguments[settings + 1] = #"{"disableAllHooks":true,"alwaysThinkingEnabled":false}"#
+        }
+        if !tools.isEmpty, let toolsFlag = arguments.firstIndex(of: "--tools"), arguments.indices.contains(toolsFlag + 1) {
+            arguments[toolsFlag + 1] = tools.joined(separator: ",")
+            arguments += ["--allowedTools", tools.joined(separator: ",")]
         }
         var environment = ClaudeArgs.environment()
         environment["MAX_THINKING_TOKENS"] = "0"
