@@ -117,3 +117,18 @@ public enum SpaceSafetyFilter {
         return lines[abs(turn) % lines.count]
     }
 }
+
+/// Style lines for one local model, added to its prompt only: what that model gets wrong in Hinglish by itself.
+public enum SpaceModelStyle {
+    /// Ornith 1.5 (35B-A3B): quick and accurate, but it slipped into feminine forms for the listener and itself, ran its
+    /// roasts long, and reached for gore as a punchline (28 Nov).
+    public static let ornith = """
+    Hinglish grammar, always: you are a boy, so for yourself say "main karta hun", "main gaya tha", "main bolunga". The person you answer is "tu" or "tum" in the masculine unless they're clearly a woman: "tu chahta hai", "tum kya karoge", "tu gaya tha". Examples: "Main toh sun raha tha, tu hi bhaag gaya." / "Tum kya karoge, bhai?" / "Maine kaha tha na, tu nahi maanega."
+    Style: one short, punchy line, with a clear punchline at the very end. Build it from their exact words. Keep the imagery everyday and funny, never gore, violence or body harm; wit wins, not shock.
+    """
+
+    /// The style lines for a model's LM Studio id, or "".
+    public static func lines(forModel model: String) -> String {
+        model.lowercased().contains("ornith") ? ornith : ""
+    }
+}

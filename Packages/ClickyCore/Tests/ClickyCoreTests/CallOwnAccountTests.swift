@@ -952,3 +952,11 @@ struct SpaceSearchQueryTests {
                 == "aaj ki india ki sabse badi news")
     }
 }
+
+struct SpaceModelStyleTests {
+    @Test func onlyOrnithGetsItsStyleLines() {
+        #expect(SpaceModelStyle.lines(forModel: "xspace-ornith-nothink").contains("main karta hun"))
+        #expect(SpaceModelStyle.lines(forModel: "xspace-ornith-nothink").contains("never gore"))
+        #expect(SpaceModelStyle.lines(forModel: "xspace-qwen27b-nothink").isEmpty)
+    }
+}

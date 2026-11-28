@@ -1151,6 +1151,8 @@ final class TheoCallSession: ObservableObject {
         if let spaceNote, !spaceNote.isEmpty { parts.append(CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName)) }
         if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { parts.append(ideology) }
         parts.append("When you answer, give a real take in one to three short sentences, with a reason or a roast, never just one word.")
+        let modelStyle = SpaceModelStyle.lines(forModel: XAccountSettings.localModel)
+        if !modelStyle.isEmpty { parts.append(modelStyle) }
         if XAccountSettings.webSearch { parts.append(SpaceWebSearch.rule) }
         return parts.joined(separator: "\n\n")
     }
