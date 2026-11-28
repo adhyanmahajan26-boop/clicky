@@ -110,3 +110,34 @@ final class FallbackConversation: ConversationBrain {
     /// Switching back to Claude alone: the local side stops, Claude's (kept warm) carries on.
     func stopLocalOnly() { primary.stop() }
 }
+
+/// The web search for the local model: DuckDuckGo's plain results page, then Wikipedia's API when that finds nothing.
+/// Both are free and need no key or install. A few seconds at most.
+enum SpaceSearchClient {
+    static func search(_ query: String) async -> [SpaceWebSearch.Result] {
+        if let results = try? await duckDuckGo(query), !results.isEmpty { return results }
+        return (try? await wikipedia(query)) ?? []
+    }
+
+    private static func fetch(_ url: URL) async throws -> Data {
+        var request = URLRequest(url: url, timeoutInterval: 4)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                         forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return data
+    }
+
+    private static func duckDuckGo(_ query: String) async throws -> [SpaceWebSearch.Result] {
+        var components = URLComponents(string: "https://html.duckduckgo.com/html/")!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        guard let url = components.url else { return [] }
+        return SpaceWebSearch.duckDuckGoResults(html: String(decoding: try await fetch(url), as: UTF8.self))
+    }
+
+    private static func wikipedia(_ query: String) async throws -> [SpaceWebSearch.Result] {
+        var components = URLComponents(string: "https://en.wikipedia.org/w/rest.php/v1/search/page")!
+        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "limit", value: "3")]
+        guard let url = components.url else { return [] }
+        return SpaceWebSearch.wikipediaResults(json: try await fetch(url))
+    }
+}

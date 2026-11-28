@@ -905,3 +905,31 @@ struct SpaceRepeatFinalTests {
         #expect(!CallOwnAccount.isTheSameTurnAgain("Chotta Tirri, roast Ambar a little", released: "Chotta Tirri, roast Ambar a little", secondsSinceRelease: 12))
     }
 }
+
+struct SpaceLocalWebSearchTests {
+    @Test func theSearchLineIsFoundAndNeverSaid() {
+        #expect(SpaceWebSearch.query(in: "SEARCH: who won the 2023 cricket world cup") == "who won the 2023 cricket world cup")
+        #expect(SpaceWebSearch.query(in: "**Search:** \"delhi weather today\"") == "delhi weather today")
+        #expect(SpaceWebSearch.query(in: "Ek sec, check karta hun.") == nil)
+        #expect(SpaceWebSearch.query(in: "I searched: nothing") == nil)
+    }
+
+    @Test func resultsAreReadFromDuckDuckGoAndWikipedia() {
+        let html = """
+        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2F2023_Cricket_World_Cup&amp;rut=x">2023 Cricket <b>World Cup</b> - Wikipedia</a>
+        <a class="result__snippet" href="x">Australia <b>won</b> the final &amp; beat India by six wickets.</a>
+        <a rel="nofollow" class="result__a" href="https://example.com/b">Second</a>
+        <a class="result__snippet" href="y">Second snippet.</a>
+        """
+        let results = SpaceWebSearch.duckDuckGoResults(html: html)
+        #expect(results.count == 2)
+        #expect(results[0].title == "2023 Cricket World Cup - Wikipedia")
+        #expect(results[0].snippet == "Australia won the final & beat India by six wickets.")
+        #expect(results[0].url == "https://en.wikipedia.org/wiki/2023_Cricket_World_Cup")
+        let json = Data(#"{"pages":[{"key":"2023_Cricket_World_Cup","title":"2023 Cricket World Cup","excerpt":"The <span class=\"searchmatch\">2023</span> ICC Men&#039;s Cricket World Cup"}]}"#.utf8)
+        let wiki = SpaceWebSearch.wikipediaResults(json: json)
+        #expect(wiki.first?.snippet == "The 2023 ICC Men's Cricket World Cup")
+        #expect(SpaceWebSearch.resultsMessage(query: "x", results: results).contains("1. 2023 Cricket World Cup - Wikipedia: Australia won"))
+        #expect(SpaceWebSearch.resultsMessage(query: "x", results: []).contains("found nothing"))
+    }
+}

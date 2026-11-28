@@ -1151,9 +1151,26 @@ final class TheoCallSession: ObservableObject {
         if let spaceNote, !spaceNote.isEmpty { parts.append(CallOwnAccount.standingNote(spaceNote, owner: BotPrompts.ownerName)) }
         if let ideology = SpaceIdeology.note(XAccountSettings.ideology(), owner: BotPrompts.ownerName) { parts.append(ideology) }
         parts.append("When you answer, give a real take in one to three short sentences, with a reason or a roast, never just one word.")
+        if XAccountSettings.webSearch { parts.append(SpaceWebSearch.rule) }
         return parts.joined(separator: "\n\n")
     }
     private var localPromptSignature = ""
+
+    /// A search the local model asked for this turn.
+    private var pendingSearchQuery: String?
+
+    /// Searches for the local model (DuckDuckGo, then Wikipedia; free, no key) and gives it what was found as its next
+    /// turn, which it answers in a sentence or two.
+    private func searchForTheLocalModel(_ query: String) {
+        callLog("📞 Space: searching the web for the local model")
+        let started = Date()
+        Task { @MainActor [weak self] in
+            let results = await SpaceSearchClient.search(query)
+            guard let self, self.state != .ended else { return }
+            callLog("📞 Space: \(results.count) results in \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
+            self.ask(SpaceWebSearch.resultsMessage(query: query, results: results), acknowledgesIfSlow: false)
+        }
+    }
 
     /// The owner switched the Space's brain (`ownAccountBrain`): the new one from the next turn, the Space and its
     /// listening untouched.
@@ -1668,6 +1685,11 @@ final class TheoCallSession: ObservableObject {
     /// over someone. The first sentence of a reply waits for real quiet, and is dropped with the rest of the reply when
     /// the talk moves on or it's waited more than 4 s (`SpaceFloor`).
     private func sayInTheSpace(_ sentence: String) {
+        // The local model's search line is for the app, never said (ClickyCore `SpaceWebSearch`).
+        if let query = SpaceWebSearch.query(in: sentence) {
+            if brain is FallbackConversation, XAccountSettings.webSearch { pendingSearchQuery = query }
+            return
+        }
         guard !speaksNoMoreThisTurn else { return }
         // A web search's answer ends with its sources: links aren't said, and nothing after them is.
         var sentence = sentence
@@ -1825,6 +1847,11 @@ final class TheoCallSession: ObservableObject {
                     callLog("📞 Space: the boss switched the tone to \(command.tone.rawValue)")
                 }
                 if let emptyLineID, !answerText.isEmpty { checkTheReplyWasHeard(lineID: emptyLineID, text: answerText, turn: turnNumber, isRetry: false) }
+                // The local model asked for a search (SEARCH: …): the app searches and the model answers from it next.
+                if let query = pendingSearchQuery {
+                    pendingSearchQuery = nil
+                    searchForTheLocalModel(query)
+                }
             }
         case .failure(let error):
             problem = error.localizedDescription
