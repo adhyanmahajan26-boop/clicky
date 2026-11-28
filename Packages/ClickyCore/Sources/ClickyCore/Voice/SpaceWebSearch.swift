@@ -74,6 +74,20 @@ public enum SpaceWebSearch {
         }
     }
 
+    /// A search query made from the question itself, for when the model said it would check but wrote no query: the bot's
+    /// name and the "search karo / batao" words taken out.
+    public static func queryFromQuestion(_ words: String, botName: String) -> String {
+        var query = " " + words.lowercased().replacingOccurrences(of: #"[^\p{L}\p{N} ]"#, with: " ", options: .regularExpression) + " "
+        query = query.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        for name in botName.lowercased().split(separator: " ") { query = query.replacingOccurrences(of: " " + name, with: " ") }
+        for filler in ["chhota", "chota", "tirri", "tiri", "terry", "please", "search karke", "search karo", "search", "google karke", "google karo", "google",
+                       "check karo", "check karke", "check", "batao", "bata", "bhai", "yaar", "zara", "jaldi"] {
+            query = query.replacingOccurrences(of: " " + filler + " ", with: " ")
+        }
+        return query.replacingOccurrences(of: #"[^\p{L}\p{N} ]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    }
+
     /// Whether a query is about the news (latest headlines, today), which an encyclopedia doesn't have.
     public static func isNewsQuery(_ query: String) -> Bool {
         let lower = query.lowercased()

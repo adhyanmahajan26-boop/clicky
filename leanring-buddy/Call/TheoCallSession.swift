@@ -1158,6 +1158,8 @@ final class TheoCallSession: ObservableObject {
 
     /// A search the local model asked for this turn.
     private var pendingSearchQuery: String?
+    /// Someone asked the local model alone to search this turn (their words), in case it forgets its SEARCH: line.
+    private var searchAskedThisTurn: String?
 
     /// Searches for the local model (DuckDuckGo, then Wikipedia; free, no key) and gives it what was found as its next
     /// turn, which it answers in a sentence or two.
@@ -1473,6 +1475,7 @@ final class TheoCallSession: ObservableObject {
             // Only Claude's side can search: a search turn goes there when the local model is thinking.
             // With no Claude (local alone), the local model searches itself (SEARCH: …, `SpaceWebSearch`).
             if asksForASearch, let fallback = brain as? FallbackConversation, fallback.hasClaude { fallback.nextTurnToFallback = true }
+            searchAskedThisTurn = asksForASearch && (brain as? FallbackConversation)?.hasClaude == false ? words : nil
             ask(message,
                 acknowledgesIfSlow: isAddressed && !asksForASearch)
             return
@@ -1852,7 +1855,11 @@ final class TheoCallSession: ObservableObject {
                 if let query = pendingSearchQuery {
                     pendingSearchQuery = nil
                     searchForTheLocalModel(query)
+                } else if let asked = searchAskedThisTurn, answerText.count < 60 {
+                    // It said "Ek sec, check karta hun" but forgot its SEARCH: line: the question itself is searched.
+                    searchForTheLocalModel(SpaceWebSearch.queryFromQuestion(asked, botName: botName))
                 }
+                searchAskedThisTurn = nil
             }
         case .failure(let error):
             problem = error.localizedDescription

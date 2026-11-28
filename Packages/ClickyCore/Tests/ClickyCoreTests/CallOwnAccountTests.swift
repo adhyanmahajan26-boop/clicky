@@ -945,3 +945,10 @@ struct SpaceSearchSourcesTests {
         #expect(!SpaceWebSearch.isNewsQuery("2023 cricket world cup winner"))
     }
 }
+
+struct SpaceSearchQueryTests {
+    @Test func theQuestionBecomesAQueryWhenTheModelForgetsOne() {
+        #expect(SpaceWebSearch.queryFromQuestion("Chotta Tirri, aaj ki India ki sabse badi news search karke batao.", botName: "Chotta Tirri")
+                == "aaj ki india ki sabse badi news")
+    }
+}
